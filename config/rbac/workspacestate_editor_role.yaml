@@ -1,0 +1,31 @@
+# permissions for end users to edit workspacestates.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/name: clusterrole
+    app.kubernetes.io/instance: workspacestate-editor-role
+    app.kubernetes.io/component: rbac
+    app.kubernetes.io/created-by: cluster-agent
+    app.kubernetes.io/part-of: cluster-agent
+    app.kubernetes.io/managed-by: kustomize
+  name: workspacestate-editor-role
+rules:
+- apiGroups:
+  - workspace.soradev.io
+  resources:
+  - workspacestates
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - workspace.soradev.io
+  resources:
+  - workspacestates/status
+  verbs:
+  - get
