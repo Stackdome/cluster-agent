@@ -1,9 +1,13 @@
 apiVersion: workspace.soradev.io/v1alpha1
 kind: WorkspaceState
 metadata:
-  labels:
-    app.kubernetes.io/name: cluster-agent
-    app.kubernetes.io/managed-by: kustomize
-  name: workspacestate-sample
+  namespace: ashish-workspace
+  name: ashish
 spec:
-  # TODO(user): Add fields here
+  resources:
+  - name: front-end
+    type: service
+    size: 2Gi
+  - name: back-end
+    size: 1Gi
+    type: service

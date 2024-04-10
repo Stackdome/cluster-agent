@@ -134,7 +134,7 @@ spec:
                   - type
                   type: object
                 type: array
-              observed_generation:
+              observedGeneration:
                 description: The most recent generation observed by the controller.
                 format: int64
                 type: integer
@@ -144,18 +144,18 @@ spec:
                   it will go away as soon as kubectl can print conditions!
                   Human readable status - please use .Conditions from code
                 type: string
-              resource_info:
+              workspaceStateInfo:
                 description: Tracks last reported upgrade policy status.
                 items:
                   properties:
-                    address_identifier:
+                    addressIdentifier:
                       type: string
                     name:
                       type: string
                     resource_status:
                       type: string
                   required:
-                  - address_identifier
+                  - addressIdentifier
                   - name
                   - resource_status
                   type: object

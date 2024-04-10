@@ -35,7 +35,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	workspacev1alpha1 "soradev.io/cluster-agent/api/v1alpha1"
-	"soradev.io/cluster-agent/internal/controller"
+	"soradev.io/cluster-agent/internal/controller/workspacestate"
 	//+kubebuilder:scaffold:imports
 )
 
@@ -122,7 +122,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = (&controller.WorkspaceStateReconciler{
+	if err = (&workspacestate.WorkspaceStateReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {

@@ -28,6 +28,12 @@ const (
 	Failed  WorkspaceStatePhase = "Failed"
 )
 
+type WorkspaceStateCondition string
+
+const (
+	WorkspaceStateConditionAvailable WorkspaceStateCondition = "Available"
+)
+
 type WorkspaceResourceStatus string
 
 const (
@@ -59,7 +65,7 @@ type WorkspaceResource struct {
 // WorkspaceStateStatus defines the observed state of WorkspaceState
 type WorkspaceStateStatus struct {
 	// The most recent generation observed by the controller.
-	ObservedGeneration int64 `json:"observed_generation,omitempty"`
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 	// Conditions is a list of status conditions ths object is in.
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 	// DEPRECATED: This field is not part of any API contract
@@ -68,18 +74,17 @@ type WorkspaceStateStatus struct {
 	Phase WorkspaceStatePhase `json:"phase,omitempty"`
 	// Tracks last reported upgrade policy status.
 	// +optional
-	WorkspaceStateInfo []ResourceStateInfo `json:"resource_info,omitempty"`
+	WorkspaceStateInfo []ResourceStateInfo `json:"workspaceStateInfo,omitempty"`
 }
 
 type ResourceStateInfo struct {
 	Name              string                  `json:"name"`
 	Status            WorkspaceResourceStatus `json:"resource_status"`
-	AddressIdentifier string                  `json:"address_identifier"`
+	AddressIdentifier string                  `json:"addressIdentifier"`
 }
 
-//+kubebuilder:object:root=true
-//+kubebuilder:subresource:status
-
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
 // WorkspaceState is the Schema for the workspacestates API
 type WorkspaceState struct {
 	metav1.TypeMeta   `json:",inline"`
