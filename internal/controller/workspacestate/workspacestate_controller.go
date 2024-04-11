@@ -190,7 +190,7 @@ func (r *WorkspaceStateReconciler) reconcilePVCs(ctx context.Context, workspaceS
 	return nil
 }
 
-func (r *WorkspaceStateReconciler) ensurePVC(ctx context.Context, resource *workspacev1alpha1.WorkspaceResource, workspaceState *workspacev1alpha1.WorkspaceState) error {
+func (r *WorkspaceStateReconciler) ensurePVC(ctx context.Context, resource *workspacev1alpha1.WorkspaceResourceStorage, workspaceState *workspacev1alpha1.WorkspaceState) error {
 	// TODO, change this based on the type.
 	resourceSize, err := k8sresource.ParseQuantity(resource.Size)
 	if err != nil {
@@ -274,7 +274,7 @@ func stringPtr(str string) *string {
 	return &str
 }
 
-func (r *WorkspaceStateReconciler) reportResourceReconcileError(err error, workspaceState *v1alpha1.WorkspaceState, resource *v1alpha1.WorkspaceResource) {
+func (r *WorkspaceStateReconciler) reportResourceReconcileError(err error, workspaceState *v1alpha1.WorkspaceState, resource *v1alpha1.WorkspaceResourceStorage) {
 	meta.SetStatusCondition(&workspaceState.Status.Conditions, metav1.Condition{
 		Type:               string(v1alpha1.WorkspaceStateConditionAvailable),
 		Status:             metav1.ConditionFalse,
@@ -317,7 +317,7 @@ func (r *WorkspaceStateReconciler) reportWorkSpaceStateReady(workspaceState *v1a
 	workspaceState.Status.WorkspaceStateInfo = res
 }
 
-func FindResourceStatus(list []v1alpha1.ResourceStateInfo, resource *v1alpha1.WorkspaceResource) *v1alpha1.ResourceStateInfo {
+func FindResourceStatus(list []v1alpha1.ResourceStateInfo, resource *v1alpha1.WorkspaceResourceStorage) *v1alpha1.ResourceStateInfo {
 	for i := range list {
 		currentStatus := &list[i]
 		if currentStatus.Name == resource.Name {

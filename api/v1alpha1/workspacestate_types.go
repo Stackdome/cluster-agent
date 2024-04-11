@@ -34,21 +34,21 @@ const (
 	WorkspaceStateConditionAvailable WorkspaceStateCondition = "Available"
 )
 
-type WorkspaceResourceStatus string
+type WorkspaceResourceStorageStatus string
 
 const (
-	Provisioned      WorkspaceResourceStatus = "Provisioned"
-	ProvisionPending WorkspaceResourceStatus = "ProvisionPending"
-	ProvisionFailed  WorkspaceResourceStatus = "ProvisionFailed"
+	Provisioned      WorkspaceResourceStorageStatus = "Provisioned"
+	ProvisionPending WorkspaceResourceStorageStatus = "ProvisionPending"
+	ProvisionFailed  WorkspaceResourceStorageStatus = "ProvisionFailed"
 )
 
 // WorkspaceStateSpec defines the desired state of WorkspaceState
 type WorkspaceStateSpec struct {
 	// +kubebuilder:validation:Required
-	Resources []WorkspaceResource `json:"resources,omitempty"`
+	Resources []WorkspaceResourceStorage `json:"resources,omitempty"`
 }
 
-type WorkspaceResource struct {
+type WorkspaceResourceStorage struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	Name string `json:"name"`
@@ -59,7 +59,7 @@ type WorkspaceResource struct {
 	// +kubebuilder:validation:MinLength=1
 	Type string `json:"type"`
 
-	Dirty *bool `json:"dirty,omitempty"`
+	Hash string `json:"hash,omitempty"`
 }
 
 // WorkspaceStateStatus defines the observed state of WorkspaceState
@@ -78,9 +78,9 @@ type WorkspaceStateStatus struct {
 }
 
 type ResourceStateInfo struct {
-	Name              string                  `json:"name"`
-	Status            WorkspaceResourceStatus `json:"resource_status"`
-	AddressIdentifier string                  `json:"addressIdentifier"`
+	Name              string                         `json:"name"`
+	Status            WorkspaceResourceStorageStatus `json:"resource_status"`
+	AddressIdentifier string                         `json:"addressIdentifier"`
 }
 
 // +kubebuilder:object:root=true
