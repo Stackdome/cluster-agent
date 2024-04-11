@@ -17,4 +17,22 @@ resources:
   kind: WorkspaceState
   path: soradev.io/cluster-agent/api/v1alpha1
   version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: soradev.io
+  group: workspace
+  kind: WorkspaceResource
+  path: soradev.io/cluster-agent/api/v1alpha1
+  version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: soradev.io
+  group: workspace
+  kind: WorkspaceApplicationBuild
+  path: soradev.io/cluster-agent/api/v1alpha1
+  version: v1alpha1
 version: "3"

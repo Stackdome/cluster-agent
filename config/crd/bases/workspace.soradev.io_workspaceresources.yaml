@@ -4,20 +4,20 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.14.0
-  name: workspacestates.workspace.soradev.io
+  name: workspaceresources.workspace.soradev.io
 spec:
   group: workspace.soradev.io
   names:
-    kind: WorkspaceState
-    listKind: WorkspaceStateList
-    plural: workspacestates
-    singular: workspacestate
+    kind: WorkspaceResource
+    listKind: WorkspaceResourceList
+    plural: workspaceresources
+    singular: workspaceresource
   scope: Namespaced
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: WorkspaceState is the Schema for the workspacestates API
+        description: WorkspaceResource is the Schema for the workspaceresources API
         properties:
           apiVersion:
             description: |-
@@ -37,31 +37,78 @@ spec:
           metadata:
             type: object
           spec:
-            description: WorkspaceStateSpec defines the desired state of WorkspaceState
+            description: WorkspaceResourceSpec defines the desired state of WorkspaceResource
             properties:
-              resources:
+              applicationSource:
+                description: Only one of the following fields should be specified
+                properties:
+                  context:
+                    type: string
+                  dockerFile:
+                    type: string
+                required:
+                - context
+                - dockerFile
+                type: object
+              command:
+                type: string
+              dependOn:
+                description: Other resources this workspace resource depends on.
+                items:
+                  type: string
+                type: array
+              environmentVariables:
                 items:
                   properties:
-                    hash:
-                      type: string
                     name:
-                      minLength: 1
                       type: string
-                    size:
-                      minLength: 1
-                      type: string
-                    type:
-                      minLength: 1
+                    value:
                       type: string
                   required:
                   - name
-                  - size
-                  - type
+                  - value
                   type: object
                 type: array
+              mounts:
+                items:
+                  properties:
+                    destination:
+                      type: string
+                    source:
+                      type: string
+                  required:
+                  - destination
+                  - source
+                  type: object
+                type: array
+              ports:
+                items:
+                  properties:
+                    expose:
+                      type: boolean
+                    number:
+                      format: int32
+                      type: integer
+                  required:
+                  - expose
+                  - number
+                  type: object
+                type: array
+              prebuiltApplication:
+                properties:
+                  image:
+                    type: string
+                required:
+                - image
+                type: object
+              runSourceHash:
+                type: string
+            required:
+            - command
+            - runSourceHash
             type: object
           status:
-            description: WorkspaceStateStatus defines the observed state of WorkspaceState
+            description: WorkspaceResourceStatus defines the observed state of WorkspaceResource
             properties:
               conditions:
                 description: Conditions is a list of status conditions ths object
@@ -134,6 +181,8 @@ spec:
                   - type
                   type: object
                 type: array
+              imageSourceHash:
+                type: string
               observedGeneration:
                 description: The most recent generation observed by the controller.
                 format: int64
@@ -144,22 +193,6 @@ spec:
                   it will go away as soon as kubectl can print conditions!
                   Human readable status - please use .Conditions from code
                 type: string
-              workspaceStateInfo:
-                description: Tracks last reported upgrade policy status.
-                items:
-                  properties:
-                    addressIdentifier:
-                      type: string
-                    name:
-                      type: string
-                    resource_status:
-                      type: string
-                  required:
-                  - addressIdentifier
-                  - name
-                  - resource_status
-                  type: object
-                type: array
             type: object
         type: object
     served: true

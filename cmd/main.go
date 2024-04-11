@@ -35,6 +35,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	workspacev1alpha1 "soradev.io/cluster-agent/api/v1alpha1"
+	"soradev.io/cluster-agent/internal/controller/applicationbuild"
+	"soradev.io/cluster-agent/internal/controller/workspaceresource"
 	"soradev.io/cluster-agent/internal/controller/workspacestate"
 	//+kubebuilder:scaffold:imports
 )
@@ -127,6 +129,20 @@ func main() {
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "WorkspaceState")
+		os.Exit(1)
+	}
+	if err = (&workspaceresource.WorkspaceResourceReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "WorkspaceResource")
+		os.Exit(1)
+	}
+	if err = (&applicationbuild.WorkspaceApplicationBuildReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "WorkspaceApplicationBuild")
 		os.Exit(1)
 	}
 	//+kubebuilder:scaffold:builder

@@ -7,7 +7,7 @@ rules:
 - apiGroups:
   - workspace.soradev.io
   resources:
-  - workspacestates
+  - workspaceresources
   verbs:
   - create
   - delete
@@ -19,42 +19,14 @@ rules:
 - apiGroups:
   - workspace.soradev.io
   resources:
-  - workspacestates/finalizers
+  - workspaceresources/finalizers
   verbs:
   - update
 - apiGroups:
   - workspace.soradev.io
   resources:
-  - workspacestates/status
+  - workspaceresources/status
   verbs:
   - get
   - patch
   - update
-- apiGroups:
-  - ""
-  resources:
-  - namespaces
-  - secrets
-  - pods
-  - services
-  - configmaps
-  verbs:
-  - create
-  - get
-  - list
-  - watch
-  - update
-  - patch
-  - delete
-- apiGroups:
-  - apps
-  resources:
-  - deployments
-  verbs:
-  - create
-  - get
-  - list
-  - watch
-  - update
-  - patch
-  - delete

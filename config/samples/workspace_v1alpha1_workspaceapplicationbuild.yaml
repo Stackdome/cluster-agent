@@ -1,0 +1,9 @@
+apiVersion: workspace.soradev.io/v1alpha1
+kind: WorkspaceApplicationBuild
+metadata:
+  labels:
+    app.kubernetes.io/name: cluster-agent
+    app.kubernetes.io/managed-by: kustomize
+  name: workspaceapplicationbuild-sample
+spec:
+  # TODO(user): Add fields here
