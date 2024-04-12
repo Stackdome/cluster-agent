@@ -17,6 +17,8 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"fmt"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -92,6 +94,10 @@ type WorkspaceState struct {
 
 	Spec   WorkspaceStateSpec   `json:"spec,omitempty"`
 	Status WorkspaceStateStatus `json:"status,omitempty"`
+}
+
+func (w *WorkspaceState) MountPathForResource(resource *WorkspaceResourceStorage) string {
+	return fmt.Sprintf("/%s/%s", w.Name, resource.Name)
 }
 
 //+kubebuilder:object:root=true

@@ -187,7 +187,7 @@ func generateRsyncConfs(workspaceState *workspacev1alpha1.WorkspaceState) rsync.
 				rsync.RsyncConfigModuleSpec{
 					ModuleName: resource.Name,
 					// TODO: prefix path with the user name.
-					Path:      fmt.Sprintf("/%s/%s", workspaceState.Name, resource.Name),
+					Path:      workspaceState.MountPathForResource(resource),
 					HostAllow: "*",
 				},
 			),

@@ -28,16 +28,23 @@ const (
 	WorkspaceApplicationBuildPhasePending WorkspaceApplicationBuildPhase = "Pending"
 )
 
+type WorkspaceApplicationBuildStatusCondition string
+
+const (
+	WorkspaceApplicationBuildAvailable WorkspaceApplicationBuildStatusCondition = "Available"
+)
+
 // WorkspaceApplicationBuildSpec defines the desired state of WorkspaceApplicationBuild
 type WorkspaceApplicationBuildSpec struct {
-	SourceHash string            `json:"sourceHash"`
-	ContextRef WorkspaceStateRef `json:"ContextRef"`
-	Registry   string            `json:"registry"`
+	SourceHash string     `json:"sourceHash"`
+	ContextRef ContextRef `json:"contextRef"`
+	Registry   string     `json:"registry"`
 }
 
-type WorkspaceStateRef struct {
-	WorkspaceStateName string `json:"WorkspaceStateName"`
-	ContextPath        string `json:"ContextPath"`
+type ContextRef struct {
+	WorkspaceStateName string `json:"workspaceStateName"`
+	DockerfilePath     string `json:"dockerfilePath"`
+	ResourceName       string `json:"resourceName"`
 }
 
 // WorkspaceApplicationBuildStatus defines the observed state of WorkspaceApplicationBuild
@@ -49,9 +56,9 @@ type WorkspaceApplicationBuildStatus struct {
 	// DEPRECATED: This field is not part of any API contract
 	// it will go away as soon as kubectl can print conditions!
 	// Human readable status - please use .Conditions from code
-	Phase      WorkspaceApplicationBuildPhase `json:"phase,omitempty"`
-	SourceHash string                         `json:"sourceHash,omitempty"`
-	ImageUrl   string                         `json:"imageUrl"`
+	Phase           WorkspaceApplicationBuildPhase `json:"phase,omitempty"`
+	BuildSourceHash string                         `json:"buildSourceHash,omitempty"`
+	ImageUrl        string                         `json:"imageUrl"`
 }
 
 //+kubebuilder:object:root=true

@@ -29,14 +29,14 @@ type RsyncConf []RsyncConfigModule
 const rsyncConfTemplate = `
 {{ range . }}
 [{{ .ModuleName }}]
-    path = {{ .Path }}
+	path = {{ .Path }}
 	read only = {{ .Readonly }}
-    comment = {{ .Comment }}
-    hosts allow = {{ .HostAllow }}
-    list = yes
-    uid = {{ .UID }}
-    gid = {{ .GID }}
-    ignore perms = {{ .IgnorePerms }}
+	comment = {{ .Comment }}
+	hosts allow = {{ .HostAllow }}
+	list = yes
+	uid = {{ .UID }}
+	gid = {{ .GID }}
+	ignore perms = {{ .IgnorePerms }}
 {{ end }}
 `
 

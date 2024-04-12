@@ -8,6 +8,3 @@ spec:
   - name: front-end
     type: service
     size: 2Gi
-  - name: back-end
-    size: 1Gi
-    type: service

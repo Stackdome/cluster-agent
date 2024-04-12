@@ -30,3 +30,12 @@ rules:
   - get
   - patch
   - update
+- apiGroups: [""]
+  resources: ["configmaps", "persistentvolumeclaims", "pods", "services"]
+  verbs: ["create", "get", "list", "watch", "update", "patch", "delete"]
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["create", "get", "list", "watch", "update", "patch", "delete"]
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["create", "get", "list", "watch", "update", "patch", "delete"]

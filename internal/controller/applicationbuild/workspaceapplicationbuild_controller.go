@@ -18,13 +18,23 @@ package applicationbuild
 
 import (
 	"context"
+	"fmt"
 
+	batchv1 "k8s.io/api/batch/v1"
+	v1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-
+	"soradev.io/cluster-agent/api/v1alpha1"
 	workspacev1alpha1 "soradev.io/cluster-agent/api/v1alpha1"
+	"soradev.io/cluster-agent/internal/controller"
+	"soradev.io/cluster-agent/pkg/imagebuilder"
 )
 
 // WorkspaceApplicationBuildReconciler reconciles a WorkspaceApplicationBuild object
@@ -33,30 +43,149 @@ type WorkspaceApplicationBuildReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-//+kubebuilder:rbac:groups=workspace.soradev.io,resources=workspaceapplicationbuilds,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=workspace.soradev.io,resources=workspaceapplicationbuilds/status,verbs=get;update;patch
-//+kubebuilder:rbac:groups=workspace.soradev.io,resources=workspaceapplicationbuilds/finalizers,verbs=update
-
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
-// move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the WorkspaceApplicationBuild object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.17.2/pkg/reconcile
 func (r *WorkspaceApplicationBuildReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = log.FromContext(ctx)
+	logger := log.FromContext(ctx)
+	ctx = controller.ContextWithLogger(ctx, logger.WithValues("WorkspaceApplicationBuild", req.String()))
+	applicationBuild := &v1alpha1.WorkspaceApplicationBuild{}
 
-	// TODO(user): your logic here
+	if err := r.Client.Get(ctx, req.NamespacedName, applicationBuild); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, err
+	}
+	res, err := r.reconcile(ctx, applicationBuild)
+	if err != nil {
+		return res, err
+	}
+	return res, r.Client.Status().Update(ctx, applicationBuild)
+}
 
+func (r *WorkspaceApplicationBuildReconciler) reconcile(ctx context.Context, buildConfig *v1alpha1.WorkspaceApplicationBuild) (ctrl.Result, error) {
+	logger := controller.LoggerFromContext(ctx)
+	logger.Info("reconciling application build")
+	workspaceStateRef := &v1alpha1.WorkspaceState{}
+
+	if err := r.Client.Get(ctx, types.NamespacedName{
+		Name:      buildConfig.Spec.ContextRef.WorkspaceStateName,
+		Namespace: buildConfig.Namespace,
+	}, workspaceStateRef); err != nil {
+		reportWorkspaceApplicationBuildStatus(
+			buildConfig, v1alpha1.WorkspaceApplicationBuildAvailable, metav1.ConditionFalse, "WorkspaceStateFetchError")
+		return ctrl.Result{}, err
+	}
+
+	if !workspaceStateAvailable(workspaceStateRef) {
+		reportWorkspaceApplicationBuildStatus(
+			buildConfig,
+			v1alpha1.WorkspaceApplicationBuildAvailable,
+			metav1.ConditionFalse,
+			"WorkspaceStateNotReady",
+		)
+		return ctrl.Result{Requeue: true}, nil
+	}
+	workSpaceResourceReferenced := func() *v1alpha1.WorkspaceResourceStorage {
+		for i := range workspaceStateRef.Spec.Resources {
+			curr := &workspaceStateRef.Spec.Resources[i]
+			if curr.Name == buildConfig.Spec.ContextRef.ResourceName {
+				return curr
+			}
+		}
+		return nil
+	}()
+
+	if workSpaceResourceReferenced == nil {
+		return ctrl.Result{}, fmt.Errorf("resource referenced in the build not in the workspace state")
+	}
+
+	jobConfig := imagebuilder.BuildParams{
+		JobName:        workspaceStateRef.Name,
+		Namespace:      buildConfig.Namespace,
+		PVCName:        workSpaceResourceReferenced.Name,
+		DockerfilePath: buildConfig.Spec.ContextRef.DockerfilePath,
+		Registry:       buildConfig.Spec.Registry,
+		// TODO: improve this, using workspaceStateRef.Name here
+		ImageName: workspaceStateRef.Name,
+		Tag:       buildConfig.Spec.SourceHash,
+	}
+	desiredImageBuilderJob, err := imagebuilder.GenerateImageBuildJob(jobConfig)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := controllerutil.SetControllerReference(buildConfig, desiredImageBuilderJob, r.Scheme); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	existingJob := &batchv1.Job{}
+	if err := r.Client.Get(
+		ctx,
+		types.NamespacedName{
+			Name:      desiredImageBuilderJob.Name,
+			Namespace: desiredImageBuilderJob.Namespace,
+		},
+		existingJob,
+	); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ctrl.Result{}, r.Client.Create(ctx, desiredImageBuilderJob)
+		}
+		return ctrl.Result{}, err
+	}
+	JobCompletedCondition := findJobCompleteCondition(existingJob)
+	if JobCompletedCondition == nil || JobCompletedCondition.Status == v1.ConditionStatus(metav1.ConditionFalse) {
+		if JobCompletedCondition != nil {
+			reportWorkspaceApplicationBuildStatus(buildConfig, v1alpha1.WorkspaceApplicationBuildAvailable, metav1.ConditionFalse, JobCompletedCondition.Reason)
+			return ctrl.Result{}, nil
+		}
+		reportWorkspaceApplicationBuildStatus(buildConfig, v1alpha1.WorkspaceApplicationBuildAvailable, metav1.ConditionFalse, "BuildJobNotYetCompleted")
+		return ctrl.Result{}, nil
+	}
+	// TODO: Improve this:
+	// - Consider all status conditions.
+	// - Refactor this big ass method.
+	reportWorkspaceApplicationBuildStatus(buildConfig, v1alpha1.WorkspaceApplicationBuildAvailable, metav1.ConditionTrue, "BuildSuccess")
+	buildConfig.Status.Phase = v1alpha1.WorkspaceApplicationBuildPhaseSuccess
+	buildConfig.Status.ImageUrl = jobConfig.ImageUrl()
+	buildConfig.Status.BuildSourceHash = buildConfig.Spec.SourceHash
 	return ctrl.Result{}, nil
+}
+
+func findJobCompleteCondition(job *batchv1.Job) *batchv1.JobCondition {
+	for i := range job.Status.Conditions {
+		if job.Status.Conditions[i].Type == batchv1.JobComplete {
+			return &job.Status.Conditions[i]
+		}
+	}
+	return nil
+}
+
+func workspaceStateAvailable(workspaceState *v1alpha1.WorkspaceState) bool {
+	cond := meta.FindStatusCondition(workspaceState.Status.Conditions, string(v1alpha1.WorkspaceStateConditionAvailable))
+	if cond == nil || cond.Status == metav1.ConditionFalse {
+		return false
+	}
+	return true
+}
+
+func reportWorkspaceApplicationBuildStatus(
+	buildConfig *v1alpha1.WorkspaceApplicationBuild,
+	condition v1alpha1.WorkspaceApplicationBuildStatusCondition,
+	value metav1.ConditionStatus,
+	reason string,
+) {
+	buildConfig.Status.ObservedGeneration = buildConfig.Generation
+	meta.SetStatusCondition(&buildConfig.Status.Conditions, metav1.Condition{
+		Type:               string(condition),
+		Status:             value,
+		ObservedGeneration: buildConfig.Generation,
+		Reason:             reason,
+		Message:            reason,
+	})
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *WorkspaceApplicationBuildReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&workspacev1alpha1.WorkspaceApplicationBuild{}).
+		Owns(&batchv1.Job{}).
 		Complete(r)
 }
