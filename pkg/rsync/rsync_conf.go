@@ -13,7 +13,7 @@ type RsyncConfigModule struct {
 	IgnorePerms bool
 	UID         string
 	GID         string
-	AuthUsers   *[]string
+	AuthUsers   []string
 	Secrets     *string
 	Readonly    bool
 }

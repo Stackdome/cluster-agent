@@ -42,9 +42,10 @@ type WorkspaceApplicationBuildSpec struct {
 }
 
 type ContextRef struct {
-	WorkspaceStateName string `json:"workspaceStateName"`
-	DockerfilePath     string `json:"dockerfilePath"`
-	ResourceName       string `json:"resourceName"`
+	WorkspaceStorageName string `json:"workspaceStorageName"`
+	DockerfilePath       string `json:"dockerfilePath"`
+	ResourceName         string `json:"resourceName"`
+	Context              string `json:"context"`
 }
 
 // WorkspaceApplicationBuildStatus defines the observed state of WorkspaceApplicationBuild
@@ -56,14 +57,16 @@ type WorkspaceApplicationBuildStatus struct {
 	// DEPRECATED: This field is not part of any API contract
 	// it will go away as soon as kubectl can print conditions!
 	// Human readable status - please use .Conditions from code
+	// +kubebuilder:default=Pending
 	Phase           WorkspaceApplicationBuildPhase `json:"phase,omitempty"`
 	BuildSourceHash string                         `json:"buildSourceHash,omitempty"`
 	ImageUrl        string                         `json:"imageUrl"`
 }
 
-//+kubebuilder:object:root=true
-//+kubebuilder:subresource:status
-
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
+// +kubebuilder:resource:shortName=wab
+// +kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase"
 // WorkspaceApplicationBuild is the Schema for the workspaceapplicationbuilds API
 type WorkspaceApplicationBuild struct {
 	metav1.TypeMeta   `json:",inline"`

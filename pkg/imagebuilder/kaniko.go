@@ -32,6 +32,7 @@ spec:
         volumeMounts:
         - name: workspace
           mountPath: /workspace
+          subPath: {{ .Context }}
       restartPolicy: Never
       volumes:
       - name: workspace
@@ -44,6 +45,7 @@ type BuildParams struct {
 	Namespace      string
 	PVCName        string
 	DockerfilePath string
+	Context        string
 	Registry       string
 	ImageName      string
 	Tag            string

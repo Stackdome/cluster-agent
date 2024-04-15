@@ -2,8 +2,13 @@ package controller
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/go-logr/logr"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 type controllerContextKey int
@@ -23,4 +28,61 @@ func LoggerFromContext(ctx context.Context) logr.Logger {
 		return logger
 	}
 	return logr.Discard()
+}
+
+func CheckDeploymentAvailable(deployment *appsv1.Deployment) bool {
+	for _, condition := range deployment.Status.Conditions {
+		if condition.Type == appsv1.DeploymentAvailable &&
+			condition.Status == corev1.ConditionTrue {
+			return true
+		}
+	}
+	return false
+}
+
+func AreServicesEqual(svc1, svc2 *corev1.Service) bool {
+	// Create a copy of the services to avoid modifying the original objects
+	svc1Copy := svc1.DeepCopy()
+	svc2Copy := svc2.DeepCopy()
+
+	// Iterate over the ports and set the nodePort to 0 for comparison
+	for i := range svc1Copy.Spec.Ports {
+		svc1Copy.Spec.Ports[i].NodePort = 0
+	}
+	for i := range svc2Copy.Spec.Ports {
+		svc2Copy.Spec.Ports[i].NodePort = 0
+	}
+
+	// Use Semantic.DeepDerivative to compare the modified services
+	return equality.Semantic.DeepDerivative(svc1Copy.Spec, svc2Copy.Spec)
+}
+
+func GetNodeIP(ctx context.Context, client client.Client) (string, error) {
+	nodeList := &corev1.NodeList{}
+	err := client.List(ctx, nodeList)
+	if err != nil {
+		return "", fmt.Errorf("failed to list nodes: %v", err)
+	}
+
+	if len(nodeList.Items) == 0 {
+		return "", fmt.Errorf("no nodes found")
+	}
+
+	// Get the IP address of the first node in the list
+	node := nodeList.Items[0]
+	nodeIP := ""
+
+	// Iterate through the node's addresses and find the external IP
+	for _, address := range node.Status.Addresses {
+		if address.Type == corev1.NodeInternalIP {
+			nodeIP = address.Address
+			break
+		}
+	}
+
+	if nodeIP == "" {
+		return "", fmt.Errorf("no external IP found for the node")
+	}
+
+	return nodeIP, nil
 }

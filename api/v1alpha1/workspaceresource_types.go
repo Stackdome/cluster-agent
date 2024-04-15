@@ -30,13 +30,27 @@ const (
 	WorkspaceResourcePhaseFailed  WorkspaceResourcePhase = "Failed"
 )
 
+type WorkspaceResourceStatusCondition string
+
+const (
+	WorkspaceResourceStatusAvailable WorkspaceResourceStatusCondition = "Available"
+)
+
 // WorkspaceResourceSpec defines the desired state of WorkspaceResource
 type WorkspaceResourceSpec struct {
+	// TODO: use labels for user name.
+	Username            string `json:"username"`
+	WorkspaceStorageRef string `json:"workspaceStorageRef"`
+	// +optional
+	ImageRegistry *string `json:"imageRegistry"`
 	// Only one of the following fields should be specified
 	// +union
-	ApplicationSource   *ApplicationSourceSpec   `json:"applicationSource,omitempty"`
-	PrebuiltApplication *PrebuiltApplicationSpec `json:"prebuiltApplication,omitempty"`
-	Command             string                   `json:"command"`
+	ApplicationSourceSpec   *ApplicationSourceSpec   `json:"applicationSourceSpec,omitempty"`
+	PrebuiltApplicationSpec *PrebuiltApplicationSpec `json:"prebuiltApplicationSpec,omitempty"`
+	// +optional
+	Command []string `json:"command"`
+	// +optional
+	Args []string `json:"args"`
 	// +optional
 	Mounts []ResourceMounts `json:"mounts,omitempty"`
 	// +optional
@@ -82,13 +96,22 @@ type WorkspaceResourceStatus struct {
 	// DEPRECATED: This field is not part of any API contract
 	// it will go away as soon as kubectl can print conditions!
 	// Human readable status - please use .Conditions from code
+	// +kubebuilder:default=Pending
 	Phase           WorkspaceResourcePhase `json:"phase,omitempty"`
 	ImageSourceHash string                 `json:"imageSourceHash,omitempty"`
+	ExternalAddress string                 `json:"externalAddress,omitempty"`
+	InternalAddress string                 `json:"internalAddress,omitempty"`
 }
 
-//+kubebuilder:object:root=true
-//+kubebuilder:subresource:status
+type StorageRef struct {
+	PvcName string `json:"pvcName"`
+	Subpath string `json:"Subpath"`
+}
 
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
+// +kubebuilder:resource:shortName=wr
+// +kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase"
 // WorkspaceResource is the Schema for the workspaceresources API
 type WorkspaceResource struct {
 	metav1.TypeMeta   `json:",inline"`
@@ -96,6 +119,19 @@ type WorkspaceResource struct {
 
 	Spec   WorkspaceResourceSpec   `json:"spec,omitempty"`
 	Status WorkspaceResourceStatus `json:"status,omitempty"`
+}
+
+func (w *WorkspaceResource) SplitPortsByInternalAndExternal() ([]Port, []Port) {
+	internalPorts := make([]Port, 0)
+	externalPorts := make([]Port, 0)
+	for _, port := range w.Spec.Ports {
+		if port.Expose {
+			externalPorts = append(externalPorts, Port{Number: port.Number})
+		} else {
+			internalPorts = append(internalPorts, Port{Number: port.Number})
+		}
+	}
+	return internalPorts, externalPorts
 }
 
 //+kubebuilder:object:root=true

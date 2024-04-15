@@ -11,10 +11,16 @@ spec:
     kind: WorkspaceApplicationBuild
     listKind: WorkspaceApplicationBuildList
     plural: workspaceapplicationbuilds
+    shortNames:
+    - wab
     singular: workspaceapplicationbuild
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: WorkspaceApplicationBuild is the Schema for the workspaceapplicationbuilds
@@ -43,16 +49,19 @@ spec:
             properties:
               contextRef:
                 properties:
+                  context:
+                    type: string
                   dockerfilePath:
                     type: string
                   resourceName:
                     type: string
-                  workspaceStateName:
+                  workspaceStorageName:
                     type: string
                 required:
+                - context
                 - dockerfilePath
                 - resourceName
-                - workspaceStateName
+                - workspaceStorageName
                 type: object
               registry:
                 type: string
@@ -67,6 +76,8 @@ spec:
             description: WorkspaceApplicationBuildStatus defines the observed state
               of WorkspaceApplicationBuild
             properties:
+              buildSourceHash:
+                type: string
               conditions:
                 description: Conditions is a list of status conditions ths object
                   is in.
@@ -145,12 +156,11 @@ spec:
                 format: int64
                 type: integer
               phase:
+                default: Pending
                 description: |-
                   DEPRECATED: This field is not part of any API contract
                   it will go away as soon as kubectl can print conditions!
                   Human readable status - please use .Conditions from code
-                type: string
-              sourceHash:
                 type: string
             required:
             - imageUrl

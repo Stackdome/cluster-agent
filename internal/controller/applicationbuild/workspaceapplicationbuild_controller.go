@@ -30,6 +30,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"soradev.io/cluster-agent/api/v1alpha1"
 	workspacev1alpha1 "soradev.io/cluster-agent/api/v1alpha1"
@@ -61,51 +62,55 @@ func (r *WorkspaceApplicationBuildReconciler) Reconcile(ctx context.Context, req
 	return res, r.Client.Status().Update(ctx, applicationBuild)
 }
 
+func reportWorkspaceApplicationBuildComplete(buildConfig *v1alpha1.WorkspaceApplicationBuild) {
+	buildConfig.Status.Phase = v1alpha1.WorkspaceApplicationBuildPhaseSuccess
+	buildConfig.Status.BuildSourceHash = buildConfig.Spec.SourceHash
+	meta.SetStatusCondition(&buildConfig.Status.Conditions, metav1.Condition{
+		Type:               string(v1alpha1.WorkspaceApplicationBuildAvailable),
+		Status:             metav1.ConditionTrue,
+		ObservedGeneration: buildConfig.Generation,
+		Reason:             "BuildComplete",
+		Message:            "Image build compelete",
+	})
+}
+
 func (r *WorkspaceApplicationBuildReconciler) reconcile(ctx context.Context, buildConfig *v1alpha1.WorkspaceApplicationBuild) (ctrl.Result, error) {
 	logger := controller.LoggerFromContext(ctx)
 	logger.Info("reconciling application build")
-	workspaceStateRef := &v1alpha1.WorkspaceState{}
+	workspaceStorageRef := &v1alpha1.WorkspaceStorage{}
 
 	if err := r.Client.Get(ctx, types.NamespacedName{
-		Name:      buildConfig.Spec.ContextRef.WorkspaceStateName,
+		Name:      buildConfig.Spec.ContextRef.WorkspaceStorageName,
 		Namespace: buildConfig.Namespace,
-	}, workspaceStateRef); err != nil {
+	}, workspaceStorageRef); err != nil {
 		reportWorkspaceApplicationBuildStatus(
-			buildConfig, v1alpha1.WorkspaceApplicationBuildAvailable, metav1.ConditionFalse, "WorkspaceStateFetchError")
+			buildConfig, v1alpha1.WorkspaceApplicationBuildAvailable, metav1.ConditionFalse, "WorkspaceStorageFetchError")
 		return ctrl.Result{}, err
 	}
 
-	if !workspaceStateAvailable(workspaceStateRef) {
+	if !workspaceStorageAvailable(workspaceStorageRef) {
 		reportWorkspaceApplicationBuildStatus(
 			buildConfig,
 			v1alpha1.WorkspaceApplicationBuildAvailable,
 			metav1.ConditionFalse,
-			"WorkspaceStateNotReady",
+			"WorkspaceStorageNotReady",
 		)
 		return ctrl.Result{Requeue: true}, nil
 	}
-	workSpaceResourceReferenced := func() *v1alpha1.WorkspaceResourceStorage {
-		for i := range workspaceStateRef.Spec.Resources {
-			curr := &workspaceStateRef.Spec.Resources[i]
-			if curr.Name == buildConfig.Spec.ContextRef.ResourceName {
-				return curr
-			}
-		}
-		return nil
-	}()
+	resourceStorageReferenced := workspaceStorageRef.ResourceStorageSpec(buildConfig.Spec.ContextRef.ResourceName)
 
-	if workSpaceResourceReferenced == nil {
-		return ctrl.Result{}, fmt.Errorf("resource referenced in the build not in the workspace state")
+	if resourceStorageReferenced == nil {
+		return ctrl.Result{}, fmt.Errorf("resource referenced in the build not in the workspace storage")
 	}
 
 	jobConfig := imagebuilder.BuildParams{
-		JobName:        workspaceStateRef.Name,
+		JobName:        buildConfig.Name,
 		Namespace:      buildConfig.Namespace,
-		PVCName:        workSpaceResourceReferenced.Name,
+		PVCName:        workspaceStorageRef.GeneratePVCName(resourceStorageReferenced),
 		DockerfilePath: buildConfig.Spec.ContextRef.DockerfilePath,
 		Registry:       buildConfig.Spec.Registry,
 		// TODO: improve this, using workspaceStateRef.Name here
-		ImageName: workspaceStateRef.Name,
+		ImageName: workspaceStorageRef.Name,
 		Tag:       buildConfig.Spec.SourceHash,
 	}
 	desiredImageBuilderJob, err := imagebuilder.GenerateImageBuildJob(jobConfig)
@@ -131,22 +136,18 @@ func (r *WorkspaceApplicationBuildReconciler) reconcile(ctx context.Context, bui
 		return ctrl.Result{}, err
 	}
 	JobCompletedCondition := findJobCompleteCondition(existingJob)
-	if JobCompletedCondition == nil || JobCompletedCondition.Status == v1.ConditionStatus(metav1.ConditionFalse) {
-		if JobCompletedCondition != nil {
-			reportWorkspaceApplicationBuildStatus(buildConfig, v1alpha1.WorkspaceApplicationBuildAvailable, metav1.ConditionFalse, JobCompletedCondition.Reason)
-			return ctrl.Result{}, nil
-		}
-		reportWorkspaceApplicationBuildStatus(buildConfig, v1alpha1.WorkspaceApplicationBuildAvailable, metav1.ConditionFalse, "BuildJobNotYetCompleted")
+
+	if JobCompletedCondition != nil && JobCompletedCondition.Status == v1.ConditionStatus(metav1.ConditionTrue) {
+		buildConfig.Status.ImageUrl = jobConfig.ImageUrl()
+		reportWorkspaceApplicationBuildComplete(buildConfig)
 		return ctrl.Result{}, nil
 	}
+	reportWorkspaceApplicationBuildStatus(buildConfig, v1alpha1.WorkspaceApplicationBuildAvailable, metav1.ConditionFalse, "BuildJobNotYetCompleted")
+	return ctrl.Result{}, nil
 	// TODO: Improve this:
 	// - Consider all status conditions.
 	// - Refactor this big ass method.
-	reportWorkspaceApplicationBuildStatus(buildConfig, v1alpha1.WorkspaceApplicationBuildAvailable, metav1.ConditionTrue, "BuildSuccess")
-	buildConfig.Status.Phase = v1alpha1.WorkspaceApplicationBuildPhaseSuccess
-	buildConfig.Status.ImageUrl = jobConfig.ImageUrl()
-	buildConfig.Status.BuildSourceHash = buildConfig.Spec.SourceHash
-	return ctrl.Result{}, nil
+
 }
 
 func findJobCompleteCondition(job *batchv1.Job) *batchv1.JobCondition {
@@ -158,8 +159,8 @@ func findJobCompleteCondition(job *batchv1.Job) *batchv1.JobCondition {
 	return nil
 }
 
-func workspaceStateAvailable(workspaceState *v1alpha1.WorkspaceState) bool {
-	cond := meta.FindStatusCondition(workspaceState.Status.Conditions, string(v1alpha1.WorkspaceStateConditionAvailable))
+func workspaceStorageAvailable(workspaceStorage *v1alpha1.WorkspaceStorage) bool {
+	cond := meta.FindStatusCondition(workspaceStorage.Status.Conditions, string(v1alpha1.WorkspaceStateConditionAvailable))
 	if cond == nil || cond.Status == metav1.ConditionFalse {
 		return false
 	}
@@ -186,6 +187,6 @@ func reportWorkspaceApplicationBuildStatus(
 func (r *WorkspaceApplicationBuildReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&workspacev1alpha1.WorkspaceApplicationBuild{}).
-		Owns(&batchv1.Job{}).
+		Watches(&batchv1.Job{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &workspacev1alpha1.WorkspaceApplicationBuild{})).
 		Complete(r)
 }

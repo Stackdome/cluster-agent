@@ -37,7 +37,7 @@ import (
 	workspacev1alpha1 "soradev.io/cluster-agent/api/v1alpha1"
 	"soradev.io/cluster-agent/internal/controller/applicationbuild"
 	"soradev.io/cluster-agent/internal/controller/workspaceresource"
-	"soradev.io/cluster-agent/internal/controller/workspacestate"
+	"soradev.io/cluster-agent/internal/controller/workspacestorage"
 	//+kubebuilder:scaffold:imports
 )
 

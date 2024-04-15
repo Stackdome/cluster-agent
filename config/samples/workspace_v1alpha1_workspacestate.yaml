@@ -1,10 +1,10 @@
 apiVersion: workspace.soradev.io/v1alpha1
-kind: WorkspaceState
+kind: WorkspaceStorage
 metadata:
   namespace: ashish-workspace
   name: ashish
 spec:
-  resources:
+  resourceStorageSpecs:
   - name: front-end
     type: service
     size: 2Gi
