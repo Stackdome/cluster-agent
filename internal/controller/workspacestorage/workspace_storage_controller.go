@@ -112,6 +112,7 @@ func (r *WorkspaceStorageReconciler) reconcile(ctx context.Context, workspaceSto
 }
 
 func (r *WorkspaceStorageReconciler) reportWorkspaceStorageReady(ctx context.Context, workspaceStorage *v1alpha1.WorkspaceStorage, nodeIP string) error {
+	workspaceStorage.Status.Phase = v1alpha1.Ready
 	meta.SetStatusCondition(&workspaceStorage.Status.Conditions, metav1.Condition{
 		Type:               string(v1alpha1.WorkspaceStateConditionAvailable),
 		Status:             metav1.ConditionTrue,

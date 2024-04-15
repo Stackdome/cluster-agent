@@ -205,6 +205,7 @@ func generateRsyncConfs(workspaceStorage *workspacev1alpha1.WorkspaceStorage) rs
 }
 
 func reportWorkspaceStateUnready(msg string, workspaceStorage *v1alpha1.WorkspaceStorage) {
+	workspaceStorage.Status.Phase = v1alpha1.Pending
 	meta.SetStatusCondition(&workspaceStorage.Status.Conditions, metav1.Condition{
 		Type:               string(v1alpha1.WorkspaceStateConditionAvailable),
 		Status:             metav1.ConditionFalse,
