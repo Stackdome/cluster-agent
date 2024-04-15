@@ -124,17 +124,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = (&workspacestate.WorkspaceStateReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
+	if err = (workspacestorage.NewWorkspaceStorageReconciler(mgr.GetClient(), mgr.GetScheme())).
+		SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "WorkspaceState")
 		os.Exit(1)
 	}
-	if err = (&workspaceresource.WorkspaceResourceReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
+	if err = workspaceresource.NewWorkspaceResourceReconciler(
+		mgr.GetClient(),
+		mgr.GetScheme()).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "WorkspaceResource")
 		os.Exit(1)
 	}
