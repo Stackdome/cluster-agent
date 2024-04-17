@@ -4,20 +4,24 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.14.0
-  name: workspacestates.workspace.soradev.io
+  name: workspaces.workspace.soradev.io
 spec:
   group: workspace.soradev.io
   names:
-    kind: WorkspaceState
-    listKind: WorkspaceStateList
-    plural: workspacestates
-    singular: workspacestate
+    kind: Workspace
+    listKind: WorkspaceList
+    plural: workspaces
+    singular: workspace
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: WorkspaceState is the Schema for the workspacestates API
+        description: Workspace is the Schema for the workspaces API
         properties:
           apiVersion:
             description: |-
@@ -37,31 +41,120 @@ spec:
           metadata:
             type: object
           spec:
-            description: WorkspaceStateSpec defines the desired state of WorkspaceState
+            description: WorkspaceSpec defines the desired state of Workspace
             properties:
               resources:
                 items:
                   properties:
-                    hash:
-                      type: string
                     name:
-                      minLength: 1
                       type: string
-                    size:
-                      minLength: 1
+                    spec:
+                      description: WorkspaceResourceSpec defines the desired state
+                        of WorkspaceResource
+                      properties:
+                        applicationSourceSpec:
+                          description: Only one of the following fields should be
+                            specified
+                          properties:
+                            context:
+                              type: string
+                            dockerFile:
+                              type: string
+                          required:
+                          - context
+                          - dockerFile
+                          type: object
+                        args:
+                          items:
+                            type: string
+                          type: array
+                        command:
+                          items:
+                            type: string
+                          type: array
+                        dependOn:
+                          description: Other resources this workspace resource depends
+                            on.
+                          items:
+                            type: string
+                          type: array
+                        environmentVariables:
+                          items:
+                            properties:
+                              name:
+                                type: string
+                              value:
+                                type: string
+                            required:
+                            - name
+                            - value
+                            type: object
+                          type: array
+                        imageRegistry:
+                          type: string
+                        mounts:
+                          items:
+                            properties:
+                              destination:
+                                type: string
+                              source:
+                                type: string
+                            required:
+                            - destination
+                            - source
+                            type: object
+                          type: array
+                        ports:
+                          items:
+                            properties:
+                              expose:
+                                type: boolean
+                              number:
+                                format: int32
+                                type: integer
+                            required:
+                            - expose
+                            - number
+                            type: object
+                          type: array
+                        prebuiltApplicationSpec:
+                          properties:
+                            image:
+                              type: string
+                          required:
+                          - image
+                          type: object
+                        runSourceHash:
+                          type: string
+                        workspaceStorageRef:
+                          properties:
+                            ResourceName:
+                              type: string
+                            WorkspaceStorageName:
+                              type: string
+                          required:
+                          - ResourceName
+                          - WorkspaceStorageName
+                          type: object
+                      required:
+                      - runSourceHash
+                      type: object
+                    storageSize:
                       type: string
-                    type:
-                      minLength: 1
-                      type: string
+                    syncRequired:
+                      type: boolean
                   required:
                   - name
-                  - size
-                  - type
+                  - spec
+                  - storageSize
+                  - syncRequired
                   type: object
                 type: array
+            required:
+            - resources
             type: object
           status:
-            description: WorkspaceStateStatus defines the observed state of WorkspaceState
+            description: WorkspaceStatus defines the observed state of Workspace
             properties:
               conditions:
                 description: Conditions is a list of status conditions ths object
@@ -139,27 +232,8 @@ spec:
                 format: int64
                 type: integer
               phase:
-                description: |-
-                  DEPRECATED: This field is not part of any API contract
-                  it will go away as soon as kubectl can print conditions!
-                  Human readable status - please use .Conditions from code
+                default: Pending
                 type: string
-              workspaceStateInfo:
-                description: Tracks last reported upgrade policy status.
-                items:
-                  properties:
-                    addressIdentifier:
-                      type: string
-                    name:
-                      type: string
-                    resource_status:
-                      type: string
-                  required:
-                  - addressIdentifier
-                  - name
-                  - resource_status
-                  type: object
-                type: array
             type: object
         type: object
     served: true

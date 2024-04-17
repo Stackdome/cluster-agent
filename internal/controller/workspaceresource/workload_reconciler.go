@@ -33,7 +33,7 @@ type resourceAndResourceStorage struct {
 }
 
 func GetDeploymentNameForResource(resource *v1alpha1.WorkspaceResource) string {
-	return fmt.Sprintf("%s-%s", resource.Spec.Username, resource.Name)
+	return fmt.Sprintf("%s", resource.Name)
 }
 
 func GetDeploymentPodLabelForResource(resource *v1alpha1.WorkspaceResource) map[string]string {
@@ -259,15 +259,15 @@ func (r *workloadReconciler) getStorageInfoForResource(ctx context.Context, reso
 	if err := r.Client.Get(
 		ctx,
 		types.NamespacedName{
-			Name:      resource.Spec.WorkspaceStorageRef,
+			Name:      resource.Spec.WorkspaceStorageRef.WorkspaceStorageName,
 			Namespace: resource.Namespace,
 		},
 		workspaceStorage,
 	); err != nil {
 		return nil, err
 	}
-	info := workspaceStorage.ResourceStorageInfo(resource.Name)
-	if info == nil || info.Status == v1alpha1.StorageProvisioned {
+	info := workspaceStorage.ResourceStorageInfo(resource.Spec.WorkspaceStorageRef.ResourceName)
+	if info != nil && info.Status == v1alpha1.StorageResourceReadyForUse {
 		return info, nil
 	}
 	return nil, fmt.Errorf("storage for resource not ready")

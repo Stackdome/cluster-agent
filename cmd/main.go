@@ -36,6 +36,7 @@ import (
 
 	workspacev1alpha1 "soradev.io/cluster-agent/api/v1alpha1"
 	"soradev.io/cluster-agent/internal/controller/applicationbuild"
+	"soradev.io/cluster-agent/internal/controller/workspace"
 	"soradev.io/cluster-agent/internal/controller/workspaceresource"
 	"soradev.io/cluster-agent/internal/controller/workspacestorage"
 	//+kubebuilder:scaffold:imports
@@ -142,6 +143,13 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "WorkspaceApplicationBuild")
 		os.Exit(1)
 	}
+
+	if err = workspace.NewWorkspaceReconciler(mgr.GetClient(), mgr.GetScheme()).
+		SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "Workspace")
+		os.Exit(1)
+	}
+
 	//+kubebuilder:scaffold:builder
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {

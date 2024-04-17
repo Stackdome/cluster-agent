@@ -117,15 +117,18 @@ spec:
                 type: object
               runSourceHash:
                 type: string
-              username:
-                description: 'TODO: use labels for user name.'
-                type: string
               workspaceStorageRef:
-                type: string
+                properties:
+                  ResourceName:
+                    type: string
+                  WorkspaceStorageName:
+                    type: string
+                required:
+                - ResourceName
+                - WorkspaceStorageName
+                type: object
             required:
             - runSourceHash
-            - username
-            - workspaceStorageRef
             type: object
           status:
             description: WorkspaceResourceStatus defines the observed state of WorkspaceResource

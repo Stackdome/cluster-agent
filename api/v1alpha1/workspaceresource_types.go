@@ -38,9 +38,8 @@ const (
 
 // WorkspaceResourceSpec defines the desired state of WorkspaceResource
 type WorkspaceResourceSpec struct {
-	// TODO: use labels for user name.
-	Username            string `json:"username"`
-	WorkspaceStorageRef string `json:"workspaceStorageRef"`
+	// +optional
+	WorkspaceStorageRef WorkspaceStorageRef `json:"workspaceStorageRef"`
 	// +optional
 	ImageRegistry *string `json:"imageRegistry"`
 	// Only one of the following fields should be specified
@@ -61,6 +60,11 @@ type WorkspaceResourceSpec struct {
 	// +optional
 	Ports         []Port `json:"ports"`
 	RunSourceHash string `json:"runSourceHash"`
+}
+
+type WorkspaceStorageRef struct {
+	WorkspaceStorageName string `json:"WorkspaceStorageName"`
+	ResourceName         string `json:"ResourceName"`
 }
 
 type Port struct {

@@ -62,8 +62,8 @@ func (r *workspaceResourceBuildReconciler) createApplicationBuild(ctx context.Co
 		Spec: v1alpha1.WorkspaceApplicationBuildSpec{
 			SourceHash: resource.Spec.RunSourceHash,
 			ContextRef: v1alpha1.ContextRef{
-				WorkspaceStorageName: resource.Spec.WorkspaceStorageRef,
-				ResourceName:         resource.Name,
+				WorkspaceStorageName: resource.Spec.WorkspaceStorageRef.WorkspaceStorageName,
+				ResourceName:         resource.Spec.WorkspaceStorageRef.ResourceName,
 				DockerfilePath:       resource.Spec.ApplicationSourceSpec.DockerFile,
 				Context:              resource.Spec.ApplicationSourceSpec.Context,
 			},
@@ -85,5 +85,5 @@ func GetImageRegistry(resource *v1alpha1.WorkspaceResource) string {
 }
 
 func ExpectedApplicationBuildName(resource *v1alpha1.WorkspaceResource) string {
-	return fmt.Sprintf("%s-%s-%s", resource.Spec.Username, resource.Name, resource.Spec.RunSourceHash)
+	return fmt.Sprintf("%s-%s", resource.Name, resource.Spec.RunSourceHash)
 }

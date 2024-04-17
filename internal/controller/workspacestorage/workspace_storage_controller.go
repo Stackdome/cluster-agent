@@ -105,16 +105,24 @@ func (r *WorkspaceStorageReconciler) reconcile(ctx context.Context, workspaceSto
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if err := r.reportWorkspaceStorageReady(ctx, workspaceStorage, NodeIP); err != nil {
+
+	if err := r.reportWorkspaceStorageAvailable(ctx, workspaceStorage, NodeIP); err != nil {
 		return ctrl.Result{}, err
 	}
+
+	if workspaceStorage.HasSyncRequiredStorageResources() {
+		reportWorkspaceStorageNotReadyForUse(workspaceStorage, "StorageResourceNeedsSync", "Some storage resources needs to be synced.")
+	} else {
+		reportWorkspaceStorageReadyForUse(workspaceStorage, "StorageResourcesReadyForUse", "All storage resources ready for use.")
+	}
+
 	return ctrl.Result{}, r.Client.Status().Update(ctx, workspaceStorage)
 }
 
-func (r *WorkspaceStorageReconciler) reportWorkspaceStorageReady(ctx context.Context, workspaceStorage *v1alpha1.WorkspaceStorage, nodeIP string) error {
-	workspaceStorage.Status.Phase = v1alpha1.Ready
+func (r *WorkspaceStorageReconciler) reportWorkspaceStorageAvailable(ctx context.Context, workspaceStorage *v1alpha1.WorkspaceStorage, nodeIP string) error {
+	workspaceStorage.Status.Phase = v1alpha1.WSReady
 	meta.SetStatusCondition(&workspaceStorage.Status.Conditions, metav1.Condition{
-		Type:               string(v1alpha1.WorkspaceStateConditionAvailable),
+		Type:               string(v1alpha1.WorkspaceStorageAvailable),
 		Status:             metav1.ConditionTrue,
 		Reason:             "AllComponentsUP",
 		ObservedGeneration: workspaceStorage.Generation,
@@ -130,7 +138,7 @@ func (r *WorkspaceStorageReconciler) reportWorkspaceStorageReady(ctx context.Con
 	for _, resource := range workspaceStorage.Spec.ResourceStorageSpecs {
 		res = append(res, v1alpha1.ResourceStorageStatus{
 			Name:              resource.Name,
-			Status:            v1alpha1.StorageProvisioned,
+			Status:            v1alpha1.StorageResourceReadyForUse,
 			AddressIdentifier: fmt.Sprintf("%s:%d/%s/", nodeIP, service.Spec.Ports[0].NodePort, resource.Name),
 			PvcName:           workspaceStorage.GeneratePVCName(&resource),
 			Subpath:           workspaceStorage.MountPathForResource(&resource),
@@ -159,6 +167,33 @@ func NewWorkspaceStorageReconciler(client client.Client, scheme *runtime.Scheme)
 		Client:         client,
 		Scheme:         scheme,
 		subReconcilers: subReconcilers,
+	}
+}
+
+func reportWorkspaceStorageNotReadyForUse(workspaceStorage *v1alpha1.WorkspaceStorage, reason string, msg string) {
+	workspaceStorage.Status.ObservedGeneration = workspaceStorage.Generation
+	meta.SetStatusCondition(&workspaceStorage.Status.Conditions, metav1.Condition{
+		Type:               string(v1alpha1.StorageResourceReadyForUse),
+		Status:             metav1.ConditionFalse,
+		Reason:             reason,
+		Message:            msg,
+		ObservedGeneration: workspaceStorage.Generation,
+	})
+}
+
+func reportWorkspaceStorageReadyForUse(workspaceStorage *v1alpha1.WorkspaceStorage, reason string, msg string) {
+	workspaceStorage.Status.ObservedGeneration = workspaceStorage.Generation
+	meta.SetStatusCondition(&workspaceStorage.Status.Conditions, metav1.Condition{
+		Type:               string(v1alpha1.StorageResourceReadyForUse),
+		Status:             metav1.ConditionTrue,
+		Reason:             reason,
+		Message:            msg,
+		ObservedGeneration: workspaceStorage.Generation,
+	})
+
+	for i := range workspaceStorage.Status.WorkspaceStorageInfo {
+		resourceStatus := &workspaceStorage.Status.WorkspaceStorageInfo[i]
+		resourceStatus.Status = v1alpha1.StorageResourceReadyForUse
 	}
 }
 

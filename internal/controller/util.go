@@ -8,6 +8,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -85,4 +86,11 @@ func GetNodeIP(ctx context.Context, client client.Client) (string, error) {
 	}
 
 	return nodeIP, nil
+}
+
+func GetNamespacedName(cr client.Object) types.NamespacedName {
+	return types.NamespacedName{
+		Namespace: cr.GetNamespace(),
+		Name:      cr.GetName(),
+	}
 }

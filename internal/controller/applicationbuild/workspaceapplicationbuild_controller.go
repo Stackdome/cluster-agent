@@ -97,6 +97,17 @@ func (r *WorkspaceApplicationBuildReconciler) reconcile(ctx context.Context, bui
 		)
 		return ctrl.Result{Requeue: true}, nil
 	}
+
+	if !workspaceStorageReadyForUse(workspaceStorageRef) {
+		reportWorkspaceApplicationBuildStatus(
+			buildConfig,
+			v1alpha1.WorkspaceApplicationBuildAvailable,
+			metav1.ConditionFalse,
+			"WorkspaceStorageNotReadyForUse",
+		)
+		return ctrl.Result{Requeue: true}, nil
+	}
+
 	resourceStorageReferenced := workspaceStorageRef.ResourceStorageSpec(buildConfig.Spec.ContextRef.ResourceName)
 
 	if resourceStorageReferenced == nil {
@@ -160,7 +171,15 @@ func findJobCompleteCondition(job *batchv1.Job) *batchv1.JobCondition {
 }
 
 func workspaceStorageAvailable(workspaceStorage *v1alpha1.WorkspaceStorage) bool {
-	cond := meta.FindStatusCondition(workspaceStorage.Status.Conditions, string(v1alpha1.WorkspaceStateConditionAvailable))
+	cond := meta.FindStatusCondition(workspaceStorage.Status.Conditions, string(v1alpha1.WorkspaceStorageAvailable))
+	if cond == nil || cond.Status == metav1.ConditionFalse {
+		return false
+	}
+	return true
+}
+
+func workspaceStorageReadyForUse(workspaceStorage *v1alpha1.WorkspaceStorage) bool {
+	cond := meta.FindStatusCondition(workspaceStorage.Status.Conditions, string(v1alpha1.WorkspaceStorageReadyForUse))
 	if cond == nil || cond.Status == metav1.ConditionFalse {
 		return false
 	}

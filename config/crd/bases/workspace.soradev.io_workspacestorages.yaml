@@ -57,6 +57,8 @@ spec:
                     name:
                       minLength: 1
                       type: string
+                    needsSync:
+                      type: boolean
                     size:
                       minLength: 1
                       type: string
@@ -64,7 +66,9 @@ spec:
                       type: string
                   required:
                   - name
+                  - needsSync
                   - size
+                  - type
                   type: object
                 type: array
             type: object

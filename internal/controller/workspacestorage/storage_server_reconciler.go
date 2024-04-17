@@ -141,7 +141,7 @@ func (r *storageServerReconciler) ensureRsyncServerDeployment(
 	if controller.CheckDeploymentAvailable(existingDeployment) {
 		return resultNil, nil
 	}
-	reportWorkspaceStateUnready("Storage Server unready", workspaceStorage)
+	reportWorkspaceStorageUnAvailable(workspaceStorage, "StorageServerNotReady", "Storage Server unavailable")
 	return resultStop, nil
 }
 
@@ -204,12 +204,13 @@ func generateRsyncConfs(workspaceStorage *workspacev1alpha1.WorkspaceStorage) rs
 	return rsync.NewRsyncConf(rsyncModules...)
 }
 
-func reportWorkspaceStateUnready(msg string, workspaceStorage *v1alpha1.WorkspaceStorage) {
-	workspaceStorage.Status.Phase = v1alpha1.Pending
+func reportWorkspaceStorageUnAvailable(workspaceStorage *v1alpha1.WorkspaceStorage, reason string, msg string) {
+	workspaceStorage.Status.Phase = v1alpha1.WSPending
 	meta.SetStatusCondition(&workspaceStorage.Status.Conditions, metav1.Condition{
-		Type:               string(v1alpha1.WorkspaceStateConditionAvailable),
+		Type:               string(v1alpha1.WorkspaceStorageAvailable),
 		Status:             metav1.ConditionFalse,
-		Reason:             msg,
+		Reason:             reason,
+		Message:            msg,
 		ObservedGeneration: workspaceStorage.Generation,
 	})
 }

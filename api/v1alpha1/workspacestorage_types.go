@@ -25,23 +25,27 @@ import (
 type WorkspaceStoragePhase string
 
 const (
-	Ready   WorkspaceStoragePhase = "Ready"
-	Pending WorkspaceStoragePhase = "Pending"
-	Failed  WorkspaceStoragePhase = "Failed"
+	WSReady     WorkspaceStoragePhase = "Ready"
+	WSPending   WorkspaceStoragePhase = "Pending"
+	WSFailed    WorkspaceStoragePhase = "Failed"
+	WSNeedsSync WorkspaceStoragePhase = "NeedsToBeSynced"
 )
 
 type WorkspaceStorageCondition string
 
 const (
-	WorkspaceStateConditionAvailable WorkspaceStorageCondition = "Available"
+	WorkspaceStorageAvailable   WorkspaceStorageCondition = "Available"
+	WorkspaceStorageReadyForUse WorkspaceStorageCondition = "ReadyForUse"
 )
 
 type ResourceStorageStatusCondition string
 
 const (
-	StorageProvisioned      ResourceStorageStatusCondition = "Provisioned"
-	StorageProvisionPending ResourceStorageStatusCondition = "ProvisionPending"
-	StorageProvisionFailed  ResourceStorageStatusCondition = "ProvisionFailed"
+	StorageResourceProvisioned      ResourceStorageStatusCondition = "Provisioned"
+	StorageResourceProvisionPending ResourceStorageStatusCondition = "ProvisionPending"
+	StorageResourceProvisionFailed  ResourceStorageStatusCondition = "ProvisionFailed"
+	StorageResourceReadyForUse      ResourceStorageStatusCondition = "ReadyForUse"
+	StorageResourceSyncRequired     ResourceStorageStatusCondition = "StorageResourceSyncRequired"
 )
 
 type WorkspaceStorageSpec struct {
@@ -49,17 +53,25 @@ type WorkspaceStorageSpec struct {
 	ResourceStorageSpecs []ResourceStorageSpec `json:"resourceStorageSpecs,omitempty"`
 }
 
+type ResourceStorageType string
+
+const (
+	ApplicationSourceStorage        ResourceStorageType = "ApplicationSourceType"
+	PreBuiltApplicationStateStorage ResourceStorageType = "PreBuiltApplicationStateStorage"
+	RawStorage                      ResourceStorageType = "RawStorage"
+)
+
 type ResourceStorageSpec struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	Name string `json:"name"`
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
-	Size string `json:"size"`
-	// +optional
-	Type string `json:"type"`
+	Size string              `json:"size"`
+	Type ResourceStorageType `json:"type"`
 	// +optional
 	DontAllowSync bool `json:"dontAllowSync"`
+	NeedsSync     bool `json:"needsSync"`
 	// +optional
 	Hash string `json:"hash,omitempty"`
 }
@@ -102,6 +114,15 @@ type WorkspaceStorage struct {
 
 	Spec   WorkspaceStorageSpec   `json:"spec,omitempty"`
 	Status WorkspaceStorageStatus `json:"status,omitempty"`
+}
+
+func (w *WorkspaceStorage) HasSyncRequiredStorageResources() bool {
+	for _, srs := range w.Spec.ResourceStorageSpecs {
+		if srs.NeedsSync {
+			return true
+		}
+	}
+	return false
 }
 
 func (w *WorkspaceStorage) MountPathForResource(resource *ResourceStorageSpec) string {

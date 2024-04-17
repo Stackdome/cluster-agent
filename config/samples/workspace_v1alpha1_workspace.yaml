@@ -1,0 +1,33 @@
+apiVersion: workspace.soradev.io/v1alpha1
+kind: Workspace
+metadata:
+  name: ashish-workspace
+  namespace: ashish-workspace
+spec:
+  resources:
+    - name: front-end
+      storageSize: 1Gi
+      syncRequired: true
+      spec:
+        imageRegistry: ttl.sh
+        applicationSourceSpec:
+          context: .
+          dockerFile: ./Dockerfile
+        command: ["npm", "start"]
+        mounts:
+        - source: $self/src
+          destination: /usr/src/app/src
+        environmentVariables:
+        - name: HELLO
+          value: WORLD
+        - name: BACKEND_URL
+          value: $backend.Address
+        ports:
+        - number: 8080
+          expose: true
+        runSourceHash: test-1
+
+
+
+
+

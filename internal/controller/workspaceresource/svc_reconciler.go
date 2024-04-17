@@ -24,7 +24,7 @@ type svcReconciler struct {
 }
 
 func ResourceSVCName(resource *v1alpha1.WorkspaceResource) string {
-	return fmt.Sprintf("%s-%s-svc", resource.Spec.Username, resource.Name)
+	return fmt.Sprintf("%s-svc", resource.Name)
 }
 
 func (r *svcReconciler) reconcile(ctx context.Context, resource *v1alpha1.WorkspaceResource) (subReconcilerResult, error) {
