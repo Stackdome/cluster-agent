@@ -158,9 +158,10 @@ func InterpolatedEnvVars(resource *v1alpha1.WorkspaceResource, infoMap resourceA
 		if strings.HasPrefix(envVar.Value, "$") {
 			referencedResouceName, _ := splitEnvVarValue(envVar.Value)
 			// TODO: Assert attribute is Address
+			address := infoMap[referencedResouceName].resource.Status.InternalAddress
 			res = append(res, corev1.EnvVar{
 				Name:  envVar.Name,
-				Value: infoMap[referencedResouceName].resource.Status.InternalAddress,
+				Value: address,
 			})
 		} else {
 			res = append(res, corev1.EnvVar{
@@ -273,17 +274,25 @@ func (r *workloadReconciler) getStorageInfoForResource(ctx context.Context, reso
 	return nil, fmt.Errorf("storage for resource not ready")
 }
 
-func (r *workloadReconciler) makeDependencyMap(ctx context.Context, deps *v1alpha1.WorkspaceResourceList) (resourceAndResourceStorageMap, error) {
-	res := make(map[string]*resourceAndResourceStorage, len(deps.Items))
-	for _, resource := range deps.Items {
-		storageInfo, err := r.getStorageInfoForResource(ctx, &resource)
+func (r *workloadReconciler) makeDependencyMap(ctx context.Context, deps []v1alpha1.WorkspaceResource) (resourceAndResourceStorageMap, error) {
+	res := make(map[string]*resourceAndResourceStorage, len(deps))
+	for _, resource := range deps {
+		depResource := &v1alpha1.WorkspaceResource{}
+		if err := r.Client.Get(ctx, controller.GetNamespacedName(&resource), depResource); err != nil {
+			return nil, err
+		}
+		storageInfo, err := r.getStorageInfoForResource(ctx, depResource)
 		if err != nil {
 			return nil, err
 		}
-		res[resource.Name] = &resourceAndResourceStorage{
-			resource:            &resource,
+		res[depResource.Spec.WorkspaceStorageRef.ResourceName] = &resourceAndResourceStorage{
+			resource:            depResource,
 			resourceStorageInfo: storageInfo,
 		}
 	}
 	return res, nil
+}
+
+func workspaceResourceName(workspaceName, resourceName string) string {
+	return fmt.Sprintf("%s-%s", workspaceName, resourceName)
 }

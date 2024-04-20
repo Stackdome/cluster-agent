@@ -97,7 +97,7 @@ func (r *storageServerReconciler) ensureRsyncServerDeployment(
 						{
 							Name: fmt.Sprintf("%s-storage-server", workspaceStorage.Name),
 							// TODO: Change
-							Image:           "rsync-daemon:1",
+							Image:           "myregistry.localhost:5000/rsync-daemon:1",
 							ImagePullPolicy: corev1.PullIfNotPresent,
 							Ports: []corev1.ContainerPort{
 								{

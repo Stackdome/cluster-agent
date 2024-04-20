@@ -56,10 +56,9 @@ type WorkspaceResourceSpec struct {
 	EnvironmentVariables []EnvironmentVariables `json:"environmentVariables,omitempty"`
 	// Other resources this workspace resource depends on.
 	// +optional
-	DependsOn []string `json:"dependOn"`
+	DependsOn []string `json:"dependsOn"`
 	// +optional
-	Ports         []Port `json:"ports"`
-	RunSourceHash string `json:"runSourceHash"`
+	Ports []Port `json:"ports"`
 }
 
 type WorkspaceStorageRef struct {
@@ -83,8 +82,9 @@ type ResourceMounts struct {
 }
 
 type ApplicationSourceSpec struct {
-	Context    string `json:"context"`
-	DockerFile string `json:"dockerFile"`
+	Context       string `json:"context"`
+	DockerFile    string `json:"dockerFile"`
+	RunSourceHash string `json:"runSourceHash"`
 }
 
 type PrebuiltApplicationSpec struct {

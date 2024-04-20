@@ -23,7 +23,7 @@ type serviceReconciler struct {
 }
 
 func StorageServerServiceName(workspaceStorage *workspacev1alpha1.WorkspaceStorage) string {
-	return fmt.Sprintf("%s-storage-server-svc", workspaceStorage.Name)
+	return fmt.Sprintf("%s-ws-svc", workspaceStorage.Name)
 }
 
 func StorageServiceNamespacedName(workspaceStorage *workspacev1alpha1.WorkspaceStorage) types.NamespacedName {
@@ -43,7 +43,7 @@ func (r *serviceReconciler) reconcile(ctx context.Context, workspaceStorage *wor
 			Labels:    WorkspaceStorageLabels(workspaceStorage),
 		},
 		Spec: corev1.ServiceSpec{
-			Type:     corev1.ServiceTypeNodePort,
+			Type:     corev1.ServiceTypeLoadBalancer,
 			Selector: WorkspaceStorageLabels(workspaceStorage),
 			Ports: []corev1.ServicePort{
 				{

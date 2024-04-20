@@ -78,7 +78,7 @@ func GenerateImageBuildJob(params BuildParams) (*batchv1.Job, error) {
 	}
 	job := &batchv1.Job{}
 	buff := bytes.NewBufferString(jobYaml)
-	if err := yaml.NewYAMLOrJSONDecoder(buff, 1024).Decode(job); err != nil {
+	if err := yaml.NewYAMLOrJSONDecoder(buff, 2048).Decode(job); err != nil {
 		return nil, fmt.Errorf("failed to decode Job YAML: %v", err)
 	}
 	return job, nil

@@ -26,11 +26,16 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"soradev.io/cluster-agent/api/v1alpha1"
 	"soradev.io/cluster-agent/internal/controller"
+)
+
+const (
+	ownerKey = ".metadata.controller"
 )
 
 type subReconcilerResult struct {
@@ -54,8 +59,9 @@ type subReconciler func(context.Context, *v1alpha1.Workspace) (subReconcilerResu
 // WorkspaceReconciler reconciles a Workspace object
 type WorkspaceReconciler struct {
 	client.Client
-	Scheme         *runtime.Scheme
-	subReconcilers []subReconciler
+	Scheme                 *runtime.Scheme
+	subReconcilers         []subReconciler
+	workspaceResourceQueue chan event.GenericEvent
 }
 
 func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -76,6 +82,17 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	if err != nil {
 		return res, err
 	}
+
+	// Enqueue child resources.
+	childResources := &v1alpha1.WorkspaceResourceList{}
+	if err := r.Client.List(ctx, childResources, client.MatchingFields{ownerKey: req.Name}); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	for i := range childResources.Items {
+		r.workspaceResourceQueue <- event.GenericEvent{Object: &childResources.Items[i]}
+	}
+
 	return res, r.Client.Status().Update(ctx, workspace)
 }
 
@@ -121,10 +138,11 @@ func reportWorkspaceReady(workspace *v1alpha1.Workspace) {
 	})
 }
 
-func NewWorkspaceReconciler(client client.Client, scheme *runtime.Scheme) *WorkspaceReconciler {
+func NewWorkspaceReconciler(client client.Client, scheme *runtime.Scheme, workspaceResourceQueue chan event.GenericEvent) *WorkspaceReconciler {
 	r := &WorkspaceReconciler{
-		Client: client,
-		Scheme: scheme,
+		Client:                 client,
+		Scheme:                 scheme,
+		workspaceResourceQueue: workspaceResourceQueue,
 	}
 	r.subReconcilers = []subReconciler{
 		r.ReconcileWorkspaceStorage,

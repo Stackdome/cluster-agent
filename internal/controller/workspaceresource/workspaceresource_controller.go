@@ -19,22 +19,28 @@ package workspaceresource
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/utils/strings/slices"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"soradev.io/cluster-agent/api/v1alpha1"
 	"soradev.io/cluster-agent/internal/controller"
+)
+
+const (
+	ownerKey = ".metadata.controller"
 )
 
 type subReconcilerResult struct {
@@ -64,6 +70,7 @@ type WorkspaceResourceReconciler struct {
 	client.Client
 	Scheme         *runtime.Scheme
 	subReconcilers []subReconciler
+	RequeueCh      chan event.GenericEvent
 }
 
 func (r *WorkspaceResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -133,7 +140,9 @@ func reportWorkspaceResourceNotReady(resource *v1alpha1.WorkspaceResource, reaso
 func (r *WorkspaceResourceReconciler) reportWorkspaceResourceReady(resource *v1alpha1.WorkspaceResource) {
 	//TODO: Set source hash
 	resource.Status.ObservedGeneration = resource.Generation
-	resource.Status.ImageSourceHash = resource.Spec.RunSourceHash
+	if resource.Spec.ApplicationSourceSpec != nil {
+		resource.Status.ImageSourceHash = resource.Spec.ApplicationSourceSpec.RunSourceHash
+	}
 	resource.Status.Phase = v1alpha1.WorkspaceResourcePhaseReady
 	meta.SetStatusCondition(&resource.Status.Conditions, metav1.Condition{
 		Type:               string(v1alpha1.WorkspaceResourceStatusAvailable),
@@ -144,18 +153,32 @@ func (r *WorkspaceResourceReconciler) reportWorkspaceResourceReady(resource *v1a
 	})
 }
 
-func (r *WorkspaceResourceReconciler) getDependencies(ctx context.Context, resource *v1alpha1.WorkspaceResource) (*v1alpha1.WorkspaceResourceList, error) {
+func (r *WorkspaceResourceReconciler) getDependencies(ctx context.Context, resource *v1alpha1.WorkspaceResource) ([]v1alpha1.WorkspaceResource, error) {
 	if len(resource.Spec.DependsOn) == 0 {
-		return &v1alpha1.WorkspaceResourceList{}, nil
+		return nil, nil
 	}
-	dependencyList := &v1alpha1.WorkspaceResourceList{}
-	selector := client.MatchingFields(map[string]string{
-		"metadata.name": fmt.Sprintf("in (%s)", strings.Join(resource.Spec.DependsOn, ",")),
-	})
-	if err := r.Client.List(ctx, dependencyList, client.InNamespace(resource.Namespace), selector); err != nil {
+	wrList := &v1alpha1.WorkspaceResourceList{}
+	workspaceRef := metav1.GetControllerOf(resource)
+	if workspaceRef == nil {
+		return nil, fmt.Errorf("missing owner ref for workspace resource")
+	}
+	if err := r.Client.List(ctx, wrList, client.InNamespace(resource.Namespace), client.MatchingFields{
+		ownerKey: workspaceRef.Name,
+	}); err != nil {
 		return nil, err
 	}
-	return dependencyList, nil
+	dependsOn := []string{}
+
+	for _, dep := range resource.Spec.DependsOn {
+		dependsOn = append(dependsOn, workspaceResourceName(workspaceRef.Name, dep))
+	}
+	res := make([]v1alpha1.WorkspaceResource, 0)
+	for _, wr := range wrList.Items {
+		if slices.Contains(dependsOn, wr.Name) {
+			res = append(res, wr)
+		}
+	}
+	return res, nil
 }
 
 func (r *WorkspaceResourceReconciler) dependenciesAvailable(ctx context.Context, resource *v1alpha1.WorkspaceResource) (bool, error) {
@@ -163,16 +186,18 @@ func (r *WorkspaceResourceReconciler) dependenciesAvailable(ctx context.Context,
 		return true, nil
 	}
 	dependencyList, err := r.getDependencies(ctx, resource)
+	logger := controller.LoggerFromContext(ctx)
+	logger.Info(fmt.Sprintf("deps: %+v, len: %d", dependencyList, len(dependencyList)))
 	if err != nil {
 		return false, err
 	}
-	if len(dependencyList.Items) != len(resource.Spec.DependsOn) {
+	if len(dependencyList) != len(resource.Spec.DependsOn) {
 		return false, fmt.Errorf("some dependency services are not yet created")
 	}
 
 	unreadyDeps := []*v1alpha1.WorkspaceResource{}
-	for i := range dependencyList.Items {
-		currentDep := dependencyList.Items[i]
+	for i := range dependencyList {
+		currentDep := dependencyList[i]
 		if !workspaceAvailable(&currentDep) {
 			unreadyDeps = append(unreadyDeps, &currentDep)
 		}
@@ -186,7 +211,7 @@ func (r *WorkspaceResourceReconciler) dependenciesAvailable(ctx context.Context,
 func workspaceAvailable(resource *v1alpha1.WorkspaceResource) bool {
 	availableCond := meta.FindStatusCondition(resource.Status.Conditions, string(v1alpha1.WorkspaceResourceStatusAvailable))
 	if availableCond != nil &&
-		availableCond.Status == metav1.ConditionTrue ||
+		availableCond.Status == metav1.ConditionTrue &&
 		availableCond.ObservedGeneration == resource.Generation {
 		return true
 	}
@@ -195,8 +220,9 @@ func workspaceAvailable(resource *v1alpha1.WorkspaceResource) bool {
 
 func NewWorkspaceResourceReconciler(client client.Client, scheme *runtime.Scheme) *WorkspaceResourceReconciler {
 	w := &WorkspaceResourceReconciler{
-		Client: client,
-		Scheme: scheme,
+		Client:    client,
+		Scheme:    scheme,
+		RequeueCh: make(chan event.GenericEvent),
 	}
 	subReconcilers := []subReconciler{
 		&workspaceResourceBuildReconciler{
@@ -219,10 +245,18 @@ func NewWorkspaceResourceReconciler(client client.Client, scheme *runtime.Scheme
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *WorkspaceResourceReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &v1alpha1.WorkspaceResource{}, ownerKey, func(rawObj client.Object) []string {
+		wr := rawObj.(*v1alpha1.WorkspaceResource)
+		owner := metav1.GetControllerOf(wr)
+		return []string{owner.Name}
+	}); err != nil {
+		return err
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.WorkspaceResource{}).
 		Watches(&v1alpha1.WorkspaceApplicationBuild{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &v1alpha1.WorkspaceResource{})).
 		Watches(&corev1.Service{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &v1alpha1.WorkspaceResource{})).
 		Watches(&appsv1.Deployment{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &v1alpha1.WorkspaceResource{})).
+		WatchesRawSource(&source.Channel{Source: r.RequeueCh}, &handler.EnqueueRequestForObject{}).
 		Complete(r)
 }

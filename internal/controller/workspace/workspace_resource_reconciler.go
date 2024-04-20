@@ -94,7 +94,6 @@ func constructWorkspaceResourceCR(workspace *v1alpha1.Workspace, resourceSpec *v
 			Command:                 resourceSpec.Spec.Command,
 			Args:                    resourceSpec.Spec.Args,
 			DependsOn:               resourceSpec.Spec.DependsOn,
-			RunSourceHash:           resourceSpec.Spec.RunSourceHash,
 		},
 	}
 

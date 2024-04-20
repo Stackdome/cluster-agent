@@ -52,9 +52,12 @@ spec:
                     type: string
                   dockerFile:
                     type: string
+                  runSourceHash:
+                    type: string
                 required:
                 - context
                 - dockerFile
+                - runSourceHash
                 type: object
               args:
                 items:
@@ -64,7 +67,7 @@ spec:
                 items:
                   type: string
                 type: array
-              dependOn:
+              dependsOn:
                 description: Other resources this workspace resource depends on.
                 items:
                   type: string
@@ -115,8 +118,6 @@ spec:
                 required:
                 - image
                 type: object
-              runSourceHash:
-                type: string
               workspaceStorageRef:
                 properties:
                   ResourceName:
@@ -127,8 +128,6 @@ spec:
                 - ResourceName
                 - WorkspaceStorageName
                 type: object
-            required:
-            - runSourceHash
             type: object
           status:
             description: WorkspaceResourceStatus defines the observed state of WorkspaceResource

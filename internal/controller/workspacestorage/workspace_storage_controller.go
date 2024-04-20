@@ -136,13 +136,17 @@ func (r *WorkspaceStorageReconciler) reportWorkspaceStorageAvailable(ctx context
 	res := make([]v1alpha1.ResourceStorageStatus, 0)
 
 	for _, resource := range workspaceStorage.Spec.ResourceStorageSpecs {
-		res = append(res, v1alpha1.ResourceStorageStatus{
-			Name:              resource.Name,
-			Status:            v1alpha1.StorageResourceReadyForUse,
-			AddressIdentifier: fmt.Sprintf("%s:%d/%s/", nodeIP, service.Spec.Ports[0].NodePort, resource.Name),
-			PvcName:           workspaceStorage.GeneratePVCName(&resource),
-			Subpath:           workspaceStorage.MountPathForResource(&resource),
-		})
+		currentResourceStatus := v1alpha1.ResourceStorageStatus{
+			Name:    resource.Name,
+			Status:  v1alpha1.StorageResourceReadyForUse,
+			PvcName: workspaceStorage.GeneratePVCName(&resource),
+			Subpath: workspaceStorage.MountPathForResource(&resource),
+		}
+		if len(service.Status.LoadBalancer.Ingress) > 0 {
+			addressIdentifier := fmt.Sprintf("%s:%d/%s/", service.Status.LoadBalancer.Ingress[0].IP, service.Spec.Ports[0].Port, resource.Name)
+			currentResourceStatus.AddressIdentifier = addressIdentifier
+		}
+		res = append(res, currentResourceStatus)
 	}
 	workspaceStorage.Status.WorkspaceStorageInfo = res
 	return nil
