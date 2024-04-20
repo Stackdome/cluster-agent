@@ -20,8 +20,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 type WorkspaceResourcePhase string
 
 const (
@@ -62,13 +60,18 @@ type WorkspaceResourceSpec struct {
 }
 
 type WorkspaceStorageRef struct {
-	WorkspaceStorageName string `json:"WorkspaceStorageName"`
-	ResourceName         string `json:"ResourceName"`
+	WorkspaceStorageName string `json:"workspaceStorageName"`
+	ResourceName         string `json:"resourceName"`
 }
 
 type Port struct {
 	Number int32 `json:"number"`
-	Expose bool  `json:"expose"`
+	// +optional
+	// +kubebuilder:default=false
+	ExposeToPublic bool `json:"exposeToPublic"`
+	// +optional
+	// +kubebuilder:default=true
+	IsHttp bool `json:"isHttp"`
 }
 
 type EnvironmentVariables struct {
@@ -82,9 +85,9 @@ type ResourceMounts struct {
 }
 
 type ApplicationSourceSpec struct {
-	Context       string `json:"context"`
-	DockerFile    string `json:"dockerFile"`
-	RunSourceHash string `json:"runSourceHash"`
+	Context         string `json:"context"`
+	DockerFile      string `json:"dockerFile"`
+	BuildSourceHash string `json:"buildSourceHash"`
 }
 
 type PrebuiltApplicationSpec struct {
@@ -103,13 +106,14 @@ type WorkspaceResourceStatus struct {
 	// +kubebuilder:default=Pending
 	Phase           WorkspaceResourcePhase `json:"phase,omitempty"`
 	ImageSourceHash string                 `json:"imageSourceHash,omitempty"`
-	ExternalAddress string                 `json:"externalAddress,omitempty"`
-	InternalAddress string                 `json:"internalAddress,omitempty"`
+	ExternalAddress []ExternalAddress      `json:"externalAddress,omitempty"`
+	// Internal address is always the cluster wide resolvable internal domain name.
+	InternalAddress *string `json:"internalAddress,omitempty"`
 }
 
-type StorageRef struct {
-	PvcName string `json:"pvcName"`
-	Subpath string `json:"Subpath"`
+type ExternalAddress struct {
+	TargetPort int32  `json:"targetPort"`
+	Address    string `json:"address"`
 }
 
 // +kubebuilder:object:root=true
@@ -129,10 +133,10 @@ func (w *WorkspaceResource) SplitPortsByInternalAndExternal() ([]Port, []Port) {
 	internalPorts := make([]Port, 0)
 	externalPorts := make([]Port, 0)
 	for _, port := range w.Spec.Ports {
-		if port.Expose {
-			externalPorts = append(externalPorts, Port{Number: port.Number})
+		if port.ExposeToPublic {
+			externalPorts = append(externalPorts, port)
 		} else {
-			internalPorts = append(internalPorts, Port{Number: port.Number})
+			internalPorts = append(internalPorts, port)
 		}
 	}
 	return internalPorts, externalPorts

@@ -56,16 +56,16 @@ spec:
                           description: Only one of the following fields should be
                             specified
                           properties:
+                            buildSourceHash:
+                              type: string
                             context:
                               type: string
                             dockerFile:
                               type: string
-                            runSourceHash:
-                              type: string
                           required:
+                          - buildSourceHash
                           - context
                           - dockerFile
-                          - runSourceHash
                           type: object
                         args:
                           items:
@@ -110,13 +110,16 @@ spec:
                         ports:
                           items:
                             properties:
-                              expose:
+                              exposeToPublic:
+                                default: false
+                                type: boolean
+                              isHttp:
+                                default: true
                                 type: boolean
                               number:
                                 format: int32
                                 type: integer
                             required:
-                            - expose
                             - number
                             type: object
                           type: array
@@ -129,13 +132,13 @@ spec:
                           type: object
                         workspaceStorageRef:
                           properties:
-                            ResourceName:
+                            resourceName:
                               type: string
-                            WorkspaceStorageName:
+                            workspaceStorageName:
                               type: string
                           required:
-                          - ResourceName
-                          - WorkspaceStorageName
+                          - resourceName
+                          - workspaceStorageName
                           type: object
                       type: object
                     storageSize:

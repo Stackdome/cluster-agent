@@ -161,7 +161,7 @@ func InterpolatedEnvVars(resource *v1alpha1.WorkspaceResource, infoMap resourceA
 			address := infoMap[referencedResouceName].resource.Status.InternalAddress
 			res = append(res, corev1.EnvVar{
 				Name:  envVar.Name,
-				Value: address,
+				Value: *address,
 			})
 		} else {
 			res = append(res, corev1.EnvVar{

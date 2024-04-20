@@ -126,8 +126,8 @@ func (r *WorkspaceResourceReconciler) reconcile(ctx context.Context, resource *v
 func reportWorkspaceResourceNotReady(resource *v1alpha1.WorkspaceResource, reason, msg string) {
 	resource.Status.ObservedGeneration = resource.Generation
 	resource.Status.Phase = v1alpha1.WorkspaceResourcePhasePending
-	resource.Status.ExternalAddress = ""
-	resource.Status.InternalAddress = ""
+	resource.Status.ExternalAddress = nil
+	resource.Status.InternalAddress = nil
 	meta.SetStatusCondition(&resource.Status.Conditions, metav1.Condition{
 		Type:               string(v1alpha1.WorkspaceResourceStatusAvailable),
 		Status:             metav1.ConditionFalse,
@@ -141,7 +141,7 @@ func (r *WorkspaceResourceReconciler) reportWorkspaceResourceReady(resource *v1a
 	//TODO: Set source hash
 	resource.Status.ObservedGeneration = resource.Generation
 	if resource.Spec.ApplicationSourceSpec != nil {
-		resource.Status.ImageSourceHash = resource.Spec.ApplicationSourceSpec.RunSourceHash
+		resource.Status.ImageSourceHash = resource.Spec.ApplicationSourceSpec.BuildSourceHash
 	}
 	resource.Status.Phase = v1alpha1.WorkspaceResourcePhaseReady
 	meta.SetStatusCondition(&resource.Status.Conditions, metav1.Condition{

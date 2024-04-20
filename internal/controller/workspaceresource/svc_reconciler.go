@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/google/go-cmp/cmp"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -39,7 +38,7 @@ func (r *svcReconciler) reconcile(ctx context.Context, resource *v1alpha1.Worksp
 		}
 		if internalSvc != nil {
 			internalServiceReady = true
-			resource.Status.InternalAddress = internalSvc.Name
+			resource.Status.InternalAddress = &internalSvc.Name
 		} else {
 			internalServiceReady = false
 		}
@@ -56,7 +55,13 @@ func (r *svcReconciler) reconcile(ctx context.Context, resource *v1alpha1.Worksp
 				return resultNil, err
 			}
 			externalServiceReady = true
-			resource.Status.ExternalAddress = nodeIP
+			resource.Status.ExternalAddress = []v1alpha1.ExternalAddress{}
+			for _, externalPort := range externalPorts {
+				resource.Status.ExternalAddress = append(resource.Status.ExternalAddress, v1alpha1.ExternalAddress{
+					TargetPort: externalPort.Number,
+					Address:    fmt.Sprintf("%s:%d", nodeIP, findServicePort(externalPort, externalSvc)),
+				})
+			}
 		} else {
 			externalServiceReady = false
 		}
@@ -124,6 +129,15 @@ func (r *svcReconciler) ensureSvc(ctx context.Context, resource *v1alpha1.Worksp
 	if controller.AreServicesEqual(desiredSvc, existingSvc) {
 		return existingSvc, nil
 	}
-	logger.Info(cmp.Diff(desiredSvc.Spec, existingSvc.Spec))
 	return nil, nil
+}
+
+func findServicePort(inputPort v1alpha1.Port, svc *corev1.Service) int32 {
+	for _, port := range svc.Spec.Ports {
+		if inputPort.Number == port.TargetPort.IntVal {
+			return port.NodePort
+		}
+	}
+	// TODO: Handle this case!!
+	return -1
 }
