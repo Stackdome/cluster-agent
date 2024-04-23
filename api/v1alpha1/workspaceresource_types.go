@@ -59,6 +59,15 @@ type WorkspaceResourceSpec struct {
 	Ports []Port `json:"ports"`
 }
 
+func (w *WorkspaceResourceSpec) HasExposedPort() bool {
+	for _, port := range w.Ports {
+		if port.ExposeToPublic {
+			return true
+		}
+	}
+	return false
+}
+
 type WorkspaceStorageRef struct {
 	WorkspaceStorageName string `json:"workspaceStorageName"`
 	ResourceName         string `json:"resourceName"`

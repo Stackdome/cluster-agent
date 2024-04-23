@@ -36,7 +36,9 @@ const (
 
 // WorkspaceSpec defines the desired state of Workspace
 type WorkspaceSpec struct {
-	Resources []ResourceSpec `json:"resources"`
+	Resources    []ResourceSpec `json:"resources"`
+	UserName     string         `json:"userName"`
+	Organisation string         `json:"organisation"`
 }
 
 type ResourceSpec struct {

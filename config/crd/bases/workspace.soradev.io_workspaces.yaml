@@ -43,6 +43,8 @@ spec:
           spec:
             description: WorkspaceSpec defines the desired state of Workspace
             properties:
+              organisation:
+                type: string
               resources:
                 items:
                   properties:
@@ -152,8 +154,12 @@ spec:
                   - syncRequired
                   type: object
                 type: array
+              userName:
+                type: string
             required:
+            - organisation
             - resources
+            - userName
             type: object
           status:
             description: WorkspaceStatus defines the observed state of Workspace

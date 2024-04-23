@@ -111,7 +111,7 @@ func (r *WorkspaceStorageReconciler) reconcile(ctx context.Context, workspaceSto
 	}
 
 	if workspaceStorage.HasSyncRequiredStorageResources() {
-		reportWorkspaceStorageNotReadyForUse(workspaceStorage, "StorageResourceNeedsSync", "Some storage resources needs to be synced.")
+		reportWorkspaceStorageNotReadyForUse(workspaceStorage, "StorageResourceNeedsSync", "Storage for some resources needs to be synced.")
 	} else {
 		reportWorkspaceStorageReadyForUse(workspaceStorage, "StorageResourcesReadyForUse", "All storage resources ready for use.")
 	}
