@@ -156,6 +156,9 @@ spec:
                   it will go away as soon as kubectl can print conditions!
                   Human readable status - please use .Conditions from code
                 type: string
+              serviceName:
+                description: Name of the svc which exposes this storage pod(internally.)
+                type: string
               workspaceStorageInfo:
                 description: Tracks last reported upgrade policy status.
                 items:

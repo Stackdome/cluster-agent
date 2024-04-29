@@ -17,6 +17,8 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"fmt"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -36,7 +38,9 @@ const (
 
 // WorkspaceSpec defines the desired state of Workspace
 type WorkspaceSpec struct {
-	Resources []ResourceSpec `json:"resources"`
+	Resources    []ResourceSpec `json:"resources"`
+	UserName     string         `json:"userName"`
+	Organisation string         `json:"organisation"`
 }
 
 type ResourceSpec struct {
@@ -79,4 +83,12 @@ type WorkspaceList struct {
 
 func init() {
 	SchemeBuilder.Register(&Workspace{}, &WorkspaceList{})
+}
+
+func WorkspaceStorageName(workspaceName string) string {
+	return fmt.Sprintf("%s-storage", workspaceName)
+}
+
+func WorkspaceResourceName(resourceName string) string {
+	return resourceName
 }

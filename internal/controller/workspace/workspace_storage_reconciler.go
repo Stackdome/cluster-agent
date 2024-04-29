@@ -15,10 +15,6 @@ import (
 	"soradev.io/cluster-agent/internal/controller"
 )
 
-func WorkspaceStorageName(workspace *v1alpha1.Workspace) string {
-	return fmt.Sprintf("%s-workspace-storage", workspace.Name)
-}
-
 func (r *WorkspaceReconciler) ReconcileWorkspaceStorage(ctx context.Context, workspace *v1alpha1.Workspace) (subReconcilerResult, error) {
 	resourceStorageSpecs := make([]v1alpha1.ResourceStorageSpec, 0)
 	logger := controller.LoggerFromContext(ctx)
@@ -40,7 +36,7 @@ func (r *WorkspaceReconciler) ReconcileWorkspaceStorage(ctx context.Context, wor
 
 	desiredWorkspaceStorageCR := &v1alpha1.WorkspaceStorage{
 		ObjectMeta: v1.ObjectMeta{
-			Name:      WorkspaceStorageName(workspace),
+			Name:      v1alpha1.WorkspaceStorageName(workspace.Spec.UserName),
 			Namespace: workspace.Namespace,
 		},
 		Spec: v1alpha1.WorkspaceStorageSpec{
@@ -82,7 +78,7 @@ func (r *WorkspaceReconciler) GetWorkspaceStorage(ctx context.Context, workspace
 	if err := r.Client.Get(
 		ctx,
 		types.NamespacedName{
-			Name:      WorkspaceStorageName(workspace),
+			Name:      v1alpha1.WorkspaceStorageName(workspace.Spec.UserName),
 			Namespace: workspace.Namespace,
 		}, workspaceStorage); err != nil {
 		return nil, err

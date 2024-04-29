@@ -8,6 +8,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -86,6 +87,15 @@ func GetNodeIP(ctx context.Context, client client.Client) (string, error) {
 	}
 
 	return nodeIP, nil
+}
+
+func HasSameController(objA, objB metav1.Object) bool {
+	controllerA := metav1.GetControllerOf(objA)
+	controllerB := metav1.GetControllerOf(objB)
+	if controllerA == nil || controllerB == nil {
+		return false
+	}
+	return controllerA.UID == controllerB.UID
 }
 
 func GetNamespacedName(cr client.Object) types.NamespacedName {

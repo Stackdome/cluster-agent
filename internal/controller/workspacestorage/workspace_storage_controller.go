@@ -111,7 +111,7 @@ func (r *WorkspaceStorageReconciler) reconcile(ctx context.Context, workspaceSto
 	}
 
 	if workspaceStorage.HasSyncRequiredStorageResources() {
-		reportWorkspaceStorageNotReadyForUse(workspaceStorage, "StorageResourceNeedsSync", "Some storage resources needs to be synced.")
+		reportWorkspaceStorageNotReadyForUse(workspaceStorage, "StorageResourceNeedsSync", "Storage for some resources needs to be synced.")
 	} else {
 		reportWorkspaceStorageReadyForUse(workspaceStorage, "StorageResourcesReadyForUse", "All storage resources ready for use.")
 	}
@@ -120,18 +120,18 @@ func (r *WorkspaceStorageReconciler) reconcile(ctx context.Context, workspaceSto
 }
 
 func (r *WorkspaceStorageReconciler) reportWorkspaceStorageAvailable(ctx context.Context, workspaceStorage *v1alpha1.WorkspaceStorage, nodeIP string) error {
+	service := &corev1.Service{}
+	if err := r.Client.Get(ctx, StorageServiceNamespacedName(workspaceStorage), service); err != nil {
+		return err
+	}
 	workspaceStorage.Status.Phase = v1alpha1.WSReady
+	workspaceStorage.Status.ServiceName = service.Name
 	meta.SetStatusCondition(&workspaceStorage.Status.Conditions, metav1.Condition{
 		Type:               string(v1alpha1.WorkspaceStorageAvailable),
 		Status:             metav1.ConditionTrue,
 		Reason:             "AllComponentsUP",
 		ObservedGeneration: workspaceStorage.Generation,
 	})
-
-	service := &corev1.Service{}
-	if err := r.Client.Get(ctx, StorageServiceNamespacedName(workspaceStorage), service); err != nil {
-		return err
-	}
 
 	res := make([]v1alpha1.ResourceStorageStatus, 0)
 
