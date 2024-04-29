@@ -43,12 +43,17 @@ func (r *serviceReconciler) reconcile(ctx context.Context, workspaceStorage *wor
 			Labels:    WorkspaceStorageLabels(workspaceStorage),
 		},
 		Spec: corev1.ServiceSpec{
-			Type:     corev1.ServiceTypeLoadBalancer,
 			Selector: WorkspaceStorageLabels(workspaceStorage),
 			Ports: []corev1.ServicePort{
 				{
+					Name:       "rsync",
 					Port:       873,
 					TargetPort: intstr.FromInt(873),
+				},
+				{
+					Name:       "ssh",
+					Port:       22,
+					TargetPort: intstr.FromInt(22),
 				},
 			},
 		},

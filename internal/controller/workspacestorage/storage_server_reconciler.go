@@ -104,6 +104,10 @@ func (r *storageServerReconciler) ensureRsyncServerDeployment(
 									// TODO: change listening port in rsync server.
 									ContainerPort: 873,
 								},
+								{
+									// TODO: change listening port in rsync server.
+									ContainerPort: 22,
+								},
 							},
 							VolumeMounts: append(resourceStateMounts, corev1.VolumeMount{
 								Name:      rsyncConfVolumeName,
