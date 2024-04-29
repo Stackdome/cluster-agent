@@ -59,15 +59,6 @@ type WorkspaceResourceSpec struct {
 	Ports []Port `json:"ports"`
 }
 
-func (w *WorkspaceResourceSpec) HasExposedPort() bool {
-	for _, port := range w.Ports {
-		if port.ExposeToPublic {
-			return true
-		}
-	}
-	return false
-}
-
 type WorkspaceStorageRef struct {
 	WorkspaceStorageName string `json:"workspaceStorageName"`
 	ResourceName         string `json:"resourceName"`
@@ -103,6 +94,11 @@ type PrebuiltApplicationSpec struct {
 	Image string `json:"image"`
 }
 
+type ExternalAddress struct {
+	TargetPort int32  `json:"targetPort"`
+	Address    string `json:"address"`
+}
+
 // WorkspaceResourceStatus defines the observed state of WorkspaceResource
 type WorkspaceResourceStatus struct {
 	// The most recent generation observed by the controller.
@@ -120,11 +116,6 @@ type WorkspaceResourceStatus struct {
 	InternalAddress *string `json:"internalAddress,omitempty"`
 }
 
-type ExternalAddress struct {
-	TargetPort int32  `json:"targetPort"`
-	Address    string `json:"address"`
-}
-
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:shortName=wr
@@ -138,6 +129,23 @@ type WorkspaceResource struct {
 	Status WorkspaceResourceStatus `json:"status,omitempty"`
 }
 
+// +kubebuilder:object:root=true
+// WorkspaceResourceList contains a list of WorkspaceResource
+type WorkspaceResourceList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []WorkspaceResource `json:"items"`
+}
+
+func (w *WorkspaceResourceSpec) HasExposedPort() bool {
+	for _, port := range w.Ports {
+		if port.ExposeToPublic {
+			return true
+		}
+	}
+	return false
+}
+
 func (w *WorkspaceResource) SplitPortsByInternalAndExternal() ([]Port, []Port) {
 	internalPorts := make([]Port, 0)
 	externalPorts := make([]Port, 0)
@@ -149,15 +157,6 @@ func (w *WorkspaceResource) SplitPortsByInternalAndExternal() ([]Port, []Port) {
 		}
 	}
 	return internalPorts, externalPorts
-}
-
-//+kubebuilder:object:root=true
-
-// WorkspaceResourceList contains a list of WorkspaceResource
-type WorkspaceResourceList struct {
-	metav1.TypeMeta `json:",inline"`
-	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []WorkspaceResource `json:"items"`
 }
 
 func init() {

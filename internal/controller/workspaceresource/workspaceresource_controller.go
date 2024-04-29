@@ -167,11 +167,11 @@ func (r *WorkspaceResourceReconciler) getDependencies(ctx context.Context, resou
 	}); err != nil {
 		return nil, err
 	}
-	dependsOn := []string{}
+	dependsOn := resource.Spec.DependsOn
 
-	for _, dep := range resource.Spec.DependsOn {
-		dependsOn = append(dependsOn, workspaceResourceName(workspaceRef.Name, dep))
-	}
+	// for _, dep := range resource.Spec.DependsOn {
+	// 	dependsOn = append(dependsOn, resource.Name)
+	// }
 	res := make([]v1alpha1.WorkspaceResource, 0)
 	for _, wr := range wrList.Items {
 		if slices.Contains(dependsOn, wr.Name) {

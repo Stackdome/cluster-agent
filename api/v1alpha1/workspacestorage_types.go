@@ -89,6 +89,9 @@ type WorkspaceStorageStatus struct {
 	// Tracks last reported upgrade policy status.
 	// +optional
 	WorkspaceStorageInfo []ResourceStorageStatus `json:"workspaceStorageInfo,omitempty"`
+	// Name of the svc which exposes this storage pod(internally.)
+	// +optional
+	ServiceName string `json:"serviceName"`
 }
 
 type ResourceStorageStatus struct {
@@ -123,6 +126,12 @@ func (w *WorkspaceStorage) HasSyncRequiredStorageResources() bool {
 		}
 	}
 	return false
+}
+
+func (w *WorkspaceStorage) MarkAsSynced() {
+	for _, srs := range w.Spec.ResourceStorageSpecs {
+		srs.NeedsSync = false
+	}
 }
 
 func (w *WorkspaceStorage) MountPathForResource(resource *ResourceStorageSpec) string {

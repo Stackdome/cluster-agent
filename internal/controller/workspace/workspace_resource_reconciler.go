@@ -13,10 +13,6 @@ import (
 	"soradev.io/cluster-agent/internal/controller"
 )
 
-func workspaceResourceName(workspace *v1alpha1.Workspace, resourceSpec *v1alpha1.ResourceSpec) string {
-	return fmt.Sprintf("%s-%s", workspace.Name, resourceSpec.Name)
-}
-
 func (r *WorkspaceReconciler) ReconcileWorkspaceResources(ctx context.Context, workspace *v1alpha1.Workspace) (subReconcilerResult, error) {
 	desiredWorkspaceResources := make([]*v1alpha1.WorkspaceResource, 0)
 	for _, workspaceResourceSpec := range workspace.Spec.Resources {
@@ -77,12 +73,12 @@ func (r *WorkspaceReconciler) ensureWorkspaceResource(
 func constructWorkspaceResourceCR(workspace *v1alpha1.Workspace, resourceSpec *v1alpha1.ResourceSpec) *v1alpha1.WorkspaceResource {
 	return &v1alpha1.WorkspaceResource{
 		ObjectMeta: v1.ObjectMeta{
-			Name:      workspaceResourceName(workspace, resourceSpec),
+			Name:      v1alpha1.WorkspaceResourceName(resourceSpec.Name),
 			Namespace: workspace.Namespace,
 		},
 		Spec: v1alpha1.WorkspaceResourceSpec{
 			WorkspaceStorageRef: v1alpha1.WorkspaceStorageRef{
-				WorkspaceStorageName: WorkspaceStorageName(workspace),
+				WorkspaceStorageName: v1alpha1.WorkspaceStorageName(workspace.Spec.UserName),
 				ResourceName:         resourceSpec.Name,
 			},
 			ImageRegistry:           resourceSpec.Spec.ImageRegistry,

@@ -17,6 +17,8 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"fmt"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -81,4 +83,12 @@ type WorkspaceList struct {
 
 func init() {
 	SchemeBuilder.Register(&Workspace{}, &WorkspaceList{})
+}
+
+func WorkspaceStorageName(workspaceName string) string {
+	return fmt.Sprintf("%s-storage", workspaceName)
+}
+
+func WorkspaceResourceName(resourceName string) string {
+	return resourceName
 }
