@@ -46,11 +46,6 @@ func (r *serviceReconciler) reconcile(ctx context.Context, workspaceStorage *wor
 			Selector: WorkspaceStorageLabels(workspaceStorage),
 			Ports: []corev1.ServicePort{
 				{
-					Name:       "rsync",
-					Port:       873,
-					TargetPort: intstr.FromInt(873),
-				},
-				{
 					Name:       "ssh",
 					Port:       22,
 					TargetPort: intstr.FromInt(22),
@@ -77,5 +72,7 @@ func (r *serviceReconciler) reconcile(ctx context.Context, workspaceStorage *wor
 		existingSvc.Spec = desiredSvc.Spec
 		return resultNil, r.Client.Update(ctx, existingSvc)
 	}
+
+	reportWorkspaceStorageAvailable(workspaceStorage, existingSvc)
 	return resultNil, nil
 }

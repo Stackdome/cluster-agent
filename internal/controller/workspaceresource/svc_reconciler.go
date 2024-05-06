@@ -129,11 +129,6 @@ func (r *svcReconciler) reconcileHttpProxyForService(ctx context.Context, resour
 		ObjectMeta: v1.ObjectMeta{
 			Name:      httpProxyNameForResource(resource.Name),
 			Namespace: resource.Namespace,
-			Annotations: map[string]string{
-				"projectcontour.io/tls-insecure-policy": "Allow",
-				"kubernetes.io/ingress.class":           "contour",
-				"projectcontour.io/ingress.class":       "contour",
-			},
 		},
 		Spec: networkingv1.IngressSpec{
 			Rules: rules,

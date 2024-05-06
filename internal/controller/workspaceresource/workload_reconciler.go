@@ -3,6 +3,7 @@ package workspaceresource
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -19,21 +20,14 @@ import (
 	"soradev.io/cluster-agent/internal/controller"
 )
 
-type resourceAndResourceStorageMap map[string]*resourceAndResourceStorage
-
 type workloadReconciler struct {
 	client.Client
 	Scheme                      *runtime.Scheme
 	workspaceResourceReconciler *WorkspaceResourceReconciler
 }
 
-type resourceAndResourceStorage struct {
-	resource            *v1alpha1.WorkspaceResource
-	resourceStorageInfo *v1alpha1.ResourceStorageStatus
-}
-
 func GetDeploymentNameForResource(resource *v1alpha1.WorkspaceResource) string {
-	return fmt.Sprintf("%s", resource.Name)
+	return resource.Name
 }
 
 func GetDeploymentPodLabelForResource(resource *v1alpha1.WorkspaceResource) map[string]string {
@@ -46,7 +40,7 @@ func (r *workloadReconciler) getApplicationBuild(ctx context.Context, resource *
 	existingApplicationBuild := &v1alpha1.WorkspaceApplicationBuild{}
 	if err := r.Client.Get(ctx,
 		types.NamespacedName{
-			Name:      ExpectedApplicationBuildName(resource),
+			Name:      ApplicationBuildName(resource),
 			Namespace: resource.Namespace,
 		},
 		existingApplicationBuild,
@@ -57,7 +51,7 @@ func (r *workloadReconciler) getApplicationBuild(ctx context.Context, resource *
 }
 
 func (r *workloadReconciler) Image(ctx context.Context, resource *v1alpha1.WorkspaceResource) (*string, error) {
-	if resource.Spec.ApplicationSourceSpec != nil {
+	if resource.Spec.ApplicationBuildSpec != nil {
 		requiredBuild, err := r.getApplicationBuild(ctx, resource)
 		if err != nil {
 			return nil, err
@@ -69,22 +63,23 @@ func (r *workloadReconciler) Image(ctx context.Context, resource *v1alpha1.Works
 
 func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.WorkspaceResource) (subReconcilerResult, error) {
 	logger := controller.LoggerFromContext(ctx)
-	logger.Info("in workload reconciler")
+	logger.Info("in workload reconciler for")
+	logger.Info(resource.Name)
 	dependencies, err := r.workspaceResourceReconciler.getDependencies(ctx, resource)
 	if err != nil {
 		return resultNil, err
 	}
-
-	storageInfoForCurrentResource, err := r.getStorageInfoForResource(ctx, resource)
+	logger.Info(fmt.Sprintf("dependencies from workload reconciler: %+v", dependencies))
+	volumeInfo, err := r.getVolumeInfo(ctx, resource)
 	if err != nil {
-
 		return resultNil, err
 	}
 	dependencyMapIndex, err := r.makeDependencyMap(ctx, dependencies)
 	if err != nil {
-
 		return resultNil, err
 	}
+
+	logger.Info(fmt.Sprintf("dependenciesmap from workload reconciler: %+v", dependencyMapIndex))
 
 	image, err := r.Image(ctx, resource)
 	if err != nil {
@@ -105,7 +100,7 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.W
 					Labels: GetDeploymentPodLabelForResource(resource),
 				},
 				Spec: corev1.PodSpec{
-					Volumes: InterpolatedVolumesList(resource, dependencyMapIndex, storageInfoForCurrentResource),
+					Volumes: InterpolatedVolumesList(resource, volumeInfo),
 					Containers: []corev1.Container{
 						{
 							ImagePullPolicy: corev1.PullIfNotPresent,
@@ -114,8 +109,8 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.W
 							Command:         resource.Spec.Command,
 							Args:            resource.Spec.Args,
 							Ports:           InterpolatedContainerPorts(resource),
-							Env:             InterpolatedEnvVars(resource, dependencyMapIndex, storageInfoForCurrentResource),
-							VolumeMounts:    InterpolatedVolumeMountList(resource, dependencyMapIndex, storageInfoForCurrentResource),
+							Env:             InterpolatedEnvVars(resource, dependencyMapIndex),
+							VolumeMounts:    InterpolatedVolumeMountList(resource),
 						},
 					},
 				},
@@ -144,7 +139,7 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.W
 		existingDeployment.Spec = desiredDeploymentForResource.Spec
 		return resultRequeue, r.Client.Update(ctx, existingDeployment)
 	}
-	if controller.CheckDeploymentAvailable(existingDeployment) {
+	if controller.DeploymentAvailable(existingDeployment) {
 		return resultNil, nil
 	}
 	logger.Info("deployment not ready")
@@ -152,13 +147,13 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.W
 	return resultStop, nil
 }
 
-func InterpolatedEnvVars(resource *v1alpha1.WorkspaceResource, infoMap resourceAndResourceStorageMap, storageInfoForCurrentResource *v1alpha1.ResourceStorageStatus) []corev1.EnvVar {
+func InterpolatedEnvVars(resource *v1alpha1.WorkspaceResource, infoMap map[string]*v1alpha1.WorkspaceResource) []corev1.EnvVar {
 	res := make([]corev1.EnvVar, 0)
 	for _, envVar := range resource.Spec.EnvironmentVariables {
 		if strings.HasPrefix(envVar.Value, "$") {
 			referencedResouceName, _ := splitEnvVarValue(envVar.Value)
 			// TODO: Assert attribute is Address
-			address := infoMap[referencedResouceName].resource.Status.InternalAddress
+			address := infoMap[referencedResouceName].Status.InternalAddress
 			res = append(res, corev1.EnvVar{
 				Name:  envVar.Name,
 				Value: *address,
@@ -190,35 +185,20 @@ func splitEnvVarValue(value string) (string, string) {
 	return part1, parts[1]
 }
 
-func splitStringForVolumeMount(source string) (string, string) {
-	parts := strings.SplitN(source, "/", 2)
-	part1 := strings.TrimPrefix(parts[0], "$")
-	if len(parts) == 1 {
-		return part1, ""
-	}
-	return part1, parts[1]
-}
-
-func InterpolatedVolumeMountList(resource *v1alpha1.WorkspaceResource, infoMap resourceAndResourceStorageMap, storageInfoForCurrentResource *v1alpha1.ResourceStorageStatus) []corev1.VolumeMount {
+func InterpolatedVolumeMountList(resource *v1alpha1.WorkspaceResource) []corev1.VolumeMount {
 	res := make([]corev1.VolumeMount, 0)
-	for _, mount := range resource.Spec.Mounts {
-		sourceResource, subPath := splitStringForVolumeMount(mount.Source)
-		var volumeName string
-		if strings.ToLower(sourceResource) == "self" {
-			volumeName = storageInfoForCurrentResource.Name
-		} else {
-			// TODO: Possible nil ptr deref.
-			item := infoMap[sourceResource]
-			volumeName = item.resourceStorageInfo.Name
-		}
+	for _, mount := range resource.Spec.VolumeMounts {
+		sourceParts := filepath.SplitList(mount.Source)
+		sourceVolumeName := sourceParts[0]
+		subPath := filepath.Join(sourceParts[1:]...)
 		if len(subPath) == 0 {
 			res = append(res, corev1.VolumeMount{
-				Name:      volumeName,
+				Name:      sourceVolumeName,
 				MountPath: mount.Destination,
 			})
 		} else {
 			res = append(res, corev1.VolumeMount{
-				Name:      volumeName,
+				Name:      sourceVolumeName,
 				MountPath: mount.Destination,
 				SubPath:   strings.TrimPrefix(subPath, "/"),
 			})
@@ -227,26 +207,15 @@ func InterpolatedVolumeMountList(resource *v1alpha1.WorkspaceResource, infoMap r
 	return res
 }
 
-func InterpolatedVolumesList(resource *v1alpha1.WorkspaceResource, infoMap resourceAndResourceStorageMap, storageInfoForCurrentResource *v1alpha1.ResourceStorageStatus) []corev1.Volume {
+func InterpolatedVolumesList(resource *v1alpha1.WorkspaceResource, volumeInfo map[string]*v1alpha1.WorkspaceVolume) []corev1.Volume {
 	res := make([]corev1.Volume, 0)
-	for _, mount := range resource.Spec.Mounts {
-		sourceResource, _ := splitStringForVolumeMount(mount.Source)
-		var sourceResourcePVCName string
-		var volumeName string
-		if strings.ToLower(sourceResource) == "self" {
-			sourceResourcePVCName = storageInfoForCurrentResource.PvcName
-			volumeName = storageInfoForCurrentResource.Name
-		} else {
-			// TODO: Possible nil ptr deref.
-			item := infoMap[sourceResource]
-			sourceResourcePVCName = item.resourceStorageInfo.PvcName
-			volumeName = item.resourceStorageInfo.Name
-		}
+	for _, mount := range resource.Spec.VolumeMounts {
+		sourceVolumeName := filepath.SplitList(mount.Source)[0]
 		res = append(res, corev1.Volume{
-			Name: volumeName,
+			Name: sourceVolumeName,
 			VolumeSource: corev1.VolumeSource{
 				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-					ClaimName: sourceResourcePVCName,
+					ClaimName: volumeInfo[sourceVolumeName].Status.PvcName,
 				},
 			},
 		})
@@ -254,41 +223,27 @@ func InterpolatedVolumesList(resource *v1alpha1.WorkspaceResource, infoMap resou
 	return res
 }
 
-func (r *workloadReconciler) getStorageInfoForResource(ctx context.Context, resource *v1alpha1.WorkspaceResource) (*v1alpha1.ResourceStorageStatus, error) {
-	// TODO: We can pass workspaceStorage to this method as the workspaceStorage remains the same for all the resources in a workplace.
-	workspaceStorage := &v1alpha1.WorkspaceStorage{}
-	if err := r.Client.Get(
-		ctx,
-		types.NamespacedName{
-			Name:      resource.Spec.WorkspaceStorageRef.WorkspaceStorageName,
-			Namespace: resource.Namespace,
-		},
-		workspaceStorage,
-	); err != nil {
-		return nil, err
+func (r *workloadReconciler) getVolumeInfo(ctx context.Context, resource *v1alpha1.WorkspaceResource) (map[string]*v1alpha1.WorkspaceVolume, error) {
+	res := make(map[string]*v1alpha1.WorkspaceVolume)
+	for _, mount := range resource.Spec.VolumeMounts {
+		sourceVolumeName := filepath.SplitList(mount.Source)[0]
+		referencedVolume := &v1alpha1.WorkspaceVolume{}
+		if err := r.Client.Get(ctx, types.NamespacedName{Name: sourceVolumeName, Namespace: resource.Namespace}, referencedVolume); err != nil {
+			return nil, fmt.Errorf("failed to get the referenced volume '%s' in resource '%s': %w", sourceVolumeName, resource.Name, err)
+		}
+		res[sourceVolumeName] = referencedVolume
 	}
-	info := workspaceStorage.ResourceStorageInfo(resource.Spec.WorkspaceStorageRef.ResourceName)
-	if info != nil && info.Status == v1alpha1.StorageResourceReadyForUse {
-		return info, nil
-	}
-	return nil, fmt.Errorf("storage for resource not ready")
+	return res, nil
 }
 
-func (r *workloadReconciler) makeDependencyMap(ctx context.Context, deps []v1alpha1.WorkspaceResource) (resourceAndResourceStorageMap, error) {
-	res := make(map[string]*resourceAndResourceStorage, len(deps))
+func (r *workloadReconciler) makeDependencyMap(ctx context.Context, deps []v1alpha1.WorkspaceResource) (map[string]*v1alpha1.WorkspaceResource, error) {
+	res := make(map[string]*v1alpha1.WorkspaceResource, len(deps))
 	for _, resource := range deps {
 		depResource := &v1alpha1.WorkspaceResource{}
 		if err := r.Client.Get(ctx, controller.GetNamespacedName(&resource), depResource); err != nil {
 			return nil, err
 		}
-		storageInfo, err := r.getStorageInfoForResource(ctx, depResource)
-		if err != nil {
-			return nil, err
-		}
-		res[depResource.Spec.WorkspaceStorageRef.ResourceName] = &resourceAndResourceStorage{
-			resource:            depResource,
-			resourceStorageInfo: storageInfo,
-		}
+		res[depResource.Name] = depResource
 	}
 	return res, nil
 }

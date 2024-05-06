@@ -1,24 +1,7 @@
-/*
-Copyright 2024.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package applicationbuild
 
 import (
 	"context"
-	"fmt"
 
 	batchv1 "k8s.io/api/batch/v1"
 	v1 "k8s.io/api/core/v1"
@@ -33,7 +16,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"soradev.io/cluster-agent/api/v1alpha1"
-	workspacev1alpha1 "soradev.io/cluster-agent/api/v1alpha1"
 	"soradev.io/cluster-agent/internal/controller"
 	"soradev.io/cluster-agent/pkg/imagebuilder"
 )
@@ -77,18 +59,16 @@ func reportWorkspaceApplicationBuildComplete(buildConfig *v1alpha1.WorkspaceAppl
 func (r *WorkspaceApplicationBuildReconciler) reconcile(ctx context.Context, buildConfig *v1alpha1.WorkspaceApplicationBuild) (ctrl.Result, error) {
 	logger := controller.LoggerFromContext(ctx)
 	logger.Info("reconciling application build")
-	workspaceStorageRef := &v1alpha1.WorkspaceStorage{}
+	volumeRef := &v1alpha1.WorkspaceVolume{}
 
 	if err := r.Client.Get(ctx, types.NamespacedName{
-		Name:      buildConfig.Spec.ContextRef.WorkspaceStorageName,
+		Name:      buildConfig.Spec.ContextRef.VolumeName,
 		Namespace: buildConfig.Namespace,
-	}, workspaceStorageRef); err != nil {
-		reportWorkspaceApplicationBuildStatus(
-			buildConfig, v1alpha1.WorkspaceApplicationBuildAvailable, metav1.ConditionFalse, "WorkspaceStorageFetchError")
+	}, volumeRef); err != nil {
 		return ctrl.Result{}, err
 	}
 
-	if !workspaceStorageAvailable(workspaceStorageRef) {
+	if !volumeAvailable(volumeRef) {
 		reportWorkspaceApplicationBuildStatus(
 			buildConfig,
 			v1alpha1.WorkspaceApplicationBuildAvailable,
@@ -98,31 +78,25 @@ func (r *WorkspaceApplicationBuildReconciler) reconcile(ctx context.Context, bui
 		return ctrl.Result{Requeue: true}, nil
 	}
 
-	if !workspaceStorageReadyForUse(workspaceStorageRef) {
+	if !volumeReadyForBuild(volumeRef) {
 		reportWorkspaceApplicationBuildStatus(
 			buildConfig,
 			v1alpha1.WorkspaceApplicationBuildAvailable,
 			metav1.ConditionFalse,
-			"WorkspaceStorageNotReadyForUse",
+			"VolumeNotReadyForBuild",
 		)
 		return ctrl.Result{Requeue: true}, nil
-	}
-
-	resourceStorageReferenced := workspaceStorageRef.ResourceStorageSpec(buildConfig.Spec.ContextRef.ResourceName)
-
-	if resourceStorageReferenced == nil {
-		return ctrl.Result{}, fmt.Errorf("resource referenced in the build not in the workspace storage")
 	}
 
 	jobConfig := imagebuilder.BuildParams{
 		JobName:        buildConfig.Name,
 		Namespace:      buildConfig.Namespace,
-		PVCName:        workspaceStorageRef.GeneratePVCName(resourceStorageReferenced),
+		PVCName:        volumeRef.Status.PvcName,
 		DockerfilePath: buildConfig.Spec.ContextRef.DockerfilePath,
 		Registry:       buildConfig.Spec.Registry,
-		// TODO: improve this, using workspaceStateRef.Name here
-		ImageName: workspaceStorageRef.Name,
-		Tag:       buildConfig.Spec.SourceHash,
+		ImageName:      buildConfig.Spec.ResourceName,
+		Tag:            buildConfig.Spec.SourceHash,
+		VolumeMounts:   buildConfig.Spec.VolumeMounts,
 	}
 	desiredImageBuilderJob, err := imagebuilder.GenerateImageBuildJob(jobConfig)
 	if err != nil {
@@ -170,16 +144,16 @@ func findJobCompleteCondition(job *batchv1.Job) *batchv1.JobCondition {
 	return nil
 }
 
-func workspaceStorageAvailable(workspaceStorage *v1alpha1.WorkspaceStorage) bool {
-	cond := meta.FindStatusCondition(workspaceStorage.Status.Conditions, string(v1alpha1.WorkspaceStorageAvailable))
+func volumeAvailable(volume *v1alpha1.WorkspaceVolume) bool {
+	cond := meta.FindStatusCondition(volume.Status.Conditions, string(v1alpha1.WorkspaceVolumeConditionAvailable))
 	if cond == nil || cond.Status == metav1.ConditionFalse {
 		return false
 	}
 	return true
 }
 
-func workspaceStorageReadyForUse(workspaceStorage *v1alpha1.WorkspaceStorage) bool {
-	cond := meta.FindStatusCondition(workspaceStorage.Status.Conditions, string(v1alpha1.WorkspaceStorageReadyForUse))
+func volumeReadyForBuild(volume *v1alpha1.WorkspaceVolume) bool {
+	cond := meta.FindStatusCondition(volume.Status.Conditions, string(v1alpha1.WorkspaceVolumeConditionSyncedOnce))
 	if cond == nil || cond.Status == metav1.ConditionFalse {
 		return false
 	}
@@ -205,7 +179,7 @@ func reportWorkspaceApplicationBuildStatus(
 // SetupWithManager sets up the controller with the Manager.
 func (r *WorkspaceApplicationBuildReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&workspacev1alpha1.WorkspaceApplicationBuild{}).
-		Watches(&batchv1.Job{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &workspacev1alpha1.WorkspaceApplicationBuild{})).
+		For(&v1alpha1.WorkspaceApplicationBuild{}).
+		Watches(&batchv1.Job{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &v1alpha1.WorkspaceApplicationBuild{})).
 		Complete(r)
 }

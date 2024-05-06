@@ -145,7 +145,6 @@ func NewWorkspaceReconciler(client client.Client, scheme *runtime.Scheme, worksp
 		workspaceResourceQueue: workspaceResourceQueue,
 	}
 	r.subReconcilers = []subReconciler{
-		r.ReconcileWorkspaceStorage,
 		r.ReconcileWorkspaceResources,
 	}
 	return r

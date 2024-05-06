@@ -6,6 +6,7 @@ resources:
 - bases/workspace.soradev.io_workspacestorages.yaml
 - bases/workspace.soradev.io_workspaces.yaml
 - bases/workspace.soradev.io_workspaceapplicationbuilds.yaml
+- bases/workspace.soradev.io_workspacevolumes.yaml
 #+kubebuilder:scaffold:crdkustomizeresource
 
 patches:
@@ -15,6 +16,7 @@ patches:
 #- path: patches/webhook_in_workspaceresources.yaml
 #- path: patches/webhook_in_workspaceapplicationbuilds.yaml
 #- path: patches/webhook_in_workspaces.yaml
+#- path: patches/webhook_in_workspacevolumes.yaml
 #+kubebuilder:scaffold:crdkustomizewebhookpatch
 
 # [CERTMANAGER] To enable cert-manager, uncomment all the sections with [CERTMANAGER] prefix.
@@ -23,6 +25,7 @@ patches:
 #- path: patches/cainjection_in_workspaceresources.yaml
 #- path: patches/cainjection_in_workspaceapplicationbuilds.yaml
 #- path: patches/cainjection_in_workspaces.yaml
+#- path: patches/cainjection_in_workspacevolumes.yaml
 #+kubebuilder:scaffold:crdkustomizecainjectionpatch
 
 # [WEBHOOK] To enable webhook, uncomment the following section

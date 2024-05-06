@@ -32,7 +32,7 @@ func LoggerFromContext(ctx context.Context) logr.Logger {
 	return logr.Discard()
 }
 
-func CheckDeploymentAvailable(deployment *appsv1.Deployment) bool {
+func DeploymentAvailable(deployment *appsv1.Deployment) bool {
 	for _, condition := range deployment.Status.Conditions {
 		if condition.Type == appsv1.DeploymentAvailable &&
 			condition.Status == corev1.ConditionTrue {

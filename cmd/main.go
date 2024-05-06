@@ -35,11 +35,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	projectcontourv1 "github.com/projectcontour/contour/apis/projectcontour/v1"
+
 	workspacev1alpha1 "soradev.io/cluster-agent/api/v1alpha1"
 	"soradev.io/cluster-agent/internal/controller/applicationbuild"
 	"soradev.io/cluster-agent/internal/controller/workspace"
 	"soradev.io/cluster-agent/internal/controller/workspaceresource"
 	"soradev.io/cluster-agent/internal/controller/workspacestorage"
+	"soradev.io/cluster-agent/internal/controller/workspacevolume"
 	//+kubebuilder:scaffold:imports
 )
 
@@ -151,6 +153,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err = (&workspacevolume.WorkspaceVolumeReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "WorkspaceVolume")
+		os.Exit(1)
+	}
 	//+kubebuilder:scaffold:builder
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {

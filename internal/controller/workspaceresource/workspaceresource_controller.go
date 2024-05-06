@@ -140,8 +140,8 @@ func reportWorkspaceResourceNotReady(resource *v1alpha1.WorkspaceResource, reaso
 func (r *WorkspaceResourceReconciler) reportWorkspaceResourceReady(resource *v1alpha1.WorkspaceResource) {
 	//TODO: Set source hash
 	resource.Status.ObservedGeneration = resource.Generation
-	if resource.Spec.ApplicationSourceSpec != nil {
-		resource.Status.ImageSourceHash = resource.Spec.ApplicationSourceSpec.BuildSourceHash
+	if resource.Spec.ApplicationBuildSpec != nil {
+		resource.Status.ImageSourceHash = resource.Spec.ApplicationBuildSpec.BuildSourceHash
 	}
 	resource.Status.Phase = v1alpha1.WorkspaceResourcePhaseReady
 	meta.SetStatusCondition(&resource.Status.Conditions, metav1.Condition{
@@ -154,6 +154,7 @@ func (r *WorkspaceResourceReconciler) reportWorkspaceResourceReady(resource *v1a
 }
 
 func (r *WorkspaceResourceReconciler) getDependencies(ctx context.Context, resource *v1alpha1.WorkspaceResource) ([]v1alpha1.WorkspaceResource, error) {
+	logger := controller.LoggerFromContext(ctx)
 	if len(resource.Spec.DependsOn) == 0 {
 		return nil, nil
 	}
@@ -167,6 +168,8 @@ func (r *WorkspaceResourceReconciler) getDependencies(ctx context.Context, resou
 	}); err != nil {
 		return nil, err
 	}
+
+	logger.Info(fmt.Sprintf("children of workspace: %+v", wrList.Items))
 	dependsOn := resource.Spec.DependsOn
 
 	// for _, dep := range resource.Spec.DependsOn {
@@ -177,6 +180,9 @@ func (r *WorkspaceResourceReconciler) getDependencies(ctx context.Context, resou
 		if slices.Contains(dependsOn, wr.Name) {
 			res = append(res, wr)
 		}
+	}
+	if len(res) != len(resource.Spec.DependsOn) {
+		return nil, fmt.Errorf("missing workspace resource deps")
 	}
 	return res, nil
 }

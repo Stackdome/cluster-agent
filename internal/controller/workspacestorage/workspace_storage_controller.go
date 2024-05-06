@@ -37,6 +37,7 @@ import (
 
 const (
 	DefaultRequeueTime = time.Second * 5
+	ownerKey           = ".metadata.controller"
 )
 
 type subReconciler interface {
@@ -99,62 +100,12 @@ func (r *WorkspaceStorageReconciler) reconcile(ctx context.Context, workspaceSto
 		}
 	}
 
-	// TODO: Hackkyyyy
-	// ONLY for DEMO
-	NodeIP, err := controller.GetNodeIP(ctx, r.Client)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-
-	if err := r.reportWorkspaceStorageAvailable(ctx, workspaceStorage, NodeIP); err != nil {
-		return ctrl.Result{}, err
-	}
-
-	if workspaceStorage.HasSyncRequiredStorageResources() {
-		reportWorkspaceStorageNotReadyForUse(workspaceStorage, "StorageResourceNeedsSync", "Storage for some resources needs to be synced.")
-	} else {
-		reportWorkspaceStorageReadyForUse(workspaceStorage, "StorageResourcesReadyForUse", "All storage resources ready for use.")
-	}
-
 	return ctrl.Result{}, r.Client.Status().Update(ctx, workspaceStorage)
-}
-
-func (r *WorkspaceStorageReconciler) reportWorkspaceStorageAvailable(ctx context.Context, workspaceStorage *v1alpha1.WorkspaceStorage, nodeIP string) error {
-	service := &corev1.Service{}
-	if err := r.Client.Get(ctx, StorageServiceNamespacedName(workspaceStorage), service); err != nil {
-		return err
-	}
-	workspaceStorage.Status.Phase = v1alpha1.WSReady
-	workspaceStorage.Status.ServiceName = service.Name
-	meta.SetStatusCondition(&workspaceStorage.Status.Conditions, metav1.Condition{
-		Type:               string(v1alpha1.WorkspaceStorageAvailable),
-		Status:             metav1.ConditionTrue,
-		Reason:             "AllComponentsUP",
-		ObservedGeneration: workspaceStorage.Generation,
-	})
-
-	res := make([]v1alpha1.ResourceStorageStatus, 0)
-
-	for _, resource := range workspaceStorage.Spec.ResourceStorageSpecs {
-		currentResourceStatus := v1alpha1.ResourceStorageStatus{
-			Name:    resource.Name,
-			Status:  v1alpha1.StorageResourceReadyForUse,
-			PvcName: workspaceStorage.GeneratePVCName(&resource),
-			Subpath: workspaceStorage.MountPathForResource(&resource),
-		}
-		if len(service.Status.LoadBalancer.Ingress) > 0 {
-			addressIdentifier := fmt.Sprintf("%s:%d/%s/", service.Status.LoadBalancer.Ingress[0].IP, service.Spec.Ports[0].Port, resource.Name)
-			currentResourceStatus.AddressIdentifier = addressIdentifier
-		}
-		res = append(res, currentResourceStatus)
-	}
-	workspaceStorage.Status.WorkspaceStorageInfo = res
-	return nil
 }
 
 func NewWorkspaceStorageReconciler(client client.Client, scheme *runtime.Scheme) *WorkspaceStorageReconciler {
 	subReconcilers := []subReconciler{
-		&pvcReconciler{
+		&workspaceVolumeReconciler{
 			Client: client,
 			Scheme: scheme,
 		},
@@ -174,40 +125,56 @@ func NewWorkspaceStorageReconciler(client client.Client, scheme *runtime.Scheme)
 	}
 }
 
-func reportWorkspaceStorageNotReadyForUse(workspaceStorage *v1alpha1.WorkspaceStorage, reason string, msg string) {
-	workspaceStorage.Status.ObservedGeneration = workspaceStorage.Generation
+func reportWorkspaceStorageUnAvailable(workspaceStorage *v1alpha1.WorkspaceStorage, reason string, msg string, msgArgs ...any) {
+	workspaceStorage.Status.Phase = v1alpha1.WSPending
 	meta.SetStatusCondition(&workspaceStorage.Status.Conditions, metav1.Condition{
-		Type:               string(v1alpha1.StorageResourceReadyForUse),
+		Type:               string(v1alpha1.WorkspaceStorageAvailable),
 		Status:             metav1.ConditionFalse,
 		Reason:             reason,
-		Message:            msg,
+		Message:            fmt.Sprintf(msg, msgArgs...),
 		ObservedGeneration: workspaceStorage.Generation,
 	})
 }
 
-func reportWorkspaceStorageReadyForUse(workspaceStorage *v1alpha1.WorkspaceStorage, reason string, msg string) {
-	workspaceStorage.Status.ObservedGeneration = workspaceStorage.Generation
+func reportWorkspaceStorageAvailable(workspaceStorage *v1alpha1.WorkspaceStorage, storageSvc *corev1.Service) error {
+	workspaceStorage.Status.Phase = v1alpha1.WSReady
+	workspaceStorage.Status.ServiceName = storageSvc.Name
 	meta.SetStatusCondition(&workspaceStorage.Status.Conditions, metav1.Condition{
-		Type:               string(v1alpha1.StorageResourceReadyForUse),
+		Type:               string(v1alpha1.WorkspaceStorageAvailable),
 		Status:             metav1.ConditionTrue,
-		Reason:             reason,
-		Message:            msg,
+		Reason:             "AllComponentsUp",
 		ObservedGeneration: workspaceStorage.Generation,
 	})
 
-	for i := range workspaceStorage.Status.WorkspaceStorageInfo {
-		resourceStatus := &workspaceStorage.Status.WorkspaceStorageInfo[i]
-		resourceStatus.Status = v1alpha1.StorageResourceReadyForUse
+	res := make([]v1alpha1.VolumeStatus, 0)
+
+	for _, resource := range workspaceStorage.Spec.ResourceStorageSpecs {
+		currentVolumeStatus := v1alpha1.VolumeStatus{
+			VolumeName: resource.VolumeName,
+			VolumeType: resource.Type,
+			Subpath:    workspaceStorage.MountPathForVolume(resource.VolumeName),
+		}
+		res = append(res, currentVolumeStatus)
 	}
+	workspaceStorage.Status.WorkspaceVolumeStatus = res
+	return nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *WorkspaceStorageReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &v1alpha1.WorkspaceVolume{}, ownerKey, func(rawObj client.Object) []string {
+		wsVolume := rawObj.(*v1alpha1.WorkspaceVolume)
+		owner := metav1.GetControllerOf(wsVolume)
+		return []string{owner.Name}
+	}); err != nil {
+		return err
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.WorkspaceStorage{}).
 		// We set controller ref if we want to work with .Owns()
 		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &v1alpha1.WorkspaceStorage{})).
 		Watches(&corev1.Service{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &v1alpha1.WorkspaceStorage{})).
 		Watches(&appsv1.Deployment{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &v1alpha1.WorkspaceStorage{})).
+		Watches(&v1alpha1.WorkspaceVolume{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &v1alpha1.WorkspaceStorage{})).
 		Complete(r)
 }

@@ -77,15 +77,11 @@ func constructWorkspaceResourceCR(workspace *v1alpha1.Workspace, resourceSpec *v
 			Namespace: workspace.Namespace,
 		},
 		Spec: v1alpha1.WorkspaceResourceSpec{
-			WorkspaceStorageRef: v1alpha1.WorkspaceStorageRef{
-				WorkspaceStorageName: v1alpha1.WorkspaceStorageName(workspace.Spec.UserName),
-				ResourceName:         resourceSpec.Name,
-			},
 			ImageRegistry:           resourceSpec.Spec.ImageRegistry,
-			ApplicationSourceSpec:   resourceSpec.Spec.ApplicationSourceSpec,
+			ApplicationBuildSpec:    resourceSpec.Spec.ApplicationBuildSpec,
 			PrebuiltApplicationSpec: resourceSpec.Spec.PrebuiltApplicationSpec,
 			EnvironmentVariables:    resourceSpec.Spec.EnvironmentVariables,
-			Mounts:                  resourceSpec.Spec.Mounts,
+			VolumeMounts:            resourceSpec.Spec.VolumeMounts,
 			Ports:                   resourceSpec.Spec.Ports,
 			Command:                 resourceSpec.Spec.Command,
 			Args:                    resourceSpec.Spec.Args,

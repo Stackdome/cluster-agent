@@ -7,6 +7,7 @@ import (
 
 	batchv1 "k8s.io/api/batch/v1"
 	"k8s.io/apimachinery/pkg/util/yaml"
+	"soradev.io/cluster-agent/api/v1alpha1"
 )
 
 const jobTemplate = `
@@ -30,14 +31,20 @@ spec:
         - "--insecure-pull=true"
         - "--skip-push-permission-check=true"
         volumeMounts:
-        - name: workspace
-          mountPath: /workspace
-          subPath: {{ .Context }}
+        {{- range .VolumeMounts }}
+        - name: {{ .PvcName }}
+          mountPath: {{ .ContainerMountPath }}
+          {{- if .SubPath }}
+          subPath: {{ .SubPath }}
+          {{- end }}
+        {{- end }}
       restartPolicy: Never
       volumes:
-      - name: workspace
+      {{- range .VolumeMounts }}
+      - name: {{ .PvcName }}
         persistentVolumeClaim:
-          claimName: {{ .PVCName }}
+          claimName: {{ .PvcName }}
+      {{- end }}
 `
 
 type BuildParams struct {
@@ -50,6 +57,7 @@ type BuildParams struct {
 	ImageName      string
 	Tag            string
 	Insecure       bool
+	VolumeMounts   []v1alpha1.VolumeMountForInitialization
 }
 
 func (b *BuildParams) generateImageBuildJobYAML() (string, error) {
@@ -58,6 +66,12 @@ func (b *BuildParams) generateImageBuildJobYAML() (string, error) {
 		return "", err
 	}
 
+	// Add default docker context for docker build.
+	b.VolumeMounts = append(b.VolumeMounts, v1alpha1.VolumeMountForInitialization{
+		ContainerMountPath: "/workspace",
+		PvcName:            b.PVCName,
+		SubPath:            b.Context,
+	})
 	var buf bytes.Buffer
 	err = tmpl.Execute(&buf, b)
 	if err != nil {
