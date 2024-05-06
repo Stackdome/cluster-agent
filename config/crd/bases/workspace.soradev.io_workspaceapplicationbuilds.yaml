@@ -53,23 +53,38 @@ spec:
                     type: string
                   dockerfilePath:
                     type: string
-                  resourceName:
-                    type: string
-                  workspaceStorageName:
+                  volumeName:
                     type: string
                 required:
                 - context
                 - dockerfilePath
-                - resourceName
-                - workspaceStorageName
+                - volumeName
                 type: object
               registry:
                 type: string
+              resourceName:
+                type: string
               sourceHash:
                 type: string
+              volumeMounts:
+                items:
+                  properties:
+                    containerMountPath:
+                      type: string
+                    pvcName:
+                      type: string
+                    subPath:
+                      type: string
+                  required:
+                  - containerMountPath
+                  - pvcName
+                  - subPath
+                  type: object
+                type: array
             required:
             - contextRef
             - registry
+            - resourceName
             - sourceHash
             type: object
           status:

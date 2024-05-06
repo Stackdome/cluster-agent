@@ -36,16 +36,24 @@ const (
 
 // WorkspaceApplicationBuildSpec defines the desired state of WorkspaceApplicationBuild
 type WorkspaceApplicationBuildSpec struct {
-	SourceHash string     `json:"sourceHash"`
-	ContextRef ContextRef `json:"contextRef"`
-	Registry   string     `json:"registry"`
+	ResourceName string     `json:"resourceName"`
+	SourceHash   string     `json:"sourceHash"`
+	ContextRef   ContextRef `json:"contextRef"`
+	Registry     string     `json:"registry"`
+	// +optional
+	VolumeMounts []VolumeMountForInitialization `json:"volumeMounts"`
+}
+
+type VolumeMountForInitialization struct {
+	ContainerMountPath string `json:"containerMountPath"`
+	PvcName            string `json:"pvcName"`
+	SubPath            string `json:"subPath"`
 }
 
 type ContextRef struct {
-	WorkspaceStorageName string `json:"workspaceStorageName"`
-	DockerfilePath       string `json:"dockerfilePath"`
-	ResourceName         string `json:"resourceName"`
-	Context              string `json:"context"`
+	DockerfilePath string `json:"dockerfilePath"`
+	VolumeName     string `json:"volumeName"`
+	Context        string `json:"context"`
 }
 
 // WorkspaceApplicationBuildStatus defines the observed state of WorkspaceApplicationBuild

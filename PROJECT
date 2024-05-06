@@ -44,4 +44,13 @@ resources:
   kind: Workspace
   path: soradev.io/cluster-agent/api/v1alpha1
   version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: soradev.io
+  group: workspace
+  kind: WorkspaceVolume
+  path: soradev.io/cluster-agent/api/v1alpha1
+  version: v1alpha1
 version: "3"

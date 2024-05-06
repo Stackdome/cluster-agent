@@ -37,19 +37,17 @@ const (
 // WorkspaceResourceSpec defines the desired state of WorkspaceResource
 type WorkspaceResourceSpec struct {
 	// +optional
-	WorkspaceStorageRef WorkspaceStorageRef `json:"workspaceStorageRef"`
-	// +optional
 	ImageRegistry *string `json:"imageRegistry"`
 	// Only one of the following fields should be specified
 	// +union
-	ApplicationSourceSpec   *ApplicationSourceSpec   `json:"applicationSourceSpec,omitempty"`
+	ApplicationBuildSpec    *ApplicationBuildSpec    `json:"applicationBuildSpec,omitempty"`
 	PrebuiltApplicationSpec *PrebuiltApplicationSpec `json:"prebuiltApplicationSpec,omitempty"`
 	// +optional
 	Command []string `json:"command"`
 	// +optional
 	Args []string `json:"args"`
 	// +optional
-	Mounts []ResourceMounts `json:"mounts,omitempty"`
+	VolumeMounts []VolumeMount `json:"volumeMounts,omitempty"`
 	// +optional
 	EnvironmentVariables []EnvironmentVariables `json:"environmentVariables,omitempty"`
 	// Other resources this workspace resource depends on.
@@ -61,7 +59,6 @@ type WorkspaceResourceSpec struct {
 
 type WorkspaceStorageRef struct {
 	WorkspaceStorageName string `json:"workspaceStorageName"`
-	ResourceName         string `json:"resourceName"`
 }
 
 type Port struct {
@@ -79,12 +76,13 @@ type EnvironmentVariables struct {
 	Value string `json:"value"`
 }
 
-type ResourceMounts struct {
+type VolumeMount struct {
 	Source      string `json:"source"`
 	Destination string `json:"destination"`
 }
 
-type ApplicationSourceSpec struct {
+type ApplicationBuildSpec struct {
+	VolumeName      string `json:"volumeName"`
 	Context         string `json:"context"`
 	DockerFile      string `json:"dockerFile"`
 	BuildSourceHash string `json:"buildSourceHash"`

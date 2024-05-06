@@ -44,10 +44,8 @@ type WorkspaceSpec struct {
 }
 
 type ResourceSpec struct {
-	Name         string                `json:"name"`
-	StorageSize  string                `json:"storageSize"`
-	SyncRequired bool                  `json:"syncRequired"`
-	Spec         WorkspaceResourceSpec `json:"spec"`
+	Name string                `json:"name"`
+	Spec WorkspaceResourceSpec `json:"spec"`
 }
 
 // WorkspaceStatus defines the observed state of Workspace

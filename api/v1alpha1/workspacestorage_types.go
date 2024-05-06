@@ -25,27 +25,14 @@ import (
 type WorkspaceStoragePhase string
 
 const (
-	WSReady     WorkspaceStoragePhase = "Ready"
-	WSPending   WorkspaceStoragePhase = "Pending"
-	WSFailed    WorkspaceStoragePhase = "Failed"
-	WSNeedsSync WorkspaceStoragePhase = "NeedsToBeSynced"
+	WSReady   WorkspaceStoragePhase = "Ready"
+	WSPending WorkspaceStoragePhase = "Pending"
 )
 
 type WorkspaceStorageCondition string
 
 const (
-	WorkspaceStorageAvailable   WorkspaceStorageCondition = "Available"
-	WorkspaceStorageReadyForUse WorkspaceStorageCondition = "ReadyForUse"
-)
-
-type ResourceStorageStatusCondition string
-
-const (
-	StorageResourceProvisioned      ResourceStorageStatusCondition = "Provisioned"
-	StorageResourceProvisionPending ResourceStorageStatusCondition = "ProvisionPending"
-	StorageResourceProvisionFailed  ResourceStorageStatusCondition = "ProvisionFailed"
-	StorageResourceReadyForUse      ResourceStorageStatusCondition = "ReadyForUse"
-	StorageResourceSyncRequired     ResourceStorageStatusCondition = "StorageResourceSyncRequired"
+	WorkspaceStorageAvailable WorkspaceStorageCondition = "Available"
 )
 
 type WorkspaceStorageSpec struct {
@@ -56,15 +43,14 @@ type WorkspaceStorageSpec struct {
 type ResourceStorageType string
 
 const (
-	ApplicationSourceStorage        ResourceStorageType = "ApplicationSourceType"
-	PreBuiltApplicationStateStorage ResourceStorageType = "PreBuiltApplicationStateStorage"
-	RawStorage                      ResourceStorageType = "RawStorage"
+	SyncingStorageType ResourceStorageType = "SyncingType"
+	EmptyStorageType   ResourceStorageType = "EmptyStorageType"
 )
 
 type ResourceStorageSpec struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
-	Name string `json:"name"`
+	VolumeName string `json:"volumeName"`
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	Size string              `json:"size"`
@@ -86,21 +72,17 @@ type WorkspaceStorageStatus struct {
 	// Human readable status - please use .Conditions from code
 	// +kubebuilder:default=Pending
 	Phase WorkspaceStoragePhase `json:"phase,omitempty"`
-	// Tracks last reported upgrade policy status.
 	// +optional
-	WorkspaceStorageInfo []ResourceStorageStatus `json:"workspaceStorageInfo,omitempty"`
+	WorkspaceVolumeStatus []VolumeStatus `json:"workspaceVolumeInfo,omitempty"`
 	// Name of the svc which exposes this storage pod(internally.)
 	// +optional
 	ServiceName string `json:"serviceName"`
 }
 
-type ResourceStorageStatus struct {
-	Name              string                         `json:"name"`
-	Status            ResourceStorageStatusCondition `json:"status"`
-	AddressIdentifier string                         `json:"addressIdentifier"`
-	// Name of the pvc where the state of this resource is stored.
-	PvcName string `json:"pvcName"`
-	// Path within the pvc where the state of the resource is stored.
+type VolumeStatus struct {
+	VolumeName string              `json:"volumeName"`
+	VolumeType ResourceStorageType `json:"volumeType"`
+	// Path within the storage pod where the volume is mounted.
 	Subpath string `json:"subpath"`
 }
 
@@ -129,35 +111,42 @@ func (w *WorkspaceStorage) HasSyncRequiredStorageResources() bool {
 }
 
 func (w *WorkspaceStorage) MarkAsSynced() {
-	for _, srs := range w.Spec.ResourceStorageSpecs {
-		srs.NeedsSync = false
+	for i := range w.Spec.ResourceStorageSpecs {
+		curr := &w.Spec.ResourceStorageSpecs[i]
+		curr.NeedsSync = false
 	}
 }
 
-func (w *WorkspaceStorage) MountPathForResource(resource *ResourceStorageSpec) string {
-	return fmt.Sprintf("/%s/%s", w.Name, resource.Name)
+func (w *WorkspaceStorage) ContainsVolume(volumeName string) bool {
+	for i := range w.Spec.ResourceStorageSpecs {
+		curr := &w.Spec.ResourceStorageSpecs[i]
+		if curr.VolumeName == volumeName {
+			return true
+		}
+	}
+	return false
 }
 
-func (w *WorkspaceStorage) ResourceStorageInfo(resourceName string) *ResourceStorageStatus {
-	for i := range w.Status.WorkspaceStorageInfo {
-		if w.Status.WorkspaceStorageInfo[i].Name == resourceName {
-			return &w.Status.WorkspaceStorageInfo[i]
+func (w *WorkspaceStorage) MountPathForVolume(volumeName string) string {
+	return fmt.Sprintf("/%s/%s", w.Name, volumeName)
+}
+
+func (w *WorkspaceStorage) VolumeInfo(volumeName string) *VolumeStatus {
+	for i := range w.Status.WorkspaceVolumeStatus {
+		if w.Status.WorkspaceVolumeStatus[i].VolumeName == volumeName {
+			return &w.Status.WorkspaceVolumeStatus[i]
 		}
 	}
 	return nil
 }
 
-func (w *WorkspaceStorage) ResourceStorageSpec(resourceName string) *ResourceStorageSpec {
+func (w *WorkspaceStorage) ResourceVolumeSpecFor(volumeName string) *ResourceStorageSpec {
 	for i := range w.Spec.ResourceStorageSpecs {
-		if w.Spec.ResourceStorageSpecs[i].Name == resourceName {
+		if w.Spec.ResourceStorageSpecs[i].VolumeName == volumeName {
 			return &w.Spec.ResourceStorageSpecs[i]
 		}
 	}
 	return nil
-}
-
-func (w *WorkspaceStorage) GeneratePVCName(resource *ResourceStorageSpec) string {
-	return fmt.Sprintf("%s-%s", w.Name, resource.Name)
 }
 
 //+kubebuilder:object:root=true

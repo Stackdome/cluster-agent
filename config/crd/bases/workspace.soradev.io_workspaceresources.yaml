@@ -45,7 +45,7 @@ spec:
           spec:
             description: WorkspaceResourceSpec defines the desired state of WorkspaceResource
             properties:
-              applicationSourceSpec:
+              applicationBuildSpec:
                 description: Only one of the following fields should be specified
                 properties:
                   buildSourceHash:
@@ -54,10 +54,13 @@ spec:
                     type: string
                   dockerFile:
                     type: string
+                  volumeName:
+                    type: string
                 required:
                 - buildSourceHash
                 - context
                 - dockerFile
+                - volumeName
                 type: object
               args:
                 items:
@@ -86,18 +89,6 @@ spec:
                 type: array
               imageRegistry:
                 type: string
-              mounts:
-                items:
-                  properties:
-                    destination:
-                      type: string
-                    source:
-                      type: string
-                  required:
-                  - destination
-                  - source
-                  type: object
-                type: array
               ports:
                 items:
                   properties:
@@ -121,16 +112,18 @@ spec:
                 required:
                 - image
                 type: object
-              workspaceStorageRef:
-                properties:
-                  resourceName:
-                    type: string
-                  workspaceStorageName:
-                    type: string
-                required:
-                - resourceName
-                - workspaceStorageName
-                type: object
+              volumeMounts:
+                items:
+                  properties:
+                    destination:
+                      type: string
+                    source:
+                      type: string
+                  required:
+                  - destination
+                  - source
+                  type: object
+                type: array
             type: object
           status:
             description: WorkspaceResourceStatus defines the observed state of WorkspaceResource

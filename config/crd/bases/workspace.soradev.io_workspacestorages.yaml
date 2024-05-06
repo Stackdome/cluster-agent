@@ -54,9 +54,6 @@ spec:
                       type: boolean
                     hash:
                       type: string
-                    name:
-                      minLength: 1
-                      type: string
                     needsSync:
                       type: boolean
                     size:
@@ -64,11 +61,14 @@ spec:
                       type: string
                     type:
                       type: string
+                    volumeName:
+                      minLength: 1
+                      type: string
                   required:
-                  - name
                   - needsSync
                   - size
                   - type
+                  - volumeName
                   type: object
                 type: array
             type: object
@@ -159,30 +159,21 @@ spec:
               serviceName:
                 description: Name of the svc which exposes this storage pod(internally.)
                 type: string
-              workspaceStorageInfo:
-                description: Tracks last reported upgrade policy status.
+              workspaceVolumeInfo:
                 items:
                   properties:
-                    addressIdentifier:
-                      type: string
-                    name:
-                      type: string
-                    pvcName:
-                      description: Name of the pvc where the state of this resource
-                        is stored.
-                      type: string
-                    status:
-                      type: string
                     subpath:
-                      description: Path within the pvc where the state of the resource
-                        is stored.
+                      description: Path within the storage pod where the volume is
+                        mounted.
+                      type: string
+                    volumeName:
+                      type: string
+                    volumeType:
                       type: string
                   required:
-                  - addressIdentifier
-                  - name
-                  - pvcName
-                  - status
                   - subpath
+                  - volumeName
+                  - volumeType
                   type: object
                 type: array
             type: object
