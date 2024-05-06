@@ -1,0 +1,15 @@
+apiVersion: workspace.soradev.io/v1alpha1
+kind: WorkspaceStorage
+metadata:
+  namespace: ashish-workspace
+  name: ashish
+spec:
+  resourceStorageSpecs:
+  - volumeName: front-end
+    type: SyncingType
+    size: 2Gi
+    needsSync: true
+  - volumeName: node-modules
+    type: EmptyStorageType
+    size: 2Gi
+    needsSync: false
