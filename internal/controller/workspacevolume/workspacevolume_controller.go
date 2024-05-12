@@ -3,6 +3,7 @@ package workspacevolume
 import (
 	"context"
 	"fmt"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -52,11 +53,15 @@ func (r *WorkspaceVolumeReconciler) reconcile(ctx context.Context, volume *v1alp
 		return ctrl.Result{}, err
 	}
 	reportWorkspaceVolumeAvailable(volume)
-	if volume.Spec.NeedsSync {
-		reportWorkspaceVolumeNotSynced(volume)
-	} else {
-		reportWorkspaceVolumeSyncedOnce(volume)
+
+	if volume.Annotations != nil {
+		syncedAt, syncedOnce := volume.Annotations[v1alpha1.LastSyncedAtAnnotation]
+		if syncedOnce {
+			reportWorkspaceVolumeSyncedOnce(volume, syncedAt)
+			return ctrl.Result{}, nil
+		}
 	}
+	reportWorkspaceVolumeNotSynced(volume)
 	return ctrl.Result{}, nil
 }
 
@@ -123,12 +128,17 @@ func reportWorkspaceVolumeAvailable(volume *v1alpha1.WorkspaceVolume) {
 	})
 }
 
-func reportWorkspaceVolumeSyncedOnce(volume *v1alpha1.WorkspaceVolume) {
+func reportWorkspaceVolumeSyncedOnce(volume *v1alpha1.WorkspaceVolume, lastSyncedAt string) {
 	syncedOnceCond := meta.FindStatusCondition(volume.Status.Conditions, string(v1alpha1.WorkspaceVolumeConditionSyncedOnce))
 	if syncedOnceCond != nil && syncedOnceCond.Status == metav1.ConditionTrue {
 		return
 	}
 	volume.Status.ObservedGeneration = volume.Generation
+	parsedTime, err := time.Parse(time.RFC3339, lastSyncedAt)
+	if err != nil {
+		parsedTime = time.Now().UTC()
+	}
+	volume.Status.LastSyncedAt = ptr.To(metav1.NewTime(parsedTime.UTC()))
 	meta.SetStatusCondition(&volume.Status.Conditions, metav1.Condition{
 		Type:               string(v1alpha1.WorkspaceVolumeConditionSyncedOnce),
 		Status:             metav1.ConditionTrue,

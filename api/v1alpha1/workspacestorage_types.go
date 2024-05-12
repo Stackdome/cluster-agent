@@ -35,6 +35,10 @@ const (
 	WorkspaceStorageAvailable WorkspaceStorageCondition = "Available"
 )
 
+const (
+	WorkspaceStorageVolumeLabel = "workspace.soradev.io/workspacestorageName"
+)
+
 type WorkspaceStorageSpec struct {
 	// +kubebuilder:validation:Required
 	ResourceStorageSpecs []ResourceStorageSpec `json:"resourceStorageSpecs,omitempty"`
@@ -111,13 +115,6 @@ func (w *WorkspaceStorage) HasSyncRequiredStorageResources() bool {
 		}
 	}
 	return false
-}
-
-func (w *WorkspaceStorage) MarkAsSynced() {
-	for i := range w.Spec.ResourceStorageSpecs {
-		curr := &w.Spec.ResourceStorageSpecs[i]
-		curr.NeedsSyncBeforeUse = false
-	}
 }
 
 func (w *WorkspaceStorage) ContainsVolume(volumeName string) bool {

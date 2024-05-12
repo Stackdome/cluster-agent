@@ -17,6 +17,8 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"time"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -45,8 +47,8 @@ type WorkspaceVolumeSpec struct {
 	Size string              `json:"size"`
 	Type ResourceStorageType `json:"type"`
 	// +optional
-	DontAllowSync bool `json:"dontAllowSync"`
-	NeedsSync     bool `json:"needsSync"`
+	DontAllowSync      bool `json:"dontAllowSync"`
+	NeedsSyncBeforeUse bool `json:"needsSyncBeforeUse"`
 }
 
 // WorkspaceVolumeStatus defines the observed state of WorkspaceVolume
@@ -57,7 +59,8 @@ type WorkspaceVolumeStatus struct {
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 	PvcName    string             `json:"pvcName"`
 	// +kubebuilder:default=Pending
-	Phase WorkspaceVolumePhase `json:"phase,omitempty"`
+	Phase        WorkspaceVolumePhase `json:"phase,omitempty"`
+	LastSyncedAt *metav1.Time         `json:"LastSyncedAt,omitempty"`
 }
 
 //+kubebuilder:object:root=true
@@ -79,6 +82,13 @@ type WorkspaceVolumeList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []WorkspaceVolume `json:"items"`
+}
+
+func (w *WorkspaceVolume) MarkAsSynced() {
+	if w.Annotations == nil {
+		w.Annotations = map[string]string{}
+	}
+	w.Annotations[LastSyncedAtAnnotation] = metav1.NewTime(time.Now().UTC()).String()
 }
 
 func init() {

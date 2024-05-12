@@ -40,12 +40,15 @@ func (r *workspaceVolumeReconciler) reconcileWorkspaceVolume(
 		ObjectMeta: v1.ObjectMeta{
 			Name:      volumeSpec.VolumeName,
 			Namespace: ws.Namespace,
+			Labels: map[string]string{
+				workspacev1alpha1.WorkspaceStorageVolumeLabel: ws.Name,
+			},
 		},
 		Spec: workspacev1alpha1.WorkspaceVolumeSpec{
-			Size:          volumeSpec.Size,
-			Type:          volumeSpec.Type,
-			NeedsSync:     volumeSpec.NeedsSyncBeforeUse,
-			DontAllowSync: volumeSpec.DontAllowSync,
+			Size:               volumeSpec.Size,
+			Type:               volumeSpec.Type,
+			NeedsSyncBeforeUse: volumeSpec.NeedsSyncBeforeUse,
+			DontAllowSync:      volumeSpec.DontAllowSync,
 		},
 	}
 
