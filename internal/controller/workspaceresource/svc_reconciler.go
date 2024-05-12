@@ -45,7 +45,6 @@ func (r *svcReconciler) reconcile(ctx context.Context, resource *v1alpha1.Worksp
 		}
 
 		resource.Status.InternalAddress = &svc.Name
-
 		if !resource.Spec.HasExposedPort() {
 			r.w.reportWorkspaceResourceReady(resource)
 			return resultNil, nil

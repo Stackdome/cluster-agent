@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -18,6 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"soradev.io/cluster-agent/api/v1alpha1"
 	"soradev.io/cluster-agent/internal/controller"
+	"soradev.io/cluster-agent/pkg/interpolation"
 )
 
 type workloadReconciler struct {
@@ -137,8 +139,20 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.W
 	if !equality.Semantic.DeepDerivative(desiredDeploymentForResource.Spec, existingDeployment.Spec) {
 		logger.Info("Updating existing deployment for workload")
 		existingDeployment.Spec = desiredDeploymentForResource.Spec
-		return resultRequeue, r.Client.Update(ctx, existingDeployment)
+		return resultStop, r.Client.Update(ctx, existingDeployment)
 	}
+
+	if r.requiresRestart(resource) {
+		logger.Info("restarting deployment for workload")
+		if existingDeployment.Spec.Template.Annotations == nil {
+			existingDeployment.Spec.Template.Annotations = make(map[string]string)
+		}
+		existingDeployment.Spec.Template.Annotations[v1alpha1.RestartResourceAnnotation] = v1.Now().UTC().String()
+		resource.Status.LastRestartRequestProcessedAt = ptr.To(v1.NewTime(time.Now().UTC()))
+		reportWorkspaceResourceNotReady(resource, "WorkspaceResouceDeploymentNotReady", "WorkspaceResouceDeploymentNotReady")
+		return resultStop, r.Client.Update(ctx, existingDeployment)
+	}
+
 	if controller.DeploymentAvailable(existingDeployment) {
 		return resultNil, nil
 	}
@@ -147,16 +161,31 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.W
 	return resultStop, nil
 }
 
+func (r *workloadReconciler) requiresRestart(resource *v1alpha1.WorkspaceResource) bool {
+	lastRestartProcessedAt := resource.Status.LastRestartRequestProcessedAt
+	currentRestartRequest := resource.Spec.RestartRequest
+	switch {
+	case currentRestartRequest != nil && lastRestartProcessedAt == nil:
+		return true
+	case currentRestartRequest != nil && currentRestartRequest.UTC().After(lastRestartProcessedAt.Time.UTC()):
+		return true
+	default:
+		return false
+	}
+}
+
 func InterpolatedEnvVars(resource *v1alpha1.WorkspaceResource, infoMap map[string]*v1alpha1.WorkspaceResource) []corev1.EnvVar {
+	interpolationFn := func(key string) string {
+		return *infoMap[key].Status.InternalAddress
+	}
 	res := make([]corev1.EnvVar, 0)
 	for _, envVar := range resource.Spec.EnvironmentVariables {
-		if strings.HasPrefix(envVar.Value, "$") {
-			referencedResouceName, _ := splitEnvVarValue(envVar.Value)
+		if interpolation.HasInterpolation(envVar.Value) {
+			interpolatedValue := interpolation.InterpolateString(envVar.Value, interpolationFn)
 			// TODO: Assert attribute is Address
-			address := infoMap[referencedResouceName].Status.InternalAddress
 			res = append(res, corev1.EnvVar{
 				Name:  envVar.Name,
-				Value: *address,
+				Value: interpolatedValue,
 			})
 		} else {
 			res = append(res, corev1.EnvVar{
@@ -188,7 +217,7 @@ func splitEnvVarValue(value string) (string, string) {
 func InterpolatedVolumeMountList(resource *v1alpha1.WorkspaceResource) []corev1.VolumeMount {
 	res := make([]corev1.VolumeMount, 0)
 	for _, mount := range resource.Spec.VolumeMounts {
-		sourceParts := filepath.SplitList(mount.Source)
+		sourceParts := strings.Split(mount.Source, "/")
 		sourceVolumeName := sourceParts[0]
 		subPath := filepath.Join(sourceParts[1:]...)
 		if len(subPath) == 0 {
@@ -209,16 +238,21 @@ func InterpolatedVolumeMountList(resource *v1alpha1.WorkspaceResource) []corev1.
 
 func InterpolatedVolumesList(resource *v1alpha1.WorkspaceResource, volumeInfo map[string]*v1alpha1.WorkspaceVolume) []corev1.Volume {
 	res := make([]corev1.Volume, 0)
+	addedVolumes := make(map[string]struct{})
 	for _, mount := range resource.Spec.VolumeMounts {
-		sourceVolumeName := filepath.SplitList(mount.Source)[0]
-		res = append(res, corev1.Volume{
-			Name: sourceVolumeName,
-			VolumeSource: corev1.VolumeSource{
-				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-					ClaimName: volumeInfo[sourceVolumeName].Status.PvcName,
+		sourceVolumeName := strings.Split(mount.Source, "/")[0]
+		_, added := addedVolumes[sourceVolumeName]
+		if !added {
+			res = append(res, corev1.Volume{
+				Name: sourceVolumeName,
+				VolumeSource: corev1.VolumeSource{
+					PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+						ClaimName: volumeInfo[sourceVolumeName].Status.PvcName,
+					},
 				},
-			},
-		})
+			})
+			addedVolumes[sourceVolumeName] = struct{}{}
+		}
 	}
 	return res
 }
@@ -226,7 +260,7 @@ func InterpolatedVolumesList(resource *v1alpha1.WorkspaceResource, volumeInfo ma
 func (r *workloadReconciler) getVolumeInfo(ctx context.Context, resource *v1alpha1.WorkspaceResource) (map[string]*v1alpha1.WorkspaceVolume, error) {
 	res := make(map[string]*v1alpha1.WorkspaceVolume)
 	for _, mount := range resource.Spec.VolumeMounts {
-		sourceVolumeName := filepath.SplitList(mount.Source)[0]
+		sourceVolumeName := strings.Split(mount.Source, "/")[0]
 		referencedVolume := &v1alpha1.WorkspaceVolume{}
 		if err := r.Client.Get(ctx, types.NamespacedName{Name: sourceVolumeName, Namespace: resource.Namespace}, referencedVolume); err != nil {
 			return nil, fmt.Errorf("failed to get the referenced volume '%s' in resource '%s': %w", sourceVolumeName, resource.Name, err)

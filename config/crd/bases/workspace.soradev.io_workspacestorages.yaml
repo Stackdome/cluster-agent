@@ -54,7 +54,7 @@ spec:
                       type: boolean
                     hash:
                       type: string
-                    needsSync:
+                    needsSyncBeforeUse:
                       type: boolean
                     size:
                       minLength: 1
@@ -65,7 +65,7 @@ spec:
                       minLength: 1
                       type: string
                   required:
-                  - needsSync
+                  - needsSyncBeforeUse
                   - size
                   - type
                   - volumeName
@@ -162,6 +162,12 @@ spec:
               workspaceVolumeInfo:
                 items:
                   properties:
+                    Available:
+                      type: boolean
+                    lastSyncedAt:
+                      description: Applicable to only syncable volume types.
+                      format: date-time
+                      type: string
                     subpath:
                       description: Path within the storage pod where the volume is
                         mounted.
@@ -171,6 +177,7 @@ spec:
                     volumeType:
                       type: string
                   required:
+                  - Available
                   - subpath
                   - volumeName
                   - volumeType

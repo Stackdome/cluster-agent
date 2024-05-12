@@ -56,8 +56,8 @@ type ResourceStorageSpec struct {
 	Size string              `json:"size"`
 	Type ResourceStorageType `json:"type"`
 	// +optional
-	DontAllowSync bool `json:"dontAllowSync"`
-	NeedsSync     bool `json:"needsSync"`
+	DontAllowSync      bool `json:"dontAllowSync"`
+	NeedsSyncBeforeUse bool `json:"needsSyncBeforeUse"`
 	// +optional
 	Hash string `json:"hash,omitempty"`
 }
@@ -83,7 +83,10 @@ type VolumeStatus struct {
 	VolumeName string              `json:"volumeName"`
 	VolumeType ResourceStorageType `json:"volumeType"`
 	// Path within the storage pod where the volume is mounted.
-	Subpath string `json:"subpath"`
+	Subpath   string `json:"subpath"`
+	Available bool   `json:"Available"`
+	// Applicable to only syncable volume types.
+	LastSyncedAt *metav1.Time `json:"lastSyncedAt,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -103,7 +106,7 @@ type WorkspaceStorage struct {
 
 func (w *WorkspaceStorage) HasSyncRequiredStorageResources() bool {
 	for _, srs := range w.Spec.ResourceStorageSpecs {
-		if srs.NeedsSync {
+		if srs.NeedsSyncBeforeUse {
 			return true
 		}
 	}
@@ -113,7 +116,7 @@ func (w *WorkspaceStorage) HasSyncRequiredStorageResources() bool {
 func (w *WorkspaceStorage) MarkAsSynced() {
 	for i := range w.Spec.ResourceStorageSpecs {
 		curr := &w.Spec.ResourceStorageSpecs[i]
-		curr.NeedsSync = false
+		curr.NeedsSyncBeforeUse = false
 	}
 }
 

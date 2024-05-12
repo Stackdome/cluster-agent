@@ -3,10 +3,11 @@ package imagebuilder
 import (
 	"bytes"
 	"fmt"
+	"path/filepath"
 	"text/template"
 
 	batchv1 "k8s.io/api/batch/v1"
-	"k8s.io/apimachinery/pkg/util/yaml"
+	"sigs.k8s.io/yaml"
 	"soradev.io/cluster-agent/api/v1alpha1"
 )
 
@@ -24,7 +25,7 @@ spec:
         image: gcr.io/kaniko-project/executor:latest
         args:
         - "--dockerfile={{ .DockerfilePath }}"
-        - "--context=dir:///workspace"
+        - "--context=dir://{{ .Context }}"
         - "--destination={{ .Registry }}/{{ .ImageName }}:{{ .Tag }}"
         - "--insecure-registry=true"
         - "--insecure=true"
@@ -40,10 +41,10 @@ spec:
         {{- end }}
       restartPolicy: Never
       volumes:
-      {{- range .VolumeMounts }}
-      - name: {{ .PvcName }}
+      {{- range .UniqueVolumes }}
+      - name: {{ . }}
         persistentVolumeClaim:
-          claimName: {{ .PvcName }}
+          claimName: {{ . }}
       {{- end }}
 `
 
@@ -57,6 +58,7 @@ type BuildParams struct {
 	ImageName      string
 	Tag            string
 	Insecure       bool
+	UniqueVolumes  []string
 	VolumeMounts   []v1alpha1.VolumeMountForInitialization
 }
 
@@ -70,8 +72,21 @@ func (b *BuildParams) generateImageBuildJobYAML() (string, error) {
 	b.VolumeMounts = append(b.VolumeMounts, v1alpha1.VolumeMountForInitialization{
 		ContainerMountPath: "/workspace",
 		PvcName:            b.PVCName,
-		SubPath:            b.Context,
 	})
+
+	b.Context = filepath.Join("/workspace", b.Context)
+	b.DockerfilePath = filepath.Join("/workspace", b.DockerfilePath)
+
+	uniqueVolumes := []string{}
+	uniqueVolumesMap := make(map[string]struct{})
+	for _, mount := range b.VolumeMounts {
+		_, added := uniqueVolumesMap[mount.PvcName]
+		if !added {
+			uniqueVolumes = append(uniqueVolumes, mount.PvcName)
+			uniqueVolumesMap[mount.PvcName] = struct{}{}
+		}
+	}
+	b.UniqueVolumes = uniqueVolumes
 	var buf bytes.Buffer
 	err = tmpl.Execute(&buf, b)
 	if err != nil {
@@ -91,9 +106,10 @@ func GenerateImageBuildJob(params BuildParams) (*batchv1.Job, error) {
 		return nil, err
 	}
 	job := &batchv1.Job{}
-	buff := bytes.NewBufferString(jobYaml)
-	if err := yaml.NewYAMLOrJSONDecoder(buff, 2048).Decode(job); err != nil {
+	if err := yaml.Unmarshal([]byte(jobYaml), job); err != nil {
 		return nil, fmt.Errorf("failed to decode Job YAML: %v", err)
 	}
+	container := &job.Spec.Template.Spec.Containers[0]
+	container.Args = append(container.Args, "--cache=true", "--cache-copy-layers=true", "--cache-run-layers=true")
 	return job, nil
 }

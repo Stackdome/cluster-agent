@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -65,8 +66,9 @@ func (r *workspaceResourceBuildReconciler) createApplicationBuild(ctx context.Co
 		source := mount.Source
 		destination := mount.Destination
 		//Ex: deps/node_modules:/app/nodemodules. Here, deps is the name of the volume and /node_modules is the subpath.
-		sourceVolumeName := filepath.SplitList(source)[0]
-		sourceSubPath := filepath.Join(filepath.SplitList(source)[1:]...)
+		sourceParts := strings.Split(source, "/")
+		sourceVolumeName := sourceParts[0]
+		sourceSubPath := filepath.Join(sourceParts[1:]...)
 		referencedVolume := volumeInfo[sourceVolumeName]
 		// Only initialize volumes of type v1alpha1.EmptyStorageType.
 		if referencedVolume.Spec.Type == v1alpha1.EmptyStorageType {
@@ -110,13 +112,13 @@ func GetImageRegistry(resource *v1alpha1.WorkspaceResource) string {
 }
 
 func ApplicationBuildName(resource *v1alpha1.WorkspaceResource) string {
-	return fmt.Sprintf("%s-%s", resource.Name, resource.Spec.ApplicationBuildSpec.BuildSourceHash)
+	return fmt.Sprintf("%s-%s", resource.Name, resource.Spec.ApplicationBuildSpec.BuildSourceHash[:7])
 }
 
 func (r *workspaceResourceBuildReconciler) getVolumeInfo(ctx context.Context, resource *v1alpha1.WorkspaceResource) (map[string]*v1alpha1.WorkspaceVolume, error) {
 	res := make(map[string]*v1alpha1.WorkspaceVolume)
 	for _, mount := range resource.Spec.VolumeMounts {
-		sourceVolumeName := filepath.SplitList(mount.Source)[0]
+		sourceVolumeName := strings.Split(mount.Source, "/")[0]
 		referencedVolume := &v1alpha1.WorkspaceVolume{}
 		if err := r.Client.Get(ctx, types.NamespacedName{Name: sourceVolumeName, Namespace: resource.Namespace}, referencedVolume); err != nil {
 			return nil, fmt.Errorf("failed to get the referenced volume '%s' in resource '%s': %w", sourceVolumeName, resource.Name, err)

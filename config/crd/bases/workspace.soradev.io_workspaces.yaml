@@ -123,6 +123,11 @@ spec:
                           required:
                           - image
                           type: object
+                        restartRequest:
+                          format: date-time
+                          type: string
+                        stateFul:
+                          type: boolean
                         volumeMounts:
                           items:
                             properties:

@@ -44,7 +44,7 @@ func (r *workspaceVolumeReconciler) reconcileWorkspaceVolume(
 		Spec: workspacev1alpha1.WorkspaceVolumeSpec{
 			Size:          volumeSpec.Size,
 			Type:          volumeSpec.Type,
-			NeedsSync:     volumeSpec.NeedsSync,
+			NeedsSync:     volumeSpec.NeedsSyncBeforeUse,
 			DontAllowSync: volumeSpec.DontAllowSync,
 		},
 	}

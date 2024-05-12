@@ -2,6 +2,7 @@ package applicationbuild
 
 import (
 	"context"
+	"fmt"
 
 	batchv1 "k8s.io/api/batch/v1"
 	v1 "k8s.io/api/core/v1"
@@ -89,9 +90,10 @@ func (r *WorkspaceApplicationBuildReconciler) reconcile(ctx context.Context, bui
 	}
 
 	jobConfig := imagebuilder.BuildParams{
-		JobName:        buildConfig.Name,
+		JobName:        fmt.Sprintf("%s-build", buildConfig.Name),
 		Namespace:      buildConfig.Namespace,
 		PVCName:        volumeRef.Status.PvcName,
+		Context:        buildConfig.Spec.ContextRef.Context,
 		DockerfilePath: buildConfig.Spec.ContextRef.DockerfilePath,
 		Registry:       buildConfig.Spec.Registry,
 		ImageName:      buildConfig.Spec.ResourceName,

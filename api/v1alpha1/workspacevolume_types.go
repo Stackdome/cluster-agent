@@ -34,6 +34,10 @@ const (
 	WorkspaceVolumeConditionSyncedOnce WorkspaceVolumeCondition = "SyncedOnce"
 )
 
+const (
+	LastSyncedAtAnnotation = "workspacevolume.soradev.io/LastSyncedAt"
+)
+
 // WorkspaceVolumeSpec defines the desired state of WorkspaceVolume
 type WorkspaceVolumeSpec struct {
 	// +kubebuilder:validation:Required

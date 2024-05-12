@@ -34,6 +34,10 @@ const (
 	WorkspaceResourceStatusAvailable WorkspaceResourceStatusCondition = "Available"
 )
 
+const (
+	RestartResourceAnnotation = "workspaceresource.soradev.io/restartedAt"
+)
+
 // WorkspaceResourceSpec defines the desired state of WorkspaceResource
 type WorkspaceResourceSpec struct {
 	// +optional
@@ -55,6 +59,10 @@ type WorkspaceResourceSpec struct {
 	DependsOn []string `json:"dependsOn"`
 	// +optional
 	Ports []Port `json:"ports"`
+	// +optional
+	RestartRequest *metav1.Time `json:"restartRequest,omitempty"`
+	// +optional
+	StateFul bool `json:"stateFul"`
 }
 
 type WorkspaceStorageRef struct {
@@ -97,6 +105,15 @@ type ExternalAddress struct {
 	Address    string `json:"address"`
 }
 
+type BuildStatus struct {
+	Name       string  `json:"name,omitempty"`
+	SourceHash string  `json:"sourceHash,omitempty"`
+	Available  *bool   `json:"available,omitempty"`
+	Reason     *string `json:"reason,omitempty"`
+	Message    *string `json:"message,omitempty"`
+	Phase      *string `json:"phase,omitempty"`
+}
+
 // WorkspaceResourceStatus defines the observed state of WorkspaceResource
 type WorkspaceResourceStatus struct {
 	// The most recent generation observed by the controller.
@@ -111,7 +128,11 @@ type WorkspaceResourceStatus struct {
 	ImageSourceHash string                 `json:"imageSourceHash,omitempty"`
 	ExternalAddress []ExternalAddress      `json:"externalAddress,omitempty"`
 	// Internal address is always the cluster wide resolvable internal domain name.
-	InternalAddress *string `json:"internalAddress,omitempty"`
+	InternalAddress               *string      `json:"internalAddress,omitempty"`
+	LastRestartRequestProcessedAt *metav1.Time `json:"lastRestartRequestProcessedAt,omitempty"`
+	// Current build that this resource uses.
+	// Applicable only to resources which have ApplicationBuildSpec defined.
+	CurrentBuild *BuildStatus `json:"currentBuild,omitempty"`
 }
 
 // +kubebuilder:object:root=true

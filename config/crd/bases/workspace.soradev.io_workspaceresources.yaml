@@ -112,6 +112,11 @@ spec:
                 required:
                 - image
                 type: object
+              restartRequest:
+                format: date-time
+                type: string
+              stateFul:
+                type: boolean
               volumeMounts:
                 items:
                   properties:
@@ -199,6 +204,24 @@ spec:
                   - type
                   type: object
                 type: array
+              currentBuild:
+                description: |-
+                  Current build that this resource uses.
+                  Applicable only to resources which have ApplicationBuildSpec defined.
+                properties:
+                  available:
+                    type: boolean
+                  message:
+                    type: string
+                  name:
+                    type: string
+                  phase:
+                    type: string
+                  reason:
+                    type: string
+                  sourceHash:
+                    type: string
+                type: object
               externalAddress:
                 items:
                   properties:
@@ -217,6 +240,9 @@ spec:
               internalAddress:
                 description: Internal address is always the cluster wide resolvable
                   internal domain name.
+                type: string
+              lastRestartRequestProcessedAt:
+                format: date-time
                 type: string
               observedGeneration:
                 description: The most recent generation observed by the controller.

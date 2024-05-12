@@ -24,6 +24,8 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	"k8s.io/utils/strings/slices"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -79,19 +81,23 @@ func (r *WorkspaceResourceReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	logger.Info("in workspace resource reconciler")
 	ctx = controller.ContextWithLogger(ctx, logger)
 
-	workspaceService := &v1alpha1.WorkspaceResource{}
-	if err := r.Client.Get(ctx, req.NamespacedName, workspaceService); err != nil {
+	workspaceResource := &v1alpha1.WorkspaceResource{}
+	if err := r.Client.Get(ctx, req.NamespacedName, workspaceResource); err != nil {
 		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
 	}
-	res, err := r.reconcile(ctx, workspaceService)
+	res, err := r.reconcile(ctx, workspaceResource)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-
-	return res, r.Client.Status().Update(ctx, workspaceService)
+	applicationBuildStatus, err := r.getApplicationBuildStatus(ctx, workspaceResource)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	workspaceResource.Status.CurrentBuild = applicationBuildStatus
+	return res, r.Client.Status().Update(ctx, workspaceResource)
 }
 
 func (r *WorkspaceResourceReconciler) reconcile(ctx context.Context, resource *v1alpha1.WorkspaceResource) (ctrl.Result, error) {
@@ -151,6 +157,43 @@ func (r *WorkspaceResourceReconciler) reportWorkspaceResourceReady(resource *v1a
 		Reason:             "WorkspaceResourceAvailable",
 		Message:            "Workspace is ready",
 	})
+
+}
+
+func (r *WorkspaceResourceReconciler) getApplicationBuildStatus(ctx context.Context, resource *v1alpha1.WorkspaceResource) (*v1alpha1.BuildStatus, error) {
+	if resource.Spec.ApplicationBuildSpec == nil {
+		return nil, nil
+	}
+
+	existingApplicationBuild := &v1alpha1.WorkspaceApplicationBuild{}
+	if err := r.Client.Get(ctx,
+		types.NamespacedName{
+			Name:      ApplicationBuildName(resource),
+			Namespace: resource.Namespace,
+		},
+		existingApplicationBuild,
+	); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	res := &v1alpha1.BuildStatus{
+		Name:       existingApplicationBuild.Name,
+		SourceHash: existingApplicationBuild.Spec.SourceHash,
+		Phase:      ptr.To(string(existingApplicationBuild.Status.Phase)),
+	}
+
+	availableCond := meta.FindStatusCondition(existingApplicationBuild.Status.Conditions, string(v1alpha1.WorkspaceApplicationBuildAvailable))
+	if availableCond != nil {
+		res.Available = ptr.To(availableCond.Status == metav1.ConditionTrue)
+		res.Message = ptr.To(availableCond.Message)
+		res.Reason = ptr.To(availableCond.Reason)
+	} else {
+		res.Available = ptr.To(false)
+	}
+	return res, nil
 }
 
 func (r *WorkspaceResourceReconciler) getDependencies(ctx context.Context, resource *v1alpha1.WorkspaceResource) ([]v1alpha1.WorkspaceResource, error) {

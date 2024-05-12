@@ -86,6 +86,8 @@ func constructWorkspaceResourceCR(workspace *v1alpha1.Workspace, resourceSpec *v
 			Command:                 resourceSpec.Spec.Command,
 			Args:                    resourceSpec.Spec.Args,
 			DependsOn:               resourceSpec.Spec.DependsOn,
+			RestartRequest:          resourceSpec.Spec.RestartRequest,
+			StateFul:                resourceSpec.Spec.StateFul,
 		},
 	}
 
