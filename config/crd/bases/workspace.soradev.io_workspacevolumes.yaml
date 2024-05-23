@@ -41,7 +41,7 @@ spec:
             properties:
               dontAllowSync:
                 type: boolean
-              needsSync:
+              needsSyncBeforeUse:
                 type: boolean
               size:
                 minLength: 1
@@ -49,13 +49,16 @@ spec:
               type:
                 type: string
             required:
-            - needsSync
+            - needsSyncBeforeUse
             - size
             - type
             type: object
           status:
             description: WorkspaceVolumeStatus defines the observed state of WorkspaceVolume
             properties:
+              LastSyncedAt:
+                format: date-time
+                type: string
               conditions:
                 description: Conditions is a list of status conditions ths object
                   is in.

@@ -146,17 +146,6 @@ func reportWorkspaceStorageAvailable(workspaceStorage *v1alpha1.WorkspaceStorage
 		ObservedGeneration: workspaceStorage.Generation,
 	})
 
-	res := make([]v1alpha1.VolumeStatus, 0)
-
-	for _, resource := range workspaceStorage.Spec.ResourceStorageSpecs {
-		currentVolumeStatus := v1alpha1.VolumeStatus{
-			VolumeName: resource.VolumeName,
-			VolumeType: resource.Type,
-			Subpath:    workspaceStorage.MountPathForVolume(resource.VolumeName),
-		}
-		res = append(res, currentVolumeStatus)
-	}
-	workspaceStorage.Status.WorkspaceVolumeStatus = res
 	return nil
 }
 
