@@ -103,11 +103,16 @@ func (r *WorkspaceStorageReconciler) reconcile(ctx context.Context, workspaceSto
 	return ctrl.Result{}, r.Client.Status().Update(ctx, workspaceStorage)
 }
 
-func NewWorkspaceStorageReconciler(client client.Client, scheme *runtime.Scheme) *WorkspaceStorageReconciler {
+func NewWorkspaceStorageReconciler(client client.Client, uncachedClient client.Client, scheme *runtime.Scheme) *WorkspaceStorageReconciler {
 	subReconcilers := []subReconciler{
 		&workspaceVolumeReconciler{
 			Client: client,
 			Scheme: scheme,
+		},
+		&userSShKeySecretReconciler{
+			Client:         client,
+			UncachedClient: uncachedClient,
+			Scheme:         scheme,
 		},
 		&storageServerReconciler{
 			Client: client,

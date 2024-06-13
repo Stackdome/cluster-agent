@@ -29,6 +29,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -130,7 +131,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = (workspacestorage.NewWorkspaceStorageReconciler(mgr.GetClient(), mgr.GetScheme())).
+	uncachedClient, err := client.New(
+		mgr.GetConfig(), client.Options{Scheme: mgr.GetScheme(), Mapper: mgr.GetRESTMapper()})
+	if err != nil {
+		setupLog.Error(err, "unable to set up uncached client")
+		os.Exit(1)
+	}
+
+	if err = (workspacestorage.NewWorkspaceStorageReconciler(mgr.GetClient(), uncachedClient, mgr.GetScheme())).
 		SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "WorkspaceState")
 		os.Exit(1)

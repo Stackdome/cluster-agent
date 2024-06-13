@@ -45,19 +45,36 @@ func (r *storageServerReconciler) ensureStorageServerDeployment(
 	volumeMountsOnPod := make([]corev1.VolumeMount, 0)
 	logger := controller.LoggerFromContext(ctx)
 	for _, volume := range wsVolumes {
-		volumes = append(volumes, corev1.Volume{
-			Name: volume.Name,
-			VolumeSource: corev1.VolumeSource{
-				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-					ClaimName: volume.Status.PvcName,
+		volumes = append(volumes,
+			corev1.Volume{
+				Name: volume.Name,
+				VolumeSource: corev1.VolumeSource{
+					PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+						ClaimName: volume.Status.PvcName,
+					},
 				},
 			},
-		})
+			// Mount the secret containing the users public ssh key as a volume.
+			corev1.Volume{
+				Name: "user-ssh-public-key",
+				VolumeSource: corev1.VolumeSource{
+					Secret: &corev1.SecretVolumeSource{
+						SecretName:  StorageServerSSHSecretName(workspaceStorage),
+						DefaultMode: ptr.To(int32(0400)),
+					},
+				},
+			},
+		)
 		volumeMountsOnPod = append(
 			volumeMountsOnPod,
 			corev1.VolumeMount{
 				Name:      volume.Name,
 				MountPath: workspaceStorage.MountPathForVolume(volume.Name),
+			},
+			corev1.VolumeMount{
+				Name:      "user-ssh-public-key",
+				MountPath: "/ssh",
+				ReadOnly:  true,
 			},
 		)
 	}
