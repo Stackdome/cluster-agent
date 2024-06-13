@@ -35,6 +35,10 @@ func ResourceSVCName(resource *v1alpha1.WorkspaceResource) string {
 
 func (r *svcReconciler) reconcile(ctx context.Context, resource *v1alpha1.WorkspaceResource) (subReconcilerResult, error) {
 	if len(resource.Spec.Ports) > 0 {
+		workspace, err := r.getWorkspace(ctx, resource)
+		if err != nil {
+			return resultNil, err
+		}
 		svc, err := r.ensureSvc(ctx, resource, resource.Spec.Ports)
 		if err != nil {
 			return resultNil, err
@@ -50,7 +54,7 @@ func (r *svcReconciler) reconcile(ctx context.Context, resource *v1alpha1.Worksp
 			return resultNil, nil
 		}
 
-		portSubdomainMap, err := r.reconcileHttpProxyForService(ctx, resource, svc)
+		portSubdomainMap, err := r.reconcileHttpProxyForService(ctx, resource, svc, workspace)
 		if err != nil {
 			return resultNil, err
 		}
@@ -59,7 +63,7 @@ func (r *svcReconciler) reconcile(ctx context.Context, resource *v1alpha1.Worksp
 			return r.handleServiceNotReady(ctx)
 		}
 
-		resource.Status.ExternalAddress = r.buildExternalAddresses(portSubdomainMap)
+		resource.Status.ExternalAddress = r.buildExternalAddresses(portSubdomainMap, workspace.Spec.Domain)
 	}
 	r.w.reportWorkspaceResourceReady(resource)
 	return resultNil, nil
@@ -71,27 +75,22 @@ func (r *svcReconciler) handleServiceNotReady(ctx context.Context) (subReconcile
 	return resultRequeue, nil
 }
 
-func (r *svcReconciler) buildExternalAddresses(portSubdomainMap map[int]string) []v1alpha1.ExternalAddress {
+func (r *svcReconciler) buildExternalAddresses(portSubdomainMap map[int]string, domain string) []v1alpha1.ExternalAddress {
 	externalAddresses := make([]v1alpha1.ExternalAddress, 0, len(portSubdomainMap))
 	for externalPort, subdomainForExposedPort := range portSubdomainMap {
 		externalAddresses = append(externalAddresses, v1alpha1.ExternalAddress{
 			TargetPort: int32(externalPort),
-			Address:    fmt.Sprintf("%s.voyager.test", subdomainForExposedPort),
+			Address:    fmt.Sprintf("%s.%s", subdomainForExposedPort, domain),
 		})
 	}
 	return externalAddresses
 }
 
-func (r *svcReconciler) reconcileHttpProxyForService(ctx context.Context, resource *v1alpha1.WorkspaceResource, serviceToBeExposed *corev1.Service) (map[int]string, error) {
-	workspaceRef := metav1.GetControllerOf(resource)
-	if workspaceRef == nil {
-		return nil, fmt.Errorf("missing owner ref for resource")
-	}
-
-	workspace := &v1alpha1.Workspace{}
-	if err := r.Client.Get(ctx, types.NamespacedName{Name: workspaceRef.Name, Namespace: resource.Namespace}, workspace); err != nil {
-		return nil, err
-	}
+func (r *svcReconciler) reconcileHttpProxyForService(
+	ctx context.Context,
+	resource *v1alpha1.WorkspaceResource,
+	serviceToBeExposed *corev1.Service,
+	workspace *v1alpha1.Workspace) (map[int]string, error) {
 	exposedPortSubdomainMap := map[int]string{}
 	for i, port := range resource.Spec.Ports {
 		if port.ExposeToPublic {
@@ -103,7 +102,7 @@ func (r *svcReconciler) reconcileHttpProxyForService(ctx context.Context, resour
 	rules := []networkingv1.IngressRule{}
 	for exposedPort := range exposedPortSubdomainMap {
 		rules = append(rules, networkingv1.IngressRule{
-			Host: fmt.Sprintf("%s.voyager.test", exposedPortSubdomainMap[exposedPort]),
+			Host: fmt.Sprintf("%s.%s", exposedPortSubdomainMap[exposedPort], workspace.Spec.Domain),
 			IngressRuleValue: networkingv1.IngressRuleValue{
 				HTTP: &networkingv1.HTTPIngressRuleValue{
 					Paths: []networkingv1.HTTPIngressPath{
@@ -208,19 +207,21 @@ func (r *svcReconciler) ensureSvc(ctx context.Context, resource *v1alpha1.Worksp
 	return nil, nil
 }
 
-func findServicePort(inputPort v1alpha1.Port, svc *corev1.Service) int32 {
-	for _, port := range svc.Spec.Ports {
-		if inputPort.Number == port.TargetPort.IntVal {
-			return port.NodePort
-		}
-	}
-	// TODO: Handle this case!!
-	return -1
-}
-
 func createShortHash(inputStrings ...string) string {
 	concatenated := strings.Join(inputStrings, ",")
 	hash := sha256.Sum256([]byte(concatenated))
 	shortHash := hex.EncodeToString(hash[:6])
 	return strings.ToLower(shortHash)
+}
+
+func (r *svcReconciler) getWorkspace(ctx context.Context, workpaceResource *v1alpha1.WorkspaceResource) (*v1alpha1.Workspace, error) {
+	workspaceRef := metav1.GetControllerOf(workpaceResource)
+	if workspaceRef == nil {
+		return nil, fmt.Errorf("missing owner ref for resource")
+	}
+	workspace := &v1alpha1.Workspace{}
+	if err := r.Client.Get(ctx, types.NamespacedName{Name: workspaceRef.Name, Namespace: workpaceResource.Namespace}, workspace); err != nil {
+		return nil, err
+	}
+	return workspace, nil
 }

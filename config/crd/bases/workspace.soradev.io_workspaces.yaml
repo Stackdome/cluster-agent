@@ -43,6 +43,9 @@ spec:
           spec:
             description: WorkspaceSpec defines the desired state of Workspace
             properties:
+              domain:
+                pattern: ^[a-zA-Z0-9-]+\.[a-zA-Z]+$
+                type: string
               organisation:
                 type: string
               resources:
@@ -149,6 +152,7 @@ spec:
               userName:
                 type: string
             required:
+            - domain
             - organisation
             - resources
             - userName

@@ -39,6 +39,8 @@ type WorkspaceSpec struct {
 	Resources    []ResourceSpec `json:"resources"`
 	UserName     string         `json:"userName"`
 	Organisation string         `json:"organisation"`
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9-]+\.[a-zA-Z]+$`
+	Domain string `json:"domain"`
 }
 
 type ResourceSpec struct {
