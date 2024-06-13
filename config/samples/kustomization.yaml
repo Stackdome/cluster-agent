@@ -5,4 +5,5 @@ resources:
 - workspace_v1alpha1_workspaceapplicationbuild.yaml
 - workspace_v1alpha1_workspace.yaml
 - workspace_v1alpha1_workspacevolume.yaml
+- workspace_v1alpha1_workspaceconfiguration.yaml
 #+kubebuilder:scaffold:manifestskustomizesamples
