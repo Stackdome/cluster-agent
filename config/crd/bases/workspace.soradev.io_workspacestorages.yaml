@@ -71,6 +71,11 @@ spec:
                   - volumeName
                   type: object
                 type: array
+              userPublicSSHKey:
+                description: // +kubebuilder:validation:Format:=base64
+                type: string
+            required:
+            - userPublicSSHKey
             type: object
           status:
             properties:

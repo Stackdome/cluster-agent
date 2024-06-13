@@ -40,6 +40,8 @@ const (
 )
 
 type WorkspaceStorageSpec struct {
+	// // +kubebuilder:validation:Format:=base64
+	UserPublicSSHKey string `json:"userPublicSSHKey"`
 	// +kubebuilder:validation:Required
 	ResourceStorageSpecs []ResourceStorageSpec `json:"resourceStorageSpecs,omitempty"`
 }
