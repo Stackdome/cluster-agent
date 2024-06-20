@@ -38,7 +38,7 @@ type WorkspaceConfigurationReconciler struct {
 func (r *WorkspaceConfigurationReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 	logger.WithValues("workspaceconfiguration", req.NamespacedName.String())
-	logger.Info("IN workspace reconciler")
+	logger.Info("IN workspace configuration reconciler")
 	ctx = controller.ContextWithLogger(ctx, logger)
 
 	workspaceConfig := &workspacev1alpha1.WorkspaceConfiguration{}
@@ -81,7 +81,6 @@ func (r *WorkspaceConfigurationReconciler) statusReconciler(ctx context.Context,
 	config.Status.ObservedGeneration = config.Generation
 	existingSecret := &corev1.Secret{}
 	if err := r.Get(ctx, types.NamespacedName{Namespace: config.Spec.WorkspaceNamespace, Name: ServiceAccountSecretName(config)}, existingSecret); err != nil {
-
 		return ctrl.Result{}, err
 	}
 	SAtoken, present := existingSecret.Data[corev1.ServiceAccountTokenKey]

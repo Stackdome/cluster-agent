@@ -54,16 +54,6 @@ func (r *storageServerReconciler) ensureStorageServerDeployment(
 					},
 				},
 			},
-			// Mount the secret containing the users public ssh key as a volume.
-			corev1.Volume{
-				Name: "user-ssh-public-key",
-				VolumeSource: corev1.VolumeSource{
-					Secret: &corev1.SecretVolumeSource{
-						SecretName:  StorageServerSSHSecretName(workspaceStorage),
-						DefaultMode: ptr.To(int32(0400)),
-					},
-				},
-			},
 		)
 		volumeMountsOnPod = append(
 			volumeMountsOnPod,
@@ -71,13 +61,23 @@ func (r *storageServerReconciler) ensureStorageServerDeployment(
 				Name:      volume.Name,
 				MountPath: workspaceStorage.MountPathForVolume(volume.Name),
 			},
-			corev1.VolumeMount{
-				Name:      "user-ssh-public-key",
-				MountPath: "/ssh",
-				ReadOnly:  true,
-			},
 		)
 	}
+	// Mount user's ssh public key to the storage pod.
+	volumes = append(volumes, corev1.Volume{
+		Name: "user-ssh-public-key",
+		VolumeSource: corev1.VolumeSource{
+			Secret: &corev1.SecretVolumeSource{
+				SecretName: StorageServerSSHSecretName(workspaceStorage),
+			},
+		},
+	})
+
+	volumeMountsOnPod = append(volumeMountsOnPod, corev1.VolumeMount{
+		Name:      "user-ssh-public-key",
+		MountPath: "/home/stackdomeuser/.ssh/authorized_keys",
+		SubPath:   "authorized_keys",
+	})
 
 	desiredDeployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -100,11 +100,11 @@ func (r *storageServerReconciler) ensureStorageServerDeployment(
 						{
 							Name: fmt.Sprintf("%s-storage-server", workspaceStorage.Name),
 							// TODO: Change
-							Image:           "myregistry.localhost:5000/rsync-daemon:3",
+							Image:           "asia-south1-docker.pkg.dev/stackdome/stackdome/storage-server:3",
 							ImagePullPolicy: corev1.PullIfNotPresent,
 							Ports: []corev1.ContainerPort{
 								{
-									ContainerPort: 22,
+									ContainerPort: 2222,
 								},
 							},
 							VolumeMounts: volumeMountsOnPod,

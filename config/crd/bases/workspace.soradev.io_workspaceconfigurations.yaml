@@ -40,14 +40,11 @@ spec:
           spec:
             description: WorkspaceConfigurationSpec defines the desired state of WorkspaceConfiguration
             properties:
-              organisation:
-                type: string
               username:
                 type: string
               workspaceNamespace:
                 type: string
             required:
-            - organisation
             - username
             - workspaceNamespace
             type: object

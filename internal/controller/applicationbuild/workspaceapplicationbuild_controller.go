@@ -99,6 +99,7 @@ func (r *WorkspaceApplicationBuildReconciler) reconcile(ctx context.Context, bui
 		ImageName:      buildConfig.Spec.ResourceName,
 		Tag:            buildConfig.Spec.SourceHash,
 		VolumeMounts:   buildConfig.Spec.VolumeMounts,
+		Insecure:       false,
 	}
 	desiredImageBuilderJob, err := imagebuilder.GenerateImageBuildJob(jobConfig)
 	if err != nil {

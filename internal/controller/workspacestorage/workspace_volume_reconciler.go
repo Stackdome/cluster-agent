@@ -22,7 +22,7 @@ type workspaceVolumeReconciler struct {
 
 func (r *workspaceVolumeReconciler) reconcile(ctx context.Context, workspaceStorage *workspacev1alpha1.WorkspaceStorage) (subReconcilerResult, error) {
 	logger := controller.LoggerFromContext(ctx)
-	logger.Info("reconciling pvc")
+	logger.Info("reconciling workspacevolume")
 	existingVolumes := make(map[string]*workspacev1alpha1.WorkspaceVolume)
 	for i := range workspaceStorage.Spec.ResourceStorageSpecs {
 		currentResource := &workspaceStorage.Spec.ResourceStorageSpecs[i]

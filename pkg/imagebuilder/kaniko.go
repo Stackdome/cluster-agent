@@ -7,6 +7,8 @@ import (
 	"text/template"
 
 	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"sigs.k8s.io/yaml"
 	"soradev.io/cluster-agent/api/v1alpha1"
 )
@@ -27,10 +29,9 @@ spec:
         - "--dockerfile={{ .DockerfilePath }}"
         - "--context=dir://{{ .Context }}"
         - "--destination={{ .Registry }}/{{ .ImageName }}:{{ .Tag }}"
-        - "--insecure-registry=true"
-        - "--insecure=true"
-        - "--insecure-pull=true"
-        - "--skip-push-permission-check=true"
+        - "--insecure-registry={{ .Insecure }}"
+        - "--insecure={{ .Insecure }}"
+        - "--insecure-pull={{ .Insecure }}"
         volumeMounts:
         {{- range .VolumeMounts }}
         - name: {{ .PvcName }}
@@ -100,6 +101,7 @@ func (b *BuildParams) ImageUrl() string {
 	return fmt.Sprintf("%s/%s:%s", b.Registry, b.ImageName, b.Tag)
 }
 
+// TODO: Configurable resource requirements
 func GenerateImageBuildJob(params BuildParams) (*batchv1.Job, error) {
 	jobYaml, err := params.generateImageBuildJobYAML()
 	if err != nil {
@@ -111,5 +113,15 @@ func GenerateImageBuildJob(params BuildParams) (*batchv1.Job, error) {
 	}
 	container := &job.Spec.Template.Spec.Containers[0]
 	container.Args = append(container.Args, "--cache=true", "--cache-copy-layers=true", "--cache-run-layers=true")
+	container.Resources = corev1.ResourceRequirements{
+		Limits: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("2000m"),
+			corev1.ResourceMemory: resource.MustParse("4Gi"),
+		},
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("1000m"),
+			corev1.ResourceMemory: resource.MustParse("2Gi"),
+		},
+	}
 	return job, nil
 }

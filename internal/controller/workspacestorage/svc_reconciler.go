@@ -16,7 +16,7 @@ import (
 	"soradev.io/cluster-agent/internal/controller"
 )
 
-// Exposes the storage server to the outside world for syncing.
+// Reconciles the internal svc for the storage server.
 type serviceReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -47,8 +47,8 @@ func (r *serviceReconciler) reconcile(ctx context.Context, workspaceStorage *wor
 			Ports: []corev1.ServicePort{
 				{
 					Name:       "ssh",
-					Port:       22,
-					TargetPort: intstr.FromInt(22),
+					Port:       2222,
+					TargetPort: intstr.FromInt(2222),
 				},
 			},
 		},

@@ -19,7 +19,6 @@ const (
 type WorkspaceConfigurationSpec struct {
 	WorkspaceNamespace string `json:"workspaceNamespace"`
 	Username           string `json:"username"`
-	Organisation       string `json:"organisation"`
 }
 
 // WorkspaceConfigurationStatus defines the observed state of WorkspaceConfiguration
