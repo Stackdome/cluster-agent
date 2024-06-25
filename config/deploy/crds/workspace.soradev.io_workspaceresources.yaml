@@ -89,6 +89,19 @@ spec:
                 type: array
               imageRegistry:
                 type: string
+              init:
+                properties:
+                  args:
+                    items:
+                      type: string
+                    type: array
+                  command:
+                    items:
+                      type: string
+                    type: array
+                required:
+                - command
+                type: object
               ports:
                 items:
                   properties:

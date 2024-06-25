@@ -47,6 +47,8 @@ type WorkspaceResourceSpec struct {
 	ApplicationBuildSpec    *ApplicationBuildSpec    `json:"applicationBuildSpec,omitempty"`
 	PrebuiltApplicationSpec *PrebuiltApplicationSpec `json:"prebuiltApplicationSpec,omitempty"`
 	// +optional
+	Init *WorkspaceResourceInit `json:"init,omitempty"`
+	// +optional
 	Command []string `json:"command"`
 	// +optional
 	Args []string `json:"args"`
@@ -63,6 +65,12 @@ type WorkspaceResourceSpec struct {
 	RestartRequest *metav1.Time `json:"restartRequest,omitempty"`
 	// +optional
 	StateFul bool `json:"stateFul"`
+}
+
+type WorkspaceResourceInit struct {
+	Command []string `json:"command"`
+	// +optional
+	Args []string `json:"args"`
 }
 
 type WorkspaceStorageRef struct {
