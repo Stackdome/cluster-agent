@@ -4,7 +4,7 @@ GOOS ?= $(shell go env GOOS)
 version:=$(shell date +%s)
 # Tag for the image:
 image_tag:=$(version)
-image_repository:=stackdome-registry/stackdome-api-server
+image_repository:=stackdome-registry/stackdome-controller
 external_image_registry:=us-west4-docker.pkg.dev/stackdome
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)

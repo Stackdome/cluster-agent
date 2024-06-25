@@ -119,6 +119,21 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.W
 			},
 		},
 	}
+
+	if resource.Spec.Init != nil {
+		desiredDeploymentForResource.Spec.Template.Spec.InitContainers = []corev1.Container{
+			{
+				ImagePullPolicy: corev1.PullIfNotPresent,
+				Name:            fmt.Sprintf("%s-init", resource.Name),
+				Image:           *image,
+				Command:         resource.Spec.Init.Command,
+				Args:            resource.Spec.Init.Args,
+				Env:             InterpolatedEnvVars(resource, dependencyMapIndex),
+				VolumeMounts:    InterpolatedVolumeMountList(resource),
+			},
+		}
+	}
+
 	if err := controllerutil.SetControllerReference(resource, desiredDeploymentForResource, r.Scheme); err != nil {
 		return resultNil, err
 	}

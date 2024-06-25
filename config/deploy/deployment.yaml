@@ -22,7 +22,7 @@ spec:
           type: RuntimeDefault
       containers:
       - name: manager
-        image: us-west4-docker.pkg.dev/stackdome/stackdome-registry/stackdome-api-server:1718992378
+        image: us-west4-docker.pkg.dev/stackdome/stackdome-registry/stackdome-controller:1719314182
         args:
         - --leader-elect
         livenessProbe:
