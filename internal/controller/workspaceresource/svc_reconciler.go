@@ -30,7 +30,7 @@ type svcReconciler struct {
 }
 
 func ResourceSVCName(resource *v1alpha1.WorkspaceResource) string {
-	return fmt.Sprintf("%s-svc", resource.Name)
+	return resource.Name
 }
 
 func (r *svcReconciler) reconcile(ctx context.Context, resource *v1alpha1.WorkspaceResource) (subReconcilerResult, error) {
@@ -65,6 +65,15 @@ func (r *svcReconciler) reconcile(ctx context.Context, resource *v1alpha1.Worksp
 
 		resource.Status.ExternalAddress = r.buildExternalAddresses(portSubdomainMap, workspace.Spec.Domain)
 	}
+	// Headless service.
+	svc, err := r.ensureSvc(ctx, resource, resource.Spec.Ports)
+	if err != nil {
+		return resultNil, err
+	}
+	if svc == nil {
+		return r.handleServiceNotReady(ctx)
+	}
+	resource.Status.InternalAddress = &svc.Name
 	r.w.reportWorkspaceResourceReady(resource)
 	return resultNil, nil
 }
@@ -172,18 +181,33 @@ func (r *svcReconciler) ensureSvc(ctx context.Context, resource *v1alpha1.Worksp
 		})
 	}
 
-	desiredSvc := &corev1.Service{
-		ObjectMeta: v1.ObjectMeta{
-			Name:      ResourceSVCName(resource),
-			Namespace: resource.Namespace,
-		},
-		Spec: corev1.ServiceSpec{
-			Selector: GetDeploymentPodLabelForResource(resource),
-			Type:     corev1.ServiceTypeClusterIP,
-			Ports:    svcPorts,
-		},
+	var desiredSvc corev1.Service
+	if len(svcPorts) > 0 {
+		desiredSvc = corev1.Service{
+			ObjectMeta: v1.ObjectMeta{
+				Name:      ResourceSVCName(resource),
+				Namespace: resource.Namespace,
+			},
+			Spec: corev1.ServiceSpec{
+				Selector: GetDeploymentPodLabelForResource(resource),
+				Type:     corev1.ServiceTypeClusterIP,
+				Ports:    svcPorts,
+			},
+		}
+	} else {
+		desiredSvc = corev1.Service{
+			ObjectMeta: v1.ObjectMeta{
+				Name:      ResourceSVCName(resource),
+				Namespace: resource.Namespace,
+			},
+			Spec: corev1.ServiceSpec{
+				Selector:  GetDeploymentPodLabelForResource(resource),
+				ClusterIP: "None",
+			},
+		}
 	}
-	if err := controllerutil.SetControllerReference(resource, desiredSvc, r.Scheme); err != nil {
+
+	if err := controllerutil.SetControllerReference(resource, &desiredSvc, r.Scheme); err != nil {
 		return nil, err
 	}
 	logger.Info("in ensure svc")
@@ -197,11 +221,11 @@ func (r *svcReconciler) ensureSvc(ctx context.Context, resource *v1alpha1.Worksp
 		existingSvc,
 	); err != nil {
 		if apierrors.IsNotFound(err) {
-			return nil, r.Client.Create(ctx, desiredSvc)
+			return nil, r.Client.Create(ctx, &desiredSvc)
 		}
 		return nil, err
 	}
-	if controller.AreServicesEqual(desiredSvc, existingSvc) {
+	if controller.AreServicesEqual(&desiredSvc, existingSvc) {
 		return existingSvc, nil
 	}
 	return nil, nil
