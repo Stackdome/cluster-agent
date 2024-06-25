@@ -45,7 +45,6 @@ spec:
             properties:
               domain:
                 description: 'SLD+TLD. Example: example.io'
-                pattern: ^[a-zA-Z0-9-]+\.[a-zA-Z]+$
                 type: string
               organisation:
                 type: string

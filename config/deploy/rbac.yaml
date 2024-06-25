@@ -1,0 +1,183 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: stackdome-operator
+  namespace: stackdome-control-plane
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: stackdome-operator
+  namespace: stackdome-control-plane
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: stackdome-operator
+  namespace: stackdome-control-plane
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: stackdome-operator
+subjects:
+- kind: ServiceAccount
+  name: stackdome-operator
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: stackdome-operator
+rules:
+- apiGroups:
+  - workspace.soradev.io
+  resources:
+  - workspaceapplicationbuilds
+  - workspaceapplicationbuilds/status
+  - workspaceconfigurations
+  - workspaceconfigurations/status
+  - workspaceresources
+  - workspaceresources/status
+  - workspaces
+  - workspaces/status
+  - workspacestorages
+  - workspacestorages/status
+  - workspacevolumes
+  - workspacevolumes/status
+  # TODO Add finalizers
+  verbs:
+  - get
+  - list
+  - watch
+  - update
+  - patch
+  - delete
+  - create
+- apiGroups:
+  - batch
+  resources:
+  - jobs
+  verbs:
+  - get
+  - watch
+  - update
+  - list
+  - patch
+  - create
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - ingresses
+  verbs:
+  - get
+  - watch
+  - update
+  - list
+  - patch
+  - create
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  verbs:
+  - get
+  - watch
+  - update
+  - list
+  - patch
+  - create
+- apiGroups:
+  - ""
+  resources:
+  - namespaces
+  - secrets
+  - services
+  - persistentvolumeclaims
+  verbs:
+  - create
+  - get
+  - list
+  - watch
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - ""
+  resources:
+  - serviceaccounts
+  verbs:
+  - get
+  - create
+  - update
+  - delete
+  - list
+  - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - roles
+  - rolebindings
+  verbs:
+  - get
+  - create
+  - update
+  - list
+  - delete
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - create
+  - update
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - networkpolicies
+  verbs:
+  - create
+  - delete
+  - update
+  - watch
+  - get
+  - list
+  - patch
+- apiGroups:
+  - "*"
+  resources:
+  - "*"
+  verbs:
+  - "*"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: stackdome-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: stackdome-operator
+subjects:
+- kind: ServiceAccount
+  name: stackdome-operator
+  namespace: stackdome-control-plane

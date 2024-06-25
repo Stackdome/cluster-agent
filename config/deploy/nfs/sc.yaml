@@ -1,0 +1,7 @@
+kind: StorageClass
+apiVersion: storage.k8s.io/v1
+metadata:
+  name: stackdome-nfs
+provisioner: stackdome.io/nfs
+mountOptions:
+  - vers=4.1
