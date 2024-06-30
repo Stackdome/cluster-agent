@@ -4,13 +4,16 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -67,21 +70,27 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.W
 	logger := controller.LoggerFromContext(ctx)
 	logger.Info("in workload reconciler for")
 	logger.Info(resource.Name)
-	dependencies, err := r.workspaceResourceReconciler.getDependencies(ctx, resource)
+
+	canRun, err := r.workspaceResourceReconciler.dependenciesAvailable(ctx, resource)
 	if err != nil {
 		return resultNil, err
 	}
-	logger.Info(fmt.Sprintf("dependencies from workload reconciler: %+v", dependencies))
+	if !canRun {
+		// Our dependencies are not yet ready, we will run when our dependencies are available.
+		reportWorkspaceResourceNotReady(resource, "DependenciesNotReady", "Dependent resources are not yet ready")
+		// We need to requeue this request because we dont get requeued automatically when the other dependencies are
+		// ready/updated.
+		return resultRequeueAfter(DefaultRequeueTime), nil
+	}
+
 	volumeInfo, err := r.getVolumeInfo(ctx, resource)
 	if err != nil {
 		return resultNil, err
 	}
-	dependencyMapIndex, err := r.makeDependencyMap(ctx, dependencies)
+	siblingsMap, err := r.makeSiblingsMap(ctx, resource)
 	if err != nil {
 		return resultNil, err
 	}
-
-	logger.Info(fmt.Sprintf("dependenciesmap from workload reconciler: %+v", dependencyMapIndex))
 
 	image, err := r.Image(ctx, resource)
 	if err != nil {
@@ -111,7 +120,7 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.W
 							Command:         resource.Spec.Command,
 							Args:            resource.Spec.Args,
 							Ports:           InterpolatedContainerPorts(resource),
-							Env:             InterpolatedEnvVars(resource, dependencyMapIndex),
+							Env:             InterpolatedEnvVars(logger, resource, siblingsMap),
 							VolumeMounts:    InterpolatedVolumeMountList(resource),
 						},
 					},
@@ -128,7 +137,7 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.W
 				Image:           *image,
 				Command:         resource.Spec.Init.Command,
 				Args:            resource.Spec.Init.Args,
-				Env:             InterpolatedEnvVars(resource, dependencyMapIndex),
+				Env:             InterpolatedEnvVars(logger, resource, siblingsMap),
 				VolumeMounts:    InterpolatedVolumeMountList(resource),
 			},
 		}
@@ -189,9 +198,25 @@ func (r *workloadReconciler) requiresRestart(resource *v1alpha1.WorkspaceResourc
 	}
 }
 
-func InterpolatedEnvVars(resource *v1alpha1.WorkspaceResource, infoMap map[string]*v1alpha1.WorkspaceResource) []corev1.EnvVar {
-	interpolationFn := func(key string) string {
-		return *infoMap[key].Status.InternalAddress
+func InterpolatedEnvVars(logger logr.Logger, resource *v1alpha1.WorkspaceResource, infoMap map[string]*v1alpha1.WorkspaceResource) []corev1.EnvVar {
+	interpolationFn := func(resourceKey string, port string) string {
+		resource := infoMap[resourceKey]
+		if resource == nil {
+			logger.Info("resource not found", "resourceKey", resourceKey)
+			return ""
+		}
+		intPort, err := strconv.Atoi(port)
+		if err != nil {
+			logger.Error(err, "failed to convert port to int", "port", port)
+			return ""
+		}
+		for _, addr := range resource.Status.ExternalAddress {
+			if addr.TargetPort == int32(intPort) {
+				return addr.Address
+			}
+		}
+		logger.Info("port not found", "port", port)
+		return ""
 	}
 	res := make([]corev1.EnvVar, 0)
 	for _, envVar := range resource.Spec.EnvironmentVariables {
@@ -285,18 +310,33 @@ func (r *workloadReconciler) getVolumeInfo(ctx context.Context, resource *v1alph
 	return res, nil
 }
 
-func (r *workloadReconciler) makeDependencyMap(ctx context.Context, deps []v1alpha1.WorkspaceResource) (map[string]*v1alpha1.WorkspaceResource, error) {
-	res := make(map[string]*v1alpha1.WorkspaceResource, len(deps))
-	for _, resource := range deps {
-		depResource := &v1alpha1.WorkspaceResource{}
-		if err := r.Client.Get(ctx, controller.GetNamespacedName(&resource), depResource); err != nil {
-			return nil, err
-		}
-		res[depResource.Name] = depResource
+func (r *workloadReconciler) makeSiblingsMap(ctx context.Context, currResource *v1alpha1.WorkspaceResource) (map[string]*v1alpha1.WorkspaceResource, error) {
+	res := make(map[string]*v1alpha1.WorkspaceResource)
+	siblings, err := r.GetSiblings(ctx, currResource)
+	if err != nil {
+		return nil, err
 	}
+	for _, resource := range siblings {
+		res[resource.Name] = &resource
+	}
+	res[currResource.Name] = currResource
 	return res, nil
 }
 
 func workspaceResourceName(workspaceName, resourceName string) string {
 	return fmt.Sprintf("%s-%s", workspaceName, resourceName)
+}
+
+func (r *workloadReconciler) GetSiblings(ctx context.Context, resource *v1alpha1.WorkspaceResource) ([]v1alpha1.WorkspaceResource, error) {
+	wrList := &v1alpha1.WorkspaceResourceList{}
+	workspaceRef := metav1.GetControllerOf(resource)
+	if workspaceRef == nil {
+		return nil, fmt.Errorf("missing owner ref for workspace resource")
+	}
+	if err := r.Client.List(ctx, wrList, client.InNamespace(resource.Namespace), client.MatchingFields{
+		ownerKey: workspaceRef.Name,
+	}); err != nil {
+		return nil, err
+	}
+	return wrList.Items, nil
 }

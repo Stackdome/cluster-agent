@@ -101,7 +101,7 @@ func (r *storageServerReconciler) ensureStorageServerDeployment(
 						{
 							Name: fmt.Sprintf("%s-storage-server", workspaceStorage.Name),
 							// TODO: Change
-							Image:           "asia-south1-docker.pkg.dev/stackdome/stackdome/storage-server:3",
+							Image:           "asia-south1-docker.pkg.dev/stackdome/stackdome/storage-server:4",
 							ImagePullPolicy: corev1.PullIfNotPresent,
 							Ports: []corev1.ContainerPort{
 								{
@@ -111,8 +111,8 @@ func (r *storageServerReconciler) ensureStorageServerDeployment(
 							VolumeMounts: volumeMountsOnPod,
 							Resources: corev1.ResourceRequirements{
 								Limits: corev1.ResourceList{
-									corev1.ResourceCPU:    resource.MustParse("500m"),
-									corev1.ResourceMemory: resource.MustParse("200Mi"),
+									corev1.ResourceCPU:    resource.MustParse("1000m"),
+									corev1.ResourceMemory: resource.MustParse("1000Mi"),
 								},
 							},
 						},

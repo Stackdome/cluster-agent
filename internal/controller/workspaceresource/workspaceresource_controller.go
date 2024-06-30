@@ -101,18 +101,6 @@ func (r *WorkspaceResourceReconciler) Reconcile(ctx context.Context, req ctrl.Re
 }
 
 func (r *WorkspaceResourceReconciler) reconcile(ctx context.Context, resource *v1alpha1.WorkspaceResource) (ctrl.Result, error) {
-	canRun, err := r.dependenciesAvailable(ctx, resource)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if !canRun {
-		// Our dependencies are not yet ready, we will run when our dependencies are available.
-		reportWorkspaceResourceNotReady(resource, "DependenciesNotReady", "Dependent resources are not yet ready")
-		// We need to requeue this request because we dont get requeued automatically when the other dependencies are
-		// ready/updated.
-		return ctrl.Result{RequeueAfter: DefaultRequeueTime}, nil
-	}
-
 	for _, subReconciler := range r.subReconcilers {
 		subReconcilerRes, err := subReconciler.reconcile(ctx, resource)
 		switch {
@@ -228,6 +216,20 @@ func (r *WorkspaceResourceReconciler) getDependencies(ctx context.Context, resou
 		return nil, fmt.Errorf("missing workspace resource deps")
 	}
 	return res, nil
+}
+
+func (r *WorkspaceResourceReconciler) GetSiblings(ctx context.Context, resource *v1alpha1.WorkspaceResource) ([]v1alpha1.WorkspaceResource, error) {
+	wrList := &v1alpha1.WorkspaceResourceList{}
+	workspaceRef := metav1.GetControllerOf(resource)
+	if workspaceRef == nil {
+		return nil, fmt.Errorf("missing owner ref for workspace resource")
+	}
+	if err := r.Client.List(ctx, wrList, client.InNamespace(resource.Namespace), client.MatchingFields{
+		ownerKey: workspaceRef.Name,
+	}); err != nil {
+		return nil, err
+	}
+	return wrList.Items, nil
 }
 
 func (r *WorkspaceResourceReconciler) dependenciesAvailable(ctx context.Context, resource *v1alpha1.WorkspaceResource) (bool, error) {
