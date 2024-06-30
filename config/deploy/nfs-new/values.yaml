@@ -1,0 +1,14 @@
+nfs:
+  server: nfs-server.ashish-new111-19-workspace.svc.cluster.local
+  path: /exports
+storageClass:
+  name: nfs-client-1
+  defaultClass: false
+  allowVolumeExpansion: true
+  reclaimPolicy: Delete
+  archiveOnDelete: false
+  mountOptions:
+    - nfsvers=4.2
+    - nconnect=8
+    - hard
+    - noatime
