@@ -84,6 +84,7 @@ func constructWorkspaceResourceCR(workspace *v1alpha1.Workspace, resourceSpec *v
 			VolumeMounts:            resourceSpec.Spec.VolumeMounts,
 			Ports:                   resourceSpec.Spec.Ports,
 			Command:                 resourceSpec.Spec.Command,
+			Init:                    resourceSpec.Spec.Init,
 			Args:                    resourceSpec.Spec.Args,
 			DependsOn:               resourceSpec.Spec.DependsOn,
 			RestartRequest:          resourceSpec.Spec.RestartRequest,

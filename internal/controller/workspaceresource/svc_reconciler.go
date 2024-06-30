@@ -34,46 +34,34 @@ func ResourceSVCName(resource *v1alpha1.WorkspaceResource) string {
 }
 
 func (r *svcReconciler) reconcile(ctx context.Context, resource *v1alpha1.WorkspaceResource) (subReconcilerResult, error) {
-	if len(resource.Spec.Ports) > 0 {
-		workspace, err := r.getWorkspace(ctx, resource)
-		if err != nil {
-			return resultNil, err
-		}
-		svc, err := r.ensureSvc(ctx, resource, resource.Spec.Ports)
-		if err != nil {
-			return resultNil, err
-		}
-
-		if svc == nil {
-			return r.handleServiceNotReady(ctx)
-		}
-
-		resource.Status.InternalAddress = &svc.Name
-		if !resource.Spec.HasExposedPort() {
-			r.w.reportWorkspaceResourceReady(resource)
-			return resultNil, nil
-		}
-
-		portSubdomainMap, err := r.reconcileHttpProxyForService(ctx, resource, svc, workspace)
-		if err != nil {
-			return resultNil, err
-		}
-
-		if portSubdomainMap == nil {
-			return r.handleServiceNotReady(ctx)
-		}
-
-		resource.Status.ExternalAddress = r.buildExternalAddresses(portSubdomainMap, workspace.Spec.Domain)
+	workspace, err := r.getWorkspace(ctx, resource)
+	if err != nil {
+		return resultNil, err
 	}
-	// Headless service.
 	svc, err := r.ensureSvc(ctx, resource, resource.Spec.Ports)
 	if err != nil {
 		return resultNil, err
 	}
+
 	if svc == nil {
 		return r.handleServiceNotReady(ctx)
 	}
+
 	resource.Status.InternalAddress = &svc.Name
+	if !resource.Spec.HasExposedPort() {
+		r.w.reportWorkspaceResourceReady(resource)
+		return resultNil, nil
+	}
+
+	portSubdomainMap, err := r.reconcileHttpProxyForService(ctx, resource, svc, workspace)
+	if err != nil {
+		return resultNil, err
+	}
+
+	if portSubdomainMap == nil {
+		return r.handleServiceNotReady(ctx)
+	}
+	resource.Status.ExternalAddress = r.buildExternalAddresses(portSubdomainMap, workspace.Spec.Domain)
 	r.w.reportWorkspaceResourceReady(resource)
 	return resultNil, nil
 }
@@ -136,6 +124,10 @@ func (r *svcReconciler) reconcileHttpProxyForService(
 		ObjectMeta: v1.ObjectMeta{
 			Name:      httpProxyNameForResource(resource.Name),
 			Namespace: resource.Namespace,
+			Annotations: map[string]string{
+				"projectcontour.io/websocket-routes": "/",
+				"projectcontour.io/response-timeout": "3600s",
+			},
 		},
 		Spec: networkingv1.IngressSpec{
 			Rules: rules,
@@ -168,10 +160,6 @@ func httpProxyNameForResource(resourceName string) string {
 
 func (r *svcReconciler) ensureSvc(ctx context.Context, resource *v1alpha1.WorkspaceResource, ports []v1alpha1.Port) (*corev1.Service, error) {
 	logger := controller.LoggerFromContext(ctx)
-	if len(ports) == 0 {
-		return nil, nil
-	}
-
 	svcPorts := make([]corev1.ServicePort, 0)
 	for _, port := range ports {
 		svcPorts = append(svcPorts, corev1.ServicePort{
