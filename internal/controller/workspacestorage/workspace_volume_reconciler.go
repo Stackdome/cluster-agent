@@ -24,9 +24,8 @@ func (r *workspaceVolumeReconciler) reconcile(ctx context.Context, workspaceStor
 	logger := controller.LoggerFromContext(ctx)
 	logger.Info("reconciling workspacevolume")
 	existingVolumes := make(map[string]*workspacev1alpha1.WorkspaceVolume)
-	for i := range workspaceStorage.Spec.ResourceStorageSpecs {
-		currentResource := &workspaceStorage.Spec.ResourceStorageSpecs[i]
-		reconcileRes, existingVolume, err := r.reconcileWorkspaceVolume(ctx, currentResource, workspaceStorage)
+	for volumeName, volumeSpec := range workspaceStorage.Spec.ResourceStorageSpecs {
+		reconcileRes, existingVolume, err := r.reconcileWorkspaceVolume(ctx, volumeName, volumeSpec, workspaceStorage)
 		switch {
 		case err != nil:
 			return resultNil, err
@@ -42,10 +41,10 @@ func (r *workspaceVolumeReconciler) reconcile(ctx context.Context, workspaceStor
 
 // TODO: Remove any extra volumes.
 func (r *workspaceVolumeReconciler) reconcileWorkspaceVolume(
-	ctx context.Context, volumeSpec *workspacev1alpha1.ResourceStorageSpec, ws *workspacev1alpha1.WorkspaceStorage) (subReconcilerResult, *workspacev1alpha1.WorkspaceVolume, error) {
+	ctx context.Context, volumeName workspacev1alpha1.VolumeName, volumeSpec *workspacev1alpha1.WorkspaceVolumeSpec, ws *workspacev1alpha1.WorkspaceStorage) (subReconcilerResult, *workspacev1alpha1.WorkspaceVolume, error) {
 	desiredWorkspaceVolume := &workspacev1alpha1.WorkspaceVolume{
 		ObjectMeta: v1.ObjectMeta{
-			Name:      volumeSpec.VolumeName,
+			Name:      string(volumeName),
 			Namespace: ws.Namespace,
 			Labels: map[string]string{
 				workspacev1alpha1.WorkspaceStorageVolumeLabel: ws.Name,
@@ -53,9 +52,9 @@ func (r *workspaceVolumeReconciler) reconcileWorkspaceVolume(
 		},
 		Spec: workspacev1alpha1.WorkspaceVolumeSpec{
 			Size:               volumeSpec.Size,
-			Type:               volumeSpec.Type,
+			StorageClass:       volumeSpec.StorageClass,
 			NeedsSyncBeforeUse: volumeSpec.NeedsSyncBeforeUse,
-			DontAllowSync:      volumeSpec.DontAllowSync,
+			Source:             volumeSpec.Source,
 		},
 	}
 
@@ -102,7 +101,6 @@ func setWorkspaceVolumeStatus(workspaceStorage *workspacev1alpha1.WorkspaceStora
 	for volumeName, volume := range existingVolumes {
 		currentVolumeStatus := v1alpha1.VolumeStatus{
 			VolumeName:   volumeName,
-			VolumeType:   volume.Spec.Type,
 			Subpath:      workspaceStorage.MountPathForVolume(volumeName),
 			Available:    workspaceVolumeAvailable(volume),
 			LastSyncedAt: volume.Status.LastSyncedAt,

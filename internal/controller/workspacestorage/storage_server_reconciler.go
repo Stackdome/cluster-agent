@@ -20,13 +20,17 @@ import (
 	"soradev.io/cluster-agent/internal/controller"
 )
 
+const (
+	WorkspaceStorageLabel = "storage.stackdome.io/workspace"
+)
+
 type storageServerReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 }
 
 func WorkspaceStorageLabels(workspaceStorage *workspacev1alpha1.WorkspaceStorage) map[string]string {
-	return map[string]string{"storageFor": workspaceStorage.Name}
+	return map[string]string{WorkspaceStorageLabel: workspaceStorage.Spec.WorkspaceName}
 }
 
 func (r *storageServerReconciler) reconcile(ctx context.Context, workspaceStorage *workspacev1alpha1.WorkspaceStorage) (subReconcilerResult, error) {
@@ -135,12 +139,12 @@ func (r *storageServerReconciler) ensureStorageServerDeployment(
 		}
 		return resultNil, err
 	}
-
-	specChanged := !equality.Semantic.DeepDerivative(desiredDeployment.Spec, existingDeployment.Spec)
-	if specChanged {
+	containersChanged := !equality.Semantic.DeepDerivative(desiredDeployment.Spec.Template.Spec.Containers, existingDeployment.Spec.Template.Spec.Containers)
+	volumesChanged := !equality.Semantic.DeepDerivative(desiredDeployment.Spec.Template.Spec.Volumes, existingDeployment.Spec.Template.Spec.Volumes)
+	if containersChanged || volumesChanged {
 		logger.Info("Updating storage server deployment reconciler")
 		existingDeployment.Spec = desiredDeployment.Spec
-		return resultRequeue, r.Client.Update(ctx, existingDeployment)
+		return resultNil, r.Client.Update(ctx, existingDeployment)
 	}
 
 	if controller.DeploymentAvailable(existingDeployment) {

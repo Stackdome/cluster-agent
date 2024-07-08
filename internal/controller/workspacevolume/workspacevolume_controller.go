@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -16,9 +17,27 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"soradev.io/cluster-agent/api/v1alpha1"
 	"soradev.io/cluster-agent/internal/controller"
+)
+
+type subReconcilerResult struct {
+	resultNil          bool
+	resultStop         bool
+	resultRequeue      bool
+	resultRequeueAfter *time.Duration
+}
+
+var (
+	resultNil          = subReconcilerResult{resultNil: true}
+	resultStop         = subReconcilerResult{resultStop: true}
+	resultRequeue      = subReconcilerResult{resultRequeue: true}
+	resultRequeueAfter = func(t time.Duration) subReconcilerResult {
+		return subReconcilerResult{resultRequeueAfter: &t}
+	}
 )
 
 // WorkspaceVolumeReconciler reconciles a WorkspaceVolume object
@@ -30,6 +49,7 @@ type WorkspaceVolumeReconciler struct {
 func (r *WorkspaceVolumeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 	logger = logger.WithValues("workspacevolume", req.NamespacedName.String())
+	logger.Info("in workspace volume reconciler", "namespace", req.Namespace, "name", req.Name)
 	ctx = controller.ContextWithLogger(ctx, logger)
 	volume := &v1alpha1.WorkspaceVolume{}
 
@@ -45,27 +65,29 @@ func (r *WorkspaceVolumeReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, err
 	}
 
-	return res, r.Status().Update(ctx, volume)
-}
-
-func (r *WorkspaceVolumeReconciler) reconcile(ctx context.Context, volume *v1alpha1.WorkspaceVolume) (ctrl.Result, error) {
-	if err := r.ensurePVC(ctx, volume); err != nil {
-		return ctrl.Result{}, err
-	}
-	reportWorkspaceVolumeAvailable(volume)
-
 	if volume.Annotations != nil {
 		syncedAt, syncedOnce := volume.Annotations[v1alpha1.LastSyncedAtAnnotation]
 		if syncedOnce {
 			reportWorkspaceVolumeSyncedOnce(volume, syncedAt)
-			return ctrl.Result{}, nil
 		}
+	} else {
+		reportWorkspaceVolumeNotSynced(volume)
 	}
-	reportWorkspaceVolumeNotSynced(volume)
+
+	return res, r.Status().Update(ctx, volume)
+}
+
+func (r *WorkspaceVolumeReconciler) reconcile(ctx context.Context, volume *v1alpha1.WorkspaceVolume) (ctrl.Result, error) {
+	if err := r.reconcilePVC(ctx, volume); err != nil {
+		return ctrl.Result{}, err
+	}
+	if _, err := r.reconcileVolumeSource(ctx, volume); err != nil {
+		return ctrl.Result{}, err
+	}
 	return ctrl.Result{}, nil
 }
 
-func (r *WorkspaceVolumeReconciler) ensurePVC(ctx context.Context, volume *v1alpha1.WorkspaceVolume) error {
+func (r *WorkspaceVolumeReconciler) reconcilePVC(ctx context.Context, volume *v1alpha1.WorkspaceVolume) error {
 	// TODO, change this based on the type.
 	resourceSize, err := k8sresource.ParseQuantity(volume.Spec.Size)
 	if err != nil {
@@ -80,13 +102,15 @@ func (r *WorkspaceVolumeReconciler) ensurePVC(ctx context.Context, volume *v1alp
 		Spec: corev1.PersistentVolumeClaimSpec{
 			AccessModes: []corev1.PersistentVolumeAccessMode{
 				corev1.ReadWriteMany,
-				// corev1.ReadWriteOnce,
 			},
 			Resources: corev1.VolumeResourceRequirements{
 				Requests: corev1.ResourceList{corev1.ResourceStorage: resourceSize},
 			},
-			StorageClassName: ptr.To("nfs-client-1"),
 		},
+	}
+
+	if len(volume.Spec.StorageClass) != 0 {
+		desiredPVC.Spec.StorageClassName = &volume.Spec.StorageClass
 	}
 
 	if err := controllerutil.SetControllerReference(volume, desiredPVC, r.Scheme); err != nil {
@@ -111,10 +135,11 @@ func (r *WorkspaceVolumeReconciler) ensurePVC(ctx context.Context, volume *v1alp
 	// - PVC status to make sure they are ready.
 	// - existingPVC.Status.Conditions to check if its ready, only proceed further object reconcilation
 	// 	 if the pvc/storage is ready.
+	reportWorkspaceVolumeProvisioned(volume)
 	return nil
 }
 
-func reportWorkspaceVolumeAvailable(volume *v1alpha1.WorkspaceVolume) {
+func reportWorkspaceVolumeProvisioned(volume *v1alpha1.WorkspaceVolume) {
 	volume.Status.ObservedGeneration = volume.Generation
 	volume.Status.Phase = v1alpha1.WorkspaceVolumePhaseReady
 	volume.Status.PvcName = volume.Name
@@ -179,5 +204,23 @@ func (r *WorkspaceVolumeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.WorkspaceVolume{}).
 		Owns(&corev1.PersistentVolumeClaim{}).
+		Owns(&batchv1.Job{}).
+		Watches(&v1alpha1.WorkspaceResource{}, handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
+			wr := obj.(*v1alpha1.WorkspaceResource)
+			volumeMountSrcs := wr.VolumeMountSources()
+			if len(volumeMountSrcs) == 0 {
+				return []reconcile.Request{}
+			}
+			res := make([]reconcile.Request, 0)
+			for _, srcVolume := range volumeMountSrcs {
+				res = append(res, reconcile.Request{
+					NamespacedName: types.NamespacedName{
+						Name:      srcVolume,
+						Namespace: wr.Namespace,
+					},
+				})
+			}
+			return res
+		})).
 		Complete(r)
 }

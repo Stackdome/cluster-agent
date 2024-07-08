@@ -104,3 +104,19 @@ func GetNamespacedName(cr client.Object) types.NamespacedName {
 		Name:      cr.GetName(),
 	}
 }
+
+type Named interface {
+	GetName() string
+}
+
+func Unique[T Named](items []T) []T {
+	index := make(map[string]struct{})
+	list := []T{}
+	for _, item := range items {
+		if _, found := index[item.GetName()]; !found {
+			index[item.GetName()] = struct{}{}
+			list = append(list, item)
+		}
+	}
+	return list
+}

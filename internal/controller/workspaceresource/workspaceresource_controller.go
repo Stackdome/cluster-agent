@@ -18,25 +18,24 @@ package workspaceresource
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/utils/ptr"
-	"k8s.io/utils/strings/slices"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"soradev.io/cluster-agent/api/v1alpha1"
 	"soradev.io/cluster-agent/internal/controller"
 )
@@ -170,93 +169,19 @@ func (r *WorkspaceResourceReconciler) getApplicationBuildStatus(ctx context.Cont
 	res := &v1alpha1.BuildStatus{
 		Name:       existingApplicationBuild.Name,
 		SourceHash: existingApplicationBuild.Spec.SourceHash,
-		Phase:      ptr.To(string(existingApplicationBuild.Status.Phase)),
+		ShortHash:  existingApplicationBuild.Spec.SourceHash[:7],
+		Phase:      string(existingApplicationBuild.Status.Phase),
 	}
 
 	availableCond := meta.FindStatusCondition(existingApplicationBuild.Status.Conditions, string(v1alpha1.WorkspaceApplicationBuildAvailable))
 	if availableCond != nil {
-		res.Available = ptr.To(availableCond.Status == metav1.ConditionTrue)
-		res.Message = ptr.To(availableCond.Message)
-		res.Reason = ptr.To(availableCond.Reason)
+		res.Available = availableCond.Status == metav1.ConditionTrue
+		res.Message = availableCond.Message
+		res.Reason = availableCond.Reason
 	} else {
-		res.Available = ptr.To(false)
+		res.Available = false
 	}
 	return res, nil
-}
-
-func (r *WorkspaceResourceReconciler) getDependencies(ctx context.Context, resource *v1alpha1.WorkspaceResource) ([]v1alpha1.WorkspaceResource, error) {
-	logger := controller.LoggerFromContext(ctx)
-	if len(resource.Spec.DependsOn) == 0 {
-		return nil, nil
-	}
-	wrList := &v1alpha1.WorkspaceResourceList{}
-	workspaceRef := metav1.GetControllerOf(resource)
-	if workspaceRef == nil {
-		return nil, fmt.Errorf("missing owner ref for workspace resource")
-	}
-	if err := r.Client.List(ctx, wrList, client.InNamespace(resource.Namespace), client.MatchingFields{
-		ownerKey: workspaceRef.Name,
-	}); err != nil {
-		return nil, err
-	}
-
-	logger.Info(fmt.Sprintf("children of workspace: %+v", wrList.Items))
-	dependsOn := resource.Spec.DependsOn
-
-	// for _, dep := range resource.Spec.DependsOn {
-	// 	dependsOn = append(dependsOn, resource.Name)
-	// }
-	res := make([]v1alpha1.WorkspaceResource, 0)
-	for _, wr := range wrList.Items {
-		if slices.Contains(dependsOn, wr.Name) {
-			res = append(res, wr)
-		}
-	}
-	if len(res) != len(resource.Spec.DependsOn) {
-		return nil, fmt.Errorf("missing workspace resource deps")
-	}
-	return res, nil
-}
-
-func (r *WorkspaceResourceReconciler) GetSiblings(ctx context.Context, resource *v1alpha1.WorkspaceResource) ([]v1alpha1.WorkspaceResource, error) {
-	wrList := &v1alpha1.WorkspaceResourceList{}
-	workspaceRef := metav1.GetControllerOf(resource)
-	if workspaceRef == nil {
-		return nil, fmt.Errorf("missing owner ref for workspace resource")
-	}
-	if err := r.Client.List(ctx, wrList, client.InNamespace(resource.Namespace), client.MatchingFields{
-		ownerKey: workspaceRef.Name,
-	}); err != nil {
-		return nil, err
-	}
-	return wrList.Items, nil
-}
-
-func (r *WorkspaceResourceReconciler) dependenciesAvailable(ctx context.Context, resource *v1alpha1.WorkspaceResource) (bool, error) {
-	if len(resource.Spec.DependsOn) == 0 {
-		return true, nil
-	}
-	dependencyList, err := r.getDependencies(ctx, resource)
-	logger := controller.LoggerFromContext(ctx)
-	logger.Info(fmt.Sprintf("deps: %+v, len: %d", dependencyList, len(dependencyList)))
-	if err != nil {
-		return false, err
-	}
-	if len(dependencyList) != len(resource.Spec.DependsOn) {
-		return false, fmt.Errorf("some dependency services are not yet created")
-	}
-
-	unreadyDeps := []*v1alpha1.WorkspaceResource{}
-	for i := range dependencyList {
-		currentDep := dependencyList[i]
-		if !workspaceAvailable(&currentDep) {
-			unreadyDeps = append(unreadyDeps, &currentDep)
-		}
-	}
-	if len(unreadyDeps) > 0 {
-		return false, nil
-	}
-	return true, nil
 }
 
 func workspaceAvailable(resource *v1alpha1.WorkspaceResource) bool {
@@ -280,11 +205,7 @@ func NewWorkspaceResourceReconciler(client client.Client, scheme *runtime.Scheme
 			Client: client,
 			Scheme: scheme,
 		},
-		&workloadReconciler{
-			Client:                      client,
-			Scheme:                      scheme,
-			workspaceResourceReconciler: w,
-		},
+		newWorkloadReconciler(client, scheme),
 		&svcReconciler{
 			Client: client,
 			Scheme: scheme,
@@ -292,6 +213,14 @@ func NewWorkspaceResourceReconciler(client client.Client, scheme *runtime.Scheme
 	}
 	w.subReconcilers = subReconcilers
 	return w
+}
+
+func applicationBuildComplete(wab *v1alpha1.WorkspaceApplicationBuild) bool {
+	availableCond := meta.FindStatusCondition(wab.Status.Conditions, string(v1alpha1.WorkspaceApplicationBuildAvailable))
+	if availableCond != nil && availableCond.Status == v1.ConditionTrue {
+		return true
+	}
+	return false
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -308,6 +237,23 @@ func (r *WorkspaceResourceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&v1alpha1.WorkspaceApplicationBuild{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &v1alpha1.WorkspaceResource{})).
 		Watches(&corev1.Service{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &v1alpha1.WorkspaceResource{})).
 		Watches(&appsv1.Deployment{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &v1alpha1.WorkspaceResource{})).
+		Watches(&v1alpha1.WorkspaceVolume{}, handler.EnqueueRequestsFromMapFunc(
+			func(ctx context.Context, o client.Object) []reconcile.Request {
+				volume := o.(*v1alpha1.WorkspaceVolume)
+				res := []reconcile.Request{}
+				if volume.Spec.Source != nil && len(volume.Spec.Source.BuildArtifacts) != 0 {
+					for _, artifact := range volume.Spec.Source.BuildArtifacts {
+						res = append(res, reconcile.Request{
+							NamespacedName: types.NamespacedName{
+								Namespace: volume.Namespace,
+								Name:      artifact.ResourceRef.String(),
+							},
+						})
+					}
+				}
+				return res
+			},
+		)).
 		WatchesRawSource(&source.Channel{Source: r.RequeueCh}, &handler.EnqueueRequestForObject{}).
 		Complete(r)
 }

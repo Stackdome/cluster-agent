@@ -22,7 +22,7 @@ func (r *WorkspaceReconciler) ReconcileWorkspaceResources(ctx context.Context, w
 
 	existingWRs := make([]*v1alpha1.WorkspaceResource, 0)
 	for _, desiredWorkspaceResource := range desiredWorkspaceResources {
-		existingWR, err := r.ensureWorkspaceResource(ctx, workspace, desiredWorkspaceResource)
+		existingWR, err := r.reconcileWorkspaceResource(ctx, workspace, desiredWorkspaceResource)
 		if err != nil {
 			return resultNil, err
 		}
@@ -47,7 +47,7 @@ func (r *WorkspaceReconciler) workspaceResourceAvailable(wr *v1alpha1.WorkspaceR
 	return false
 }
 
-func (r *WorkspaceReconciler) ensureWorkspaceResource(
+func (r *WorkspaceReconciler) reconcileWorkspaceResource(
 	ctx context.Context,
 	workspace *v1alpha1.Workspace,
 	desiredWR *v1alpha1.WorkspaceResource) (*v1alpha1.WorkspaceResource, error) {
@@ -91,5 +91,4 @@ func constructWorkspaceResourceCR(workspace *v1alpha1.Workspace, resourceSpec *v
 			StateFul:                resourceSpec.Spec.StateFul,
 		},
 	}
-
 }
