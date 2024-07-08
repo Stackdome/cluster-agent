@@ -17,6 +17,8 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"strings"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -114,12 +116,13 @@ type ExternalAddress struct {
 }
 
 type BuildStatus struct {
-	Name       string  `json:"name,omitempty"`
-	SourceHash string  `json:"sourceHash,omitempty"`
-	Available  *bool   `json:"available,omitempty"`
-	Reason     *string `json:"reason,omitempty"`
-	Message    *string `json:"message,omitempty"`
-	Phase      *string `json:"phase,omitempty"`
+	Name       string `json:"name,omitempty"`
+	SourceHash string `json:"sourceHash,omitempty"`
+	ShortHash  string `json:"shortHash,omitempty"`
+	Available  bool   `json:"available,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+	Message    string `json:"message,omitempty"`
+	Phase      string `json:"phase,omitempty"`
 }
 
 // WorkspaceResourceStatus defines the observed state of WorkspaceResource
@@ -184,6 +187,18 @@ func (w *WorkspaceResource) SplitPortsByInternalAndExternal() ([]Port, []Port) {
 		}
 	}
 	return internalPorts, externalPorts
+}
+
+func (v VolumeMount) SourceVolumeName() string {
+	return strings.Split(v.Source, "/")[0]
+}
+
+func (w *WorkspaceResource) VolumeMountSources() []string {
+	res := make([]string, 0)
+	for _, volumeMount := range w.Spec.VolumeMounts {
+		res = append(res, volumeMount.SourceVolumeName())
+	}
+	return res
 }
 
 func init() {

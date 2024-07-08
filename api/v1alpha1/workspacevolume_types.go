@@ -22,6 +22,12 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+type ResourceRef string
+
+func (r ResourceRef) String() string {
+	return string(r)
+}
+
 type WorkspaceVolumePhase string
 
 const (
@@ -32,8 +38,9 @@ const (
 type WorkspaceVolumeCondition string
 
 const (
-	WorkspaceVolumeConditionAvailable  WorkspaceVolumeCondition = "Available"
-	WorkspaceVolumeConditionSyncedOnce WorkspaceVolumeCondition = "SyncedOnce"
+	WorkspaceVolumeConditionAvailable   WorkspaceVolumeCondition         = "Available"
+	WorkspaceVolumeConditionSyncedOnce  WorkspaceVolumeCondition         = "SyncedOnce"
+	WorkspaceVolumeConditionInitialized WorkspaceResourceStatusCondition = "Initialized"
 )
 
 const (
@@ -44,11 +51,31 @@ const (
 type WorkspaceVolumeSpec struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
-	Size string              `json:"size"`
-	Type ResourceStorageType `json:"type"`
+	Size string `json:"size"`
 	// +optional
-	DontAllowSync      bool `json:"dontAllowSync"`
-	NeedsSyncBeforeUse bool `json:"needsSyncBeforeUse"`
+	StorageClass string `json:"storageClass"`
+	// +optional
+	Source             *VolumeSource `json:"source,omitempty"`
+	NeedsSyncBeforeUse bool          `json:"needsSyncBeforeUse"`
+}
+
+type VolumeSource struct {
+	// +optional
+	LocalDir *LocalDirSource `json:"localDir,omitempty"`
+
+	// +optional
+	BuildArtifacts []BuildArtifactSource `json:"buildArtifacts,omitempty"`
+}
+
+type LocalDirSource struct {
+	Path          string `json:"path"`
+	ContinousSync bool   `json:"continousSync"`
+}
+
+type BuildArtifactSource struct {
+	ResourceRef     ResourceRef `json:"resourceRef"`
+	SourcePath      string      `json:"sourcePath"`
+	DestinationPath string      `json:"destinationPath"`
 }
 
 // WorkspaceVolumeStatus defines the observed state of WorkspaceVolume
@@ -61,7 +88,23 @@ type WorkspaceVolumeStatus struct {
 	// +kubebuilder:default=Pending
 	Phase        WorkspaceVolumePhase `json:"phase,omitempty"`
 	LastSyncedAt *metav1.Time         `json:"LastSyncedAt,omitempty"`
+	// +optional
+	BuildArtifactSyncs map[ResourceRef]BuildArtifactSyncInfo `json:"buildArtifactSyncs,omitempty"`
 }
+
+type BuildArtifactSyncInfo struct {
+	BuildID string                  `json:"buildID"`
+	Status  BuildArtifactSyncStatus `json:"status"`
+}
+
+type BuildArtifactSyncStatus string
+
+const (
+	BuildArtifactSyncStatusPending    BuildArtifactSyncStatus = "Pending"
+	BuildArtifactSyncStatusInProgress BuildArtifactSyncStatus = "InProgress"
+	BuildArtifactSyncStatusCompleted  BuildArtifactSyncStatus = "Completed"
+	BuildArtifactSyncStatusFailed     BuildArtifactSyncStatus = "Failed"
+)
 
 //+kubebuilder:object:root=true
 //+kubebuilder:subresource:status
@@ -89,6 +132,16 @@ func (w *WorkspaceVolume) MarkAsSynced() {
 		w.Annotations = map[string]string{}
 	}
 	w.Annotations[LastSyncedAtAnnotation] = metav1.NewTime(time.Now().UTC()).String()
+}
+
+func (s *WorkspaceVolumeStatus) SetBuildArtifactSyncStatus(resourceRef ResourceRef, buildID string, status BuildArtifactSyncStatus) {
+	if s.BuildArtifactSyncs == nil {
+		s.BuildArtifactSyncs = map[ResourceRef]BuildArtifactSyncInfo{}
+	}
+	s.BuildArtifactSyncs[resourceRef] = BuildArtifactSyncInfo{
+		BuildID: buildID,
+		Status:  status,
+	}
 }
 
 func init() {

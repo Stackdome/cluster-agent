@@ -17,6 +17,8 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"fmt"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -32,6 +34,8 @@ type WorkspaceApplicationBuildStatusCondition string
 
 const (
 	WorkspaceApplicationBuildAvailable WorkspaceApplicationBuildStatusCondition = "Available"
+	WorkspaceApplicationBuildFailed    WorkspaceApplicationBuildStatusCondition = "Failed"
+	WorkspaceApplicationJobCreated     WorkspaceApplicationBuildStatusCondition = "BuildJobCreated"
 )
 
 // WorkspaceApplicationBuildSpec defines the desired state of WorkspaceApplicationBuild
@@ -40,14 +44,6 @@ type WorkspaceApplicationBuildSpec struct {
 	SourceHash   string     `json:"sourceHash"`
 	ContextRef   ContextRef `json:"contextRef"`
 	Registry     string     `json:"registry"`
-	// +optional
-	VolumeMounts []VolumeMountForInitialization `json:"volumeMounts"`
-}
-
-type VolumeMountForInitialization struct {
-	ContainerMountPath string `json:"containerMountPath"`
-	PvcName            string `json:"pvcName"`
-	SubPath            string `json:"subPath"`
 }
 
 type ContextRef struct {
@@ -91,6 +87,18 @@ type WorkspaceApplicationBuildList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []WorkspaceApplicationBuild `json:"items"`
+}
+
+func ApplicationBuildName(resource *WorkspaceResource) string {
+	return fmt.Sprintf("%s-%s", resource.Name, resource.Spec.ApplicationBuildSpec.BuildSourceHash[:7])
+}
+
+func (w *WorkspaceApplicationBuild) ShortBuildSrcHashFromStatus() string {
+	return w.Status.BuildSourceHash[:7]
+}
+
+func (w *WorkspaceApplicationBuild) ShortBuildSrcHashFromSpec() string {
+	return w.Spec.SourceHash[:7]
 }
 
 func init() {

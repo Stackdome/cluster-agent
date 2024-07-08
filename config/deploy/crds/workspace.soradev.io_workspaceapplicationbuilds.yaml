@@ -66,21 +66,6 @@ spec:
                 type: string
               sourceHash:
                 type: string
-              volumeMounts:
-                items:
-                  properties:
-                    containerMountPath:
-                      type: string
-                    pvcName:
-                      type: string
-                    subPath:
-                      type: string
-                  required:
-                  - containerMountPath
-                  - pvcName
-                  - subPath
-                  type: object
-                type: array
             required:
             - contextRef
             - registry

@@ -232,6 +232,8 @@ spec:
                     type: string
                   reason:
                     type: string
+                  shortHash:
+                    type: string
                   sourceHash:
                     type: string
                 type: object

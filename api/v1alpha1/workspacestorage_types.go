@@ -31,6 +31,8 @@ const (
 
 type WorkspaceStorageCondition string
 
+type VolumeName string
+
 const (
 	WorkspaceStorageAvailable WorkspaceStorageCondition = "Available"
 )
@@ -40,32 +42,11 @@ const (
 )
 
 type WorkspaceStorageSpec struct {
+	WorkspaceName string `json:"workspaceName"`
 	// // +kubebuilder:validation:Format:=base64
 	UserPublicSSHKey string `json:"userPublicSSHKey"`
 	// +kubebuilder:validation:Required
-	ResourceStorageSpecs []ResourceStorageSpec `json:"resourceStorageSpecs,omitempty"`
-}
-
-type ResourceStorageType string
-
-const (
-	SyncingStorageType ResourceStorageType = "SyncingType"
-	EmptyStorageType   ResourceStorageType = "EmptyStorageType"
-)
-
-type ResourceStorageSpec struct {
-	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MinLength=1
-	VolumeName string `json:"volumeName"`
-	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MinLength=1
-	Size string              `json:"size"`
-	Type ResourceStorageType `json:"type"`
-	// +optional
-	DontAllowSync      bool `json:"dontAllowSync"`
-	NeedsSyncBeforeUse bool `json:"needsSyncBeforeUse"`
-	// +optional
-	Hash string `json:"hash,omitempty"`
+	ResourceStorageSpecs map[VolumeName]*WorkspaceVolumeSpec `json:"resourceStorageSpecs,omitempty"`
 }
 
 type WorkspaceStorageStatus struct {
@@ -73,8 +54,6 @@ type WorkspaceStorageStatus struct {
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 	// Conditions is a list of status conditions ths object is in.
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
-	// DEPRECATED: This field is not part of any API contract
-	// it will go away as soon as kubectl can print conditions!
 	// Human readable status - please use .Conditions from code
 	// +kubebuilder:default=Pending
 	Phase WorkspaceStoragePhase `json:"phase,omitempty"`
@@ -86,8 +65,7 @@ type WorkspaceStorageStatus struct {
 }
 
 type VolumeStatus struct {
-	VolumeName string              `json:"volumeName"`
-	VolumeType ResourceStorageType `json:"volumeType"`
+	VolumeName string `json:"volumeName"`
 	// Path within the storage pod where the volume is mounted.
 	Subpath   string `json:"subpath"`
 	Available bool   `json:"Available"`
@@ -120,13 +98,8 @@ func (w *WorkspaceStorage) HasSyncRequiredStorageResources() bool {
 }
 
 func (w *WorkspaceStorage) ContainsVolume(volumeName string) bool {
-	for i := range w.Spec.ResourceStorageSpecs {
-		curr := &w.Spec.ResourceStorageSpecs[i]
-		if curr.VolumeName == volumeName {
-			return true
-		}
-	}
-	return false
+	_, found := w.Spec.ResourceStorageSpecs[VolumeName(volumeName)]
+	return found
 }
 
 func (w *WorkspaceStorage) MountPathForVolume(volumeName string) string {
@@ -142,13 +115,8 @@ func (w *WorkspaceStorage) VolumeInfo(volumeName string) *VolumeStatus {
 	return nil
 }
 
-func (w *WorkspaceStorage) ResourceVolumeSpecFor(volumeName string) *ResourceStorageSpec {
-	for i := range w.Spec.ResourceStorageSpecs {
-		if w.Spec.ResourceStorageSpecs[i].VolumeName == volumeName {
-			return &w.Spec.ResourceStorageSpecs[i]
-		}
-	}
-	return nil
+func (w *WorkspaceStorage) VolumeSpecFor(volumeName string) *WorkspaceVolumeSpec {
+	return w.Spec.ResourceStorageSpecs[VolumeName(volumeName)]
 }
 
 //+kubebuilder:object:root=true

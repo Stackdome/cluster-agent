@@ -48,34 +48,57 @@ spec:
           spec:
             properties:
               resourceStorageSpecs:
-                items:
+                additionalProperties:
+                  description: WorkspaceVolumeSpec defines the desired state of WorkspaceVolume
                   properties:
-                    dontAllowSync:
-                      type: boolean
-                    hash:
-                      type: string
                     needsSyncBeforeUse:
                       type: boolean
                     size:
                       minLength: 1
                       type: string
-                    type:
-                      type: string
-                    volumeName:
-                      minLength: 1
+                    source:
+                      properties:
+                        buildArtifacts:
+                          items:
+                            properties:
+                              destinationPath:
+                                type: string
+                              resourceRef:
+                                type: string
+                              sourcePath:
+                                type: string
+                            required:
+                            - destinationPath
+                            - resourceRef
+                            - sourcePath
+                            type: object
+                          type: array
+                        localDir:
+                          properties:
+                            continousSync:
+                              type: boolean
+                            path:
+                              type: string
+                          required:
+                          - continousSync
+                          - path
+                          type: object
+                      type: object
+                    storageClass:
                       type: string
                   required:
                   - needsSyncBeforeUse
                   - size
-                  - type
-                  - volumeName
                   type: object
-                type: array
+                type: object
               userPublicSSHKey:
                 description: // +kubebuilder:validation:Format:=base64
                 type: string
+              workspaceName:
+                type: string
             required:
             - userPublicSSHKey
+            - workspaceName
             type: object
           status:
             properties:
@@ -156,10 +179,7 @@ spec:
                 type: integer
               phase:
                 default: Pending
-                description: |-
-                  DEPRECATED: This field is not part of any API contract
-                  it will go away as soon as kubectl can print conditions!
-                  Human readable status - please use .Conditions from code
+                description: Human readable status - please use .Conditions from code
                 type: string
               serviceName:
                 description: Name of the svc which exposes this storage pod(internally.)
@@ -179,13 +199,10 @@ spec:
                       type: string
                     volumeName:
                       type: string
-                    volumeType:
-                      type: string
                   required:
                   - Available
                   - subpath
                   - volumeName
-                  - volumeType
                   type: object
                 type: array
             type: object
