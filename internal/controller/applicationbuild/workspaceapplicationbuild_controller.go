@@ -98,9 +98,9 @@ func (r *WorkspaceApplicationBuildReconciler) reconcile(ctx context.Context, bui
 		Registry:       buildConfig.Spec.Registry,
 		ImageName:      buildConfig.Spec.ResourceName,
 		Tag:            buildConfig.Spec.SourceHash,
-		VolumeMounts:   buildConfig.Spec.VolumeMounts,
 		Insecure:       false,
 	}
+
 	desiredImageBuilderJob, err := imagebuilder.GenerateImageBuildJob(jobConfig)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -119,28 +119,43 @@ func (r *WorkspaceApplicationBuildReconciler) reconcile(ctx context.Context, bui
 		existingJob,
 	); err != nil {
 		if apierrors.IsNotFound(err) {
-			return ctrl.Result{}, r.Client.Create(ctx, desiredImageBuilderJob)
+			return ctrl.Result{}, r.handleBuildJobCreation(ctx, desiredImageBuilderJob, buildConfig)
 		}
 		return ctrl.Result{}, err
 	}
-	JobCompletedCondition := findJobCompleteCondition(existingJob)
-
+	JobCompletedCondition := findJobCondition(existingJob, batchv1.JobComplete)
+	JobFailedCondition := findJobCondition(existingJob, batchv1.JobFailed)
 	if JobCompletedCondition != nil && JobCompletedCondition.Status == v1.ConditionStatus(metav1.ConditionTrue) {
 		buildConfig.Status.ImageUrl = jobConfig.ImageUrl()
 		reportWorkspaceApplicationBuildComplete(buildConfig)
 		return ctrl.Result{}, nil
 	}
-	reportWorkspaceApplicationBuildStatus(buildConfig, v1alpha1.WorkspaceApplicationBuildAvailable, metav1.ConditionFalse, "BuildJobNotYetCompleted")
-	return ctrl.Result{}, nil
-	// TODO: Improve this:
-	// - Consider all status conditions.
-	// - Refactor this big ass method.
+	if JobFailedCondition != nil && JobFailedCondition.Status == v1.ConditionStatus(metav1.ConditionTrue) {
+		reportWorkspaceApplicationBuildStatus(buildConfig, v1alpha1.WorkspaceApplicationBuildFailed, metav1.ConditionTrue, "BuildJobFailed")
+		return ctrl.Result{}, nil
+	}
 
+	reportWorkspaceApplicationBuildStatus(buildConfig, v1alpha1.WorkspaceApplicationBuildAvailable, metav1.ConditionFalse, "BuildJobNotYetComplete")
+	return ctrl.Result{}, nil
 }
 
-func findJobCompleteCondition(job *batchv1.Job) *batchv1.JobCondition {
+func (r *WorkspaceApplicationBuildReconciler) handleBuildJobCreation(ctx context.Context, desiredJob *batchv1.Job, buildConfig *v1alpha1.WorkspaceApplicationBuild) error {
+	if err := r.Client.Create(ctx, desiredJob); err != nil {
+		return err
+	}
+	buildConfig.Status.BuildSourceHash = buildConfig.Spec.SourceHash
+	meta.SetStatusCondition(&buildConfig.Status.Conditions, metav1.Condition{
+		Type:    string(v1alpha1.WorkspaceApplicationJobCreated),
+		Status:  metav1.ConditionTrue,
+		Reason:  "BuildJobCreated",
+		Message: "BuildJobCreated",
+	})
+	return nil
+}
+
+func findJobCondition(job *batchv1.Job, jobCondition batchv1.JobConditionType) *batchv1.JobCondition {
 	for i := range job.Status.Conditions {
-		if job.Status.Conditions[i].Type == batchv1.JobComplete {
+		if job.Status.Conditions[i].Type == jobCondition {
 			return &job.Status.Conditions[i]
 		}
 	}
@@ -170,6 +185,7 @@ func reportWorkspaceApplicationBuildStatus(
 	reason string,
 ) {
 	buildConfig.Status.ObservedGeneration = buildConfig.Generation
+	buildConfig.Status.BuildSourceHash = buildConfig.Spec.SourceHash
 	meta.SetStatusCondition(&buildConfig.Status.Conditions, metav1.Condition{
 		Type:               string(condition),
 		Status:             value,

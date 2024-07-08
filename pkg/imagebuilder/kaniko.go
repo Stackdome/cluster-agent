@@ -10,7 +10,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"sigs.k8s.io/yaml"
-	"soradev.io/cluster-agent/api/v1alpha1"
 )
 
 const jobTemplate = `
@@ -36,11 +35,11 @@ spec:
         {{- range .VolumeMounts }}
         - name: {{ .PvcName }}
           mountPath: {{ .ContainerMountPath }}
-          {{- if .SubPath }}
+          {{- if ne (len .SubPath) 0  }}	
           subPath: {{ .SubPath }}
           {{- end }}
         {{- end }}
-      restartPolicy: Never
+      restartPolicy: OnFailure
       volumes:
       {{- range .UniqueVolumes }}
       - name: {{ . }}
@@ -60,7 +59,13 @@ type BuildParams struct {
 	Tag            string
 	Insecure       bool
 	UniqueVolumes  []string
-	VolumeMounts   []v1alpha1.VolumeMountForInitialization
+	VolumeMounts   []VolumeMount
+}
+
+type VolumeMount struct {
+	ContainerMountPath string
+	PvcName            string
+	SubPath            string
 }
 
 func (b *BuildParams) generateImageBuildJobYAML() (string, error) {
@@ -68,9 +73,11 @@ func (b *BuildParams) generateImageBuildJobYAML() (string, error) {
 	if err != nil {
 		return "", err
 	}
-
+	if len(b.VolumeMounts) == 0 {
+		b.VolumeMounts = []VolumeMount{}
+	}
 	// Add default docker context for docker build.
-	b.VolumeMounts = append(b.VolumeMounts, v1alpha1.VolumeMountForInitialization{
+	b.VolumeMounts = append(b.VolumeMounts, VolumeMount{
 		ContainerMountPath: "/workspace",
 		PvcName:            b.PVCName,
 	})
@@ -112,16 +119,17 @@ func GenerateImageBuildJob(params BuildParams) (*batchv1.Job, error) {
 		return nil, fmt.Errorf("failed to decode Job YAML: %v", err)
 	}
 	container := &job.Spec.Template.Spec.Containers[0]
-	container.Args = append(container.Args, "--cache=true", "--cache-copy-layers=true", "--cache-run-layers=true")
 	container.Resources = corev1.ResourceRequirements{
 		Limits: corev1.ResourceList{
 			corev1.ResourceCPU:    resource.MustParse("2000m"),
-			corev1.ResourceMemory: resource.MustParse("4Gi"),
+			corev1.ResourceMemory: resource.MustParse("8Gi"),
 		},
 		Requests: corev1.ResourceList{
-			corev1.ResourceCPU:    resource.MustParse("1000m"),
-			corev1.ResourceMemory: resource.MustParse("2Gi"),
+			corev1.ResourceCPU:    resource.MustParse("200m"),
+			corev1.ResourceMemory: resource.MustParse("200Mi"),
 		},
 	}
+
+	container.Args = append(container.Args, "--cache=true", "--cache-copy-layers=true", "--cache-run-layers=true", "--cleanup=true")
 	return job, nil
 }
