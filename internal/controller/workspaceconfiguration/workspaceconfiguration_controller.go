@@ -3,11 +3,14 @@ package workspaceconfiguration
 import (
 	"context"
 	"fmt"
+	"time"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -62,6 +65,7 @@ func (r *WorkspaceConfigurationReconciler) reconcile(ctx context.Context, config
 		r.reconcileRole,
 		r.reconcileRoleBinding,
 		r.reconcileSASecret,
+		r.reconcileBusyBoxBinaryVolume,
 		r.statusReconciler,
 	}
 	for _, reconcileFn := range reconcileFns {
@@ -267,6 +271,116 @@ func (r *WorkspaceConfigurationReconciler) reconcileNamespace(ctx context.Contex
 	// NOOP.
 	return ctrl.Result{}, nil
 }
+func (r *WorkspaceConfigurationReconciler) reconcileBusyBoxBinaryVolume(ctx context.Context, config *workspacev1alpha1.WorkspaceConfiguration) (ctrl.Result, error) {
+	jobName := "copy-busybox-binary-to-volume"
+	namespace := config.Spec.WorkspaceNamespace
+	pvcName := BusyBoxPVCName()
+
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      pvcName,
+			Namespace: namespace,
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("500Mi")},
+			},
+		},
+	}
+
+	if err := controllerutil.SetControllerReference(config, pvc, r.Scheme); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	existingPVC := &corev1.PersistentVolumeClaim{}
+	if err := r.Client.Get(ctx, types.NamespacedName{Name: pvcName, Namespace: namespace}, existingPVC); err != nil {
+		if apierrors.IsNotFound(err) {
+			// Allow some time to provision the PVC.
+			return ctrl.Result{RequeueAfter: time.Second * 5}, r.Client.Create(ctx, pvc)
+		}
+		return ctrl.Result{}, err
+	}
+
+	desiredJob := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      jobName,
+			Namespace: namespace,
+		},
+		Spec: batchv1.JobSpec{
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:  "rsync",
+							Image: "asia-south1-docker.pkg.dev/stackdome/stackdome/rsync-busybox:1",
+							Command: []string{
+								"sh",
+								"-c",
+							},
+							Args: []string{"cp /app/rsync /binaries/rsync && chmod +x /binaries/rsync && cp /bin/busybox /binaries/busybox && chmod +x /binaries/busybox"},
+							VolumeMounts: []corev1.VolumeMount{
+								{
+									Name:      "binaries",
+									MountPath: "/binaries",
+								},
+							},
+						},
+					},
+					RestartPolicy: corev1.RestartPolicyOnFailure,
+					Volumes: []corev1.Volume{
+						{
+							Name: "binaries",
+							VolumeSource: corev1.VolumeSource{
+								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+									ClaimName: pvcName,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Set the WorkspaceConfiguration instance as the owner and controller
+	if err := controllerutil.SetControllerReference(config, desiredJob, r.Scheme); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	// Define the Job
+	existingJob := &batchv1.Job{}
+	if err := r.Get(ctx, client.ObjectKey{Name: jobName, Namespace: namespace}, existingJob); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ctrl.Result{}, r.Create(ctx, desiredJob)
+		}
+		return ctrl.Result{}, err
+	}
+
+	JobCompletedCondition := findJobCompleteCondition(existingJob)
+
+	if JobCompletedCondition != nil && JobCompletedCondition.Status == corev1.ConditionStatus(metav1.ConditionTrue) {
+		return ctrl.Result{}, nil
+	}
+
+	meta.SetStatusCondition(&config.Status.Conditions, metav1.Condition{
+		Type:               workspacev1alpha1.WorkspaceConfigurationAvailable,
+		ObservedGeneration: config.Generation,
+		Status:             metav1.ConditionFalse,
+		Reason:             "BusyBoxBinaryNotYetCopied",
+		Message:            "WorkspaceConfiguration not yet ready. BusyBox binary not yet copied.",
+	})
+	return ctrl.Result{}, nil
+}
+
+func findJobCompleteCondition(job *batchv1.Job) *batchv1.JobCondition {
+	for i := range job.Status.Conditions {
+		if job.Status.Conditions[i].Type == batchv1.JobComplete {
+			return &job.Status.Conditions[i]
+		}
+	}
+	return nil
+}
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *WorkspaceConfigurationReconciler) SetupWithManager(mgr ctrl.Manager) error {
@@ -277,5 +391,6 @@ func (r *WorkspaceConfigurationReconciler) SetupWithManager(mgr ctrl.Manager) er
 		Owns(&rbacv1.Role{}).
 		Owns(&rbacv1.RoleBinding{}).
 		Owns(&corev1.Secret{}).
+		Owns(&batchv1.Job{}).
 		Complete(r)
 }

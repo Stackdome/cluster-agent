@@ -21,3 +21,7 @@ func UserRoleBindingname(wsConfig *workspacev1alpha1.WorkspaceConfiguration) str
 func ServiceAccountSecretName(wsConfig *workspacev1alpha1.WorkspaceConfiguration) string {
 	return fmt.Sprintf("%s-secret", ServiceAccountName(wsConfig))
 }
+
+func BusyBoxPVCName() string {
+	return "busybox-pvc"
+}
