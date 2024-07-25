@@ -184,6 +184,8 @@ spec:
               serviceName:
                 description: Name of the svc which exposes this storage pod(internally.)
                 type: string
+              statusHash:
+                type: string
               workspaceVolumeInfo:
                 items:
                   properties:

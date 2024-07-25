@@ -176,6 +176,8 @@ spec:
                 type: string
               pvcName:
                 type: string
+              statusHash:
+                type: string
             required:
             - pvcName
             type: object

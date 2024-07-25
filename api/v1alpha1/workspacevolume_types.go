@@ -38,9 +38,8 @@ const (
 type WorkspaceVolumeCondition string
 
 const (
-	WorkspaceVolumeConditionAvailable   WorkspaceVolumeCondition         = "Available"
-	WorkspaceVolumeConditionSyncedOnce  WorkspaceVolumeCondition         = "SyncedOnce"
-	WorkspaceVolumeConditionInitialized WorkspaceResourceStatusCondition = "Initialized"
+	WorkspaceVolumeConditionAvailable  WorkspaceVolumeCondition = "Available"
+	WorkspaceVolumeConditionSyncedOnce WorkspaceVolumeCondition = "SyncedOnce"
 )
 
 const (
@@ -90,6 +89,7 @@ type WorkspaceVolumeStatus struct {
 	LastSyncedAt *metav1.Time         `json:"LastSyncedAt,omitempty"`
 	// +optional
 	BuildArtifactSyncs map[ResourceRef]BuildArtifactSyncInfo `json:"buildArtifactSyncs,omitempty"`
+	StatusHash         string                                `json:"statusHash,omitempty"`
 }
 
 type BuildArtifactSyncInfo struct {

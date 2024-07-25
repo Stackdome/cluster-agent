@@ -35,6 +35,7 @@ type VolumeName string
 
 const (
 	WorkspaceStorageAvailable WorkspaceStorageCondition = "Available"
+	WorkspaceStorageFailed    WorkspaceStorageCondition = "Failed"
 )
 
 const (
@@ -59,6 +60,7 @@ type WorkspaceStorageStatus struct {
 	Phase WorkspaceStoragePhase `json:"phase,omitempty"`
 	// +optional
 	WorkspaceVolumeStatus []VolumeStatus `json:"workspaceVolumeInfo,omitempty"`
+	StatusHash            string         `json:"statusHash,omitempty"`
 	// Name of the svc which exposes this storage pod(internally.)
 	// +optional
 	ServiceName string `json:"serviceName"`
