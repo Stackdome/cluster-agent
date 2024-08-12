@@ -9,7 +9,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"soradev.io/cluster-agent/api/v1alpha1"
-	"soradev.io/cluster-agent/internal/controller/workspaceconfiguration"
+	"soradev.io/cluster-agent/internal/controller/workspaceuser"
 )
 
 const (
@@ -74,7 +74,7 @@ func createVolumesAndMounts(volume *v1alpha1.WorkspaceVolume, buildSrcs []*v1alp
 				Name: "binaries",
 				VolumeSource: corev1.VolumeSource{
 					PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-						ClaimName: workspaceconfiguration.BusyBoxPVCName(),
+						ClaimName: workspaceuser.BusyBoxPVCName(),
 					},
 				},
 			},

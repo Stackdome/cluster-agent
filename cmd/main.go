@@ -40,9 +40,9 @@ import (
 	workspacev1alpha1 "soradev.io/cluster-agent/api/v1alpha1"
 	"soradev.io/cluster-agent/internal/controller/applicationbuild"
 	"soradev.io/cluster-agent/internal/controller/workspace"
-	"soradev.io/cluster-agent/internal/controller/workspaceconfiguration"
 	"soradev.io/cluster-agent/internal/controller/workspaceresource"
 	"soradev.io/cluster-agent/internal/controller/workspacestorage"
+	"soradev.io/cluster-agent/internal/controller/workspaceuser"
 	"soradev.io/cluster-agent/internal/controller/workspacevolume"
 	//+kubebuilder:scaffold:imports
 )
@@ -169,11 +169,11 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "WorkspaceVolume")
 		os.Exit(1)
 	}
-	if err = (&workspaceconfiguration.WorkspaceConfigurationReconciler{
+	if err = (&workspaceuser.WorkspaceUserReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "WorkspaceConfiguration")
+		setupLog.Error(err, "unable to create controller", "controller", "WorkspaceUser")
 		os.Exit(1)
 	}
 	//+kubebuilder:scaffold:builder
