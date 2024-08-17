@@ -3,11 +3,10 @@ package workspaceuser
 import (
 	"context"
 	"fmt"
-	"hash/fnv"
 	"slices"
+	"strconv"
 	"time"
 
-	"github.com/davecgh/go-spew/spew"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -18,7 +17,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/rand"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -129,9 +127,10 @@ func (r *WorkspaceUserReconciler) reconcileConfigNamespace(ctx context.Context, 
 }
 
 func (r *WorkspaceUserReconciler) statusReconciler(ctx context.Context, user *workspacev1alpha1.WorkspaceUser) (subReconcilerResult, error) {
-	objectStackdomeServerVersion, ok := user.Labels[workspacev1alpha1.StackdomeServerGenerationLabel]
+	objectStackdomeServerVersion, ok := user.Labels[workspacev1alpha1.StackdomeObjectGeneration]
 	if ok {
-		user.Status.ObservedStackdomeServerGeneration = objectStackdomeServerVersion
+		generation, _ := strconv.ParseInt(objectStackdomeServerVersion, 10, 64)
+		user.Status.ObservedStackdomeServerObjectGeneration = generation
 	}
 	existingSecret := &corev1.Secret{}
 	if err := r.Get(
@@ -166,22 +165,8 @@ func (r *WorkspaceUserReconciler) statusReconciler(ctx context.Context, user *wo
 		Reason:             "WorkspaceUserReady",
 		Message:            "WorkspaceUser ready",
 	})
-	user.Status.StatusHash = HashStatus(user)
+	user.Status.StatusHash = user.StatusHash()
 	return resultNil, nil
-}
-
-func HashStatus(user *workspacev1alpha1.WorkspaceUser) string {
-	hasher := fnv.New32a()
-	hasher.Reset()
-	printer := spew.ConfigState{
-		Indent:         " ",
-		SortKeys:       true,
-		DisableMethods: true,
-		SpewKeys:       true,
-	}
-	user.Status.StatusHash = ""
-	printer.Fprintf(hasher, "%#v", user.Status)
-	return rand.SafeEncodeString(fmt.Sprint(hasher.Sum32()))
 }
 
 func (r *WorkspaceUserReconciler) reconcileSA(ctx context.Context, user *workspacev1alpha1.WorkspaceUser) (subReconcilerResult, error) {

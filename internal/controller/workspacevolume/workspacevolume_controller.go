@@ -73,7 +73,7 @@ func (r *WorkspaceVolumeReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	} else {
 		reportWorkspaceVolumeNotSynced(volume)
 	}
-
+	volume.Status.StatusHash = volume.StatusHash()
 	return res, r.Status().Update(ctx, volume)
 }
 

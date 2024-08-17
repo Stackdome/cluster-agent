@@ -39,6 +39,14 @@ spec:
           spec:
             description: WorkspaceVolumeSpec defines the desired state of WorkspaceVolume
             properties:
+              annotations:
+                additionalProperties:
+                  type: string
+                type: object
+              labels:
+                additionalProperties:
+                  type: string
+                type: object
               needsSyncBeforeUse:
                 type: boolean
               size:

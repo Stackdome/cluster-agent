@@ -18,8 +18,11 @@ package v1alpha1
 
 import (
 	"fmt"
+	"hash/fnv"
 
+	"github.com/davecgh/go-spew/spew"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/rand"
 )
 
 type WorkspaceStoragePhase string
@@ -39,7 +42,7 @@ const (
 )
 
 const (
-	WorkspaceStorageVolumeLabel = "workspace.soradev.io/workspacestorageName"
+	WorkspaceStorageLabel = "workspace.soradev.io/workspacestorageName"
 )
 
 type WorkspaceStorageSpec struct {
@@ -51,8 +54,7 @@ type WorkspaceStorageSpec struct {
 }
 
 type WorkspaceStorageStatus struct {
-	// The most recent generation observed by the controller.
-	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+	ObservedStackdomeServerObjectGeneration int64 `json:"observedStackdomeServerObjectGeneration,omitempty"`
 	// Conditions is a list of status conditions ths object is in.
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 	// Human readable status - please use .Conditions from code
@@ -88,6 +90,20 @@ type WorkspaceStorage struct {
 
 	Spec   WorkspaceStorageSpec   `json:"spec,omitempty"`
 	Status WorkspaceStorageStatus `json:"status,omitempty"`
+}
+
+func (w *WorkspaceStorage) StatusHash() string {
+	hasher := fnv.New32a()
+	hasher.Reset()
+	printer := spew.ConfigState{
+		Indent:         " ",
+		SortKeys:       true,
+		DisableMethods: true,
+		SpewKeys:       true,
+	}
+	w.Status.StatusHash = ""
+	printer.Fprintf(hasher, "%#v", w.Status)
+	return rand.SafeEncodeString(fmt.Sprint(hasher.Sum32()))
 }
 
 func (w *WorkspaceStorage) HasSyncRequiredStorageResources() bool {

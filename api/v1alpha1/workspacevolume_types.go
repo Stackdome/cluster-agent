@@ -17,9 +17,13 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"fmt"
+	"hash/fnv"
 	"time"
 
+	"github.com/davecgh/go-spew/spew"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/rand"
 )
 
 type ResourceRef string
@@ -48,6 +52,10 @@ const (
 
 // WorkspaceVolumeSpec defines the desired state of WorkspaceVolume
 type WorkspaceVolumeSpec struct {
+	// +optional
+	Annotations map[string]string `json:"annotations,omitempty"`
+	// +optional
+	Labels map[string]string `json:"labels,omitempty"`
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	Size string `json:"size"`
@@ -90,6 +98,20 @@ type WorkspaceVolumeStatus struct {
 	// +optional
 	BuildArtifactSyncs map[ResourceRef]BuildArtifactSyncInfo `json:"buildArtifactSyncs,omitempty"`
 	StatusHash         string                                `json:"statusHash,omitempty"`
+}
+
+func (w *WorkspaceVolume) StatusHash() string {
+	hasher := fnv.New32a()
+	hasher.Reset()
+	printer := spew.ConfigState{
+		Indent:         " ",
+		SortKeys:       true,
+		DisableMethods: true,
+		SpewKeys:       true,
+	}
+	w.Status.StatusHash = ""
+	printer.Fprintf(hasher, "%#v", w.Status)
+	return rand.SafeEncodeString(fmt.Sprint(hasher.Sum32()))
 }
 
 type BuildArtifactSyncInfo struct {

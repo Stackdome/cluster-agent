@@ -175,8 +175,9 @@ spec:
                 items:
                   type: string
                 type: array
-              observedStackdomeServerGeneration:
-                type: string
+              observedStackdomeServerObjectGeneration:
+                format: int64
+                type: integer
               phase:
                 default: Pending
                 type: string

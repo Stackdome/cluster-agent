@@ -1,8 +1,13 @@
 package v1alpha1
 
 import (
+	"fmt"
+	"hash/fnv"
+
+	"github.com/davecgh/go-spew/spew"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/rand"
 )
 
 type WorkspaceUserPhase string
@@ -28,7 +33,7 @@ type WorkspaceUserSpec struct {
 
 // WorkspaceUserStatus defines the observed state of WorkspaceUser
 type WorkspaceUserStatus struct {
-	ObservedStackdomeServerGeneration string `json:"observedStackdomeServerGeneration,omitempty"`
+	ObservedStackdomeServerObjectGeneration int64 `json:"observedStackdomeServerObjectGeneration,omitempty"`
 	// Conditions is a list of status conditions this object is in.
 	Conditions          []metav1.Condition `json:"conditions,omitempty"`
 	Namespaces          []string           `json:"namespaces,omitempty"`
@@ -50,6 +55,20 @@ type WorkspaceUser struct {
 
 	Spec   WorkspaceUserSpec   `json:"spec,omitempty"`
 	Status WorkspaceUserStatus `json:"status,omitempty"`
+}
+
+func (user *WorkspaceUser) StatusHash() string {
+	hasher := fnv.New32a()
+	hasher.Reset()
+	printer := spew.ConfigState{
+		Indent:         " ",
+		SortKeys:       true,
+		DisableMethods: true,
+		SpewKeys:       true,
+	}
+	user.Status.StatusHash = ""
+	printer.Fprintf(hasher, "%#v", user.Status)
+	return rand.SafeEncodeString(fmt.Sprint(hasher.Sum32()))
 }
 
 //+kubebuilder:object:root=true

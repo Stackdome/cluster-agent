@@ -2,7 +2,6 @@ package workspacestorage
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
 	"time"
 
@@ -34,10 +33,10 @@ func StorageServerSSHSecretName(workspaceStorage *workspacev1alpha1.WorkspaceSto
 func (r *userSShKeySecretReconciler) reconcile(ctx context.Context, workspaceStorage *workspacev1alpha1.WorkspaceStorage) (subReconcilerResult, error) {
 	logger := controller.LoggerFromContext(ctx)
 	logger.Info("reconcile user public ssh key secret")
-	decodedPublicKey, err := base64.StdEncoding.DecodeString(workspaceStorage.Spec.UserPublicSSHKey)
-	if err != nil {
-		return resultNil, fmt.Errorf("failed to decode base64 encoded public key: %w", err)
-	}
+	// decodedPublicKey, err := base64.StdEncoding.DecodeString(workspaceStorage.Spec.UserPublicSSHKey)
+	// if err != nil {
+	// 	return resultNil, fmt.Errorf("failed to decode base64 encoded public key: %w", err)
+	// }
 	desiredSecret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      StorageServerSSHSecretName(workspaceStorage),
@@ -45,7 +44,7 @@ func (r *userSShKeySecretReconciler) reconcile(ctx context.Context, workspaceSto
 			Labels:    WorkspaceStorageLabels(workspaceStorage),
 		},
 		Data: map[string][]byte{
-			SSH_SECRET_KEY: decodedPublicKey,
+			SSH_SECRET_KEY: []byte(workspaceStorage.Spec.UserPublicSSHKey),
 		},
 	}
 
@@ -60,7 +59,7 @@ func (r *userSShKeySecretReconciler) reconcile(ctx context.Context, workspaceSto
 		return resultNil, err
 	}
 	existingData, found := existingSecret.Data[SSH_SECRET_KEY]
-	if !found || string(existingData) != string(decodedPublicKey) {
+	if !found || string(existingData) != workspaceStorage.Spec.UserPublicSSHKey {
 		logger := controller.LoggerFromContext(ctx)
 		logger.Info("updating secret existing secret")
 		existingSecret.Data = desiredSecret.Data

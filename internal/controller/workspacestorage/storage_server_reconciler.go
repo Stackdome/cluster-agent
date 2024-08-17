@@ -6,7 +6,6 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -48,7 +47,6 @@ func (r *storageServerReconciler) ensureStorageServerDeployment(
 		return resultNil, err
 	}
 	volumeMountsOnPod := make([]corev1.VolumeMount, 0)
-	logger := controller.LoggerFromContext(ctx)
 	for _, volume := range wsVolumes {
 		volumes = append(volumes,
 			corev1.Volume{
@@ -105,7 +103,7 @@ func (r *storageServerReconciler) ensureStorageServerDeployment(
 						{
 							Name: fmt.Sprintf("%s-storage-server", workspaceStorage.Name),
 							// TODO: Change
-							Image:           "asia-south1-docker.pkg.dev/stackdome/stackdome/storage-server:4",
+							Image:           "k8s.orb.local:5000/stackdome-storage-server:2",
 							ImagePullPolicy: corev1.PullIfNotPresent,
 							Ports: []corev1.ContainerPort{
 								{
@@ -125,6 +123,7 @@ func (r *storageServerReconciler) ensureStorageServerDeployment(
 			},
 		},
 	}
+	desiredDeployment.SetGroupVersionKind(appsv1.SchemeGroupVersion.WithKind("Deployment"))
 
 	if err := controllerutil.SetControllerReference(workspaceStorage, desiredDeployment, r.Scheme); err != nil {
 		return resultNil, err
@@ -135,21 +134,28 @@ func (r *storageServerReconciler) ensureStorageServerDeployment(
 	err = r.Client.Get(ctx, types.NamespacedName{Namespace: desiredDeployment.Namespace, Name: desiredDeployment.Name}, existingDeployment)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
+			reportWorkspaceStorageUnAvailable(workspaceStorage, "StorageServerNotReady", "Storage Server is being created")
 			return resultRequeue, r.Client.Create(ctx, desiredDeployment)
 		}
 		return resultNil, err
 	}
-	containersChanged := !equality.Semantic.DeepDerivative(desiredDeployment.Spec.Template.Spec.Containers, existingDeployment.Spec.Template.Spec.Containers)
-	volumesChanged := !equality.Semantic.DeepDerivative(desiredDeployment.Spec.Template.Spec.Volumes, existingDeployment.Spec.Template.Spec.Volumes)
-	if containersChanged || volumesChanged {
-		logger.Info("Updating storage server deployment reconciler")
-		existingDeployment.Spec = desiredDeployment.Spec
-		return resultNil, r.Client.Update(ctx, existingDeployment)
+	logger := controller.LoggerFromContext(ctx)
+	logger.Info("server side patching deployment")
+	// Server side apply the deployment.
+	if err := r.Client.Patch(ctx, desiredDeployment, client.Apply, &client.PatchOptions{
+		Force:        ptr.To(true),
+		FieldManager: WorkspaceStorageControllerName,
+	}); err != nil {
+		logger.Error(err, "failed to patch deployment", "error", err)
+		return resultNil, err
 	}
+
+	logger.Info("server side patch completed")
 
 	if controller.DeploymentAvailable(existingDeployment) {
 		return resultNil, nil
 	}
+
 	reportWorkspaceStorageUnAvailable(workspaceStorage, "StorageServerNotReady", "Storage Server unavailable")
 	return resultStop, nil
 }

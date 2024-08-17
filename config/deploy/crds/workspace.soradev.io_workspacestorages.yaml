@@ -51,6 +51,14 @@ spec:
                 additionalProperties:
                   description: WorkspaceVolumeSpec defines the desired state of WorkspaceVolume
                   properties:
+                    annotations:
+                      additionalProperties:
+                        type: string
+                      type: object
+                    labels:
+                      additionalProperties:
+                        type: string
+                      type: object
                     needsSyncBeforeUse:
                       type: boolean
                     size:
@@ -173,8 +181,7 @@ spec:
                   - type
                   type: object
                 type: array
-              observedGeneration:
-                description: The most recent generation observed by the controller.
+              observedStackdomeServerObjectGeneration:
                 format: int64
                 type: integer
               phase:

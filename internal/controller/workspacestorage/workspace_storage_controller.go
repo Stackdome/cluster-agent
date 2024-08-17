@@ -19,6 +19,7 @@ package workspacestorage
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -36,8 +37,9 @@ import (
 )
 
 const (
-	DefaultRequeueTime = time.Second * 5
-	ownerKey           = ".metadata.controller"
+	DefaultRequeueTime             = time.Second * 5
+	ownerKey                       = ".metadata.controller"
+	WorkspaceStorageControllerName = "workspacestorage-controller"
 )
 
 type subReconciler interface {
@@ -70,16 +72,20 @@ func (r *WorkspaceStorageReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	logger := log.FromContext(ctx)
 	logger = logger.WithValues("workspacestorage", req.NamespacedName.String())
 	ctx = controller.ContextWithLogger(ctx, logger)
-	workspaceState := &v1alpha1.WorkspaceStorage{}
+	workspaceStorage := &v1alpha1.WorkspaceStorage{}
 
-	err := r.Client.Get(ctx, req.NamespacedName, workspaceState)
+	err := r.Client.Get(ctx, req.NamespacedName, workspaceStorage)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
 	}
-	return r.reconcile(ctx, workspaceState)
+	reconcileRes, err := r.reconcile(ctx, workspaceStorage)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	return reconcileRes, r.Client.Status().Update(ctx, workspaceStorage)
 }
 
 func (r *WorkspaceStorageReconciler) reconcile(ctx context.Context, workspaceStorage *v1alpha1.WorkspaceStorage) (ctrl.Result, error) {
@@ -100,7 +106,7 @@ func (r *WorkspaceStorageReconciler) reconcile(ctx context.Context, workspaceSto
 		}
 	}
 
-	return ctrl.Result{}, r.Client.Status().Update(ctx, workspaceStorage)
+	return ctrl.Result{}, nil
 }
 
 func NewWorkspaceStorageReconciler(client client.Client, uncachedClient client.Client, scheme *runtime.Scheme) *WorkspaceStorageReconciler {
@@ -131,6 +137,14 @@ func NewWorkspaceStorageReconciler(client client.Client, uncachedClient client.C
 }
 
 func reportWorkspaceStorageUnAvailable(workspaceStorage *v1alpha1.WorkspaceStorage, reason string, msg string, msgArgs ...any) {
+	if workspaceStorage.Labels == nil {
+		workspaceStorage.Labels = make(map[string]string)
+	}
+	objectStackdomeServerVersion, ok := workspaceStorage.Labels[v1alpha1.StackdomeObjectGeneration]
+	if ok {
+		generation, _ := strconv.ParseInt(objectStackdomeServerVersion, 10, 64)
+		workspaceStorage.Status.ObservedStackdomeServerObjectGeneration = generation
+	}
 	workspaceStorage.Status.Phase = v1alpha1.WSPending
 	meta.SetStatusCondition(&workspaceStorage.Status.Conditions, metav1.Condition{
 		Type:               string(v1alpha1.WorkspaceStorageAvailable),
@@ -139,19 +153,28 @@ func reportWorkspaceStorageUnAvailable(workspaceStorage *v1alpha1.WorkspaceStora
 		Message:            fmt.Sprintf(msg, msgArgs...),
 		ObservedGeneration: workspaceStorage.Generation,
 	})
+	workspaceStorage.Status.StatusHash = workspaceStorage.StatusHash()
 }
 
-func reportWorkspaceStorageAvailable(workspaceStorage *v1alpha1.WorkspaceStorage, storageSvc *corev1.Service) error {
+func reportWorkspaceStorageAvailable(workspaceStorage *v1alpha1.WorkspaceStorage, storageSvc *corev1.Service) {
+	if workspaceStorage.Labels == nil {
+		workspaceStorage.Labels = make(map[string]string)
+	}
+	objectStackdomeServerVersion, ok := workspaceStorage.Labels[v1alpha1.StackdomeObjectGeneration]
+	if ok {
+		generation, _ := strconv.ParseInt(objectStackdomeServerVersion, 10, 64)
+		workspaceStorage.Status.ObservedStackdomeServerObjectGeneration = generation
+	}
 	workspaceStorage.Status.Phase = v1alpha1.WSReady
 	workspaceStorage.Status.ServiceName = storageSvc.Name
 	meta.SetStatusCondition(&workspaceStorage.Status.Conditions, metav1.Condition{
 		Type:               string(v1alpha1.WorkspaceStorageAvailable),
 		Status:             metav1.ConditionTrue,
 		Reason:             "AllComponentsUp",
+		Message:            "All components are up and running.",
 		ObservedGeneration: workspaceStorage.Generation,
 	})
-
-	return nil
+	workspaceStorage.Status.StatusHash = workspaceStorage.StatusHash()
 }
 
 // SetupWithManager sets up the controller with the Manager.
