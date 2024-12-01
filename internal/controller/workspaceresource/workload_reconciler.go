@@ -3,7 +3,6 @@ package workspaceresource
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -312,9 +311,8 @@ func splitEnvVarValue(value string) (string, string) {
 func InterpolatedVolumeMountList(resource *v1alpha1.WorkspaceResource) []corev1.VolumeMount {
 	res := make([]corev1.VolumeMount, 0)
 	for _, mount := range resource.Spec.VolumeMounts {
-		sourceParts := strings.Split(mount.Source, "/")
-		sourceVolumeName := sourceParts[0]
-		subPath := filepath.Join(sourceParts[1:]...)
+		sourceVolumeName := mount.SourceWorkspaceVolume
+		subPath := mount.SourceSubPath
 		if len(subPath) == 0 {
 			res = append(res, corev1.VolumeMount{
 				Name:      sourceVolumeName,
@@ -335,7 +333,7 @@ func InterpolatedVolumesList(resource *v1alpha1.WorkspaceResource, volumeInfo ma
 	res := make([]corev1.Volume, 0)
 	addedVolumes := make(map[string]struct{})
 	for _, mount := range resource.Spec.VolumeMounts {
-		sourceVolumeName := strings.Split(mount.Source, "/")[0]
+		sourceVolumeName := mount.SourceWorkspaceVolume
 		_, added := addedVolumes[sourceVolumeName]
 		if !added {
 			res = append(res, corev1.Volume{
@@ -355,7 +353,7 @@ func InterpolatedVolumesList(resource *v1alpha1.WorkspaceResource, volumeInfo ma
 func (r *workloadReconciler) getVolumeMountInfoMap(ctx context.Context, resource *v1alpha1.WorkspaceResource) (map[string]*v1alpha1.WorkspaceVolume, error) {
 	res := make(map[string]*v1alpha1.WorkspaceVolume)
 	for _, mount := range resource.Spec.VolumeMounts {
-		sourceVolumeName := strings.Split(mount.Source, "/")[0]
+		sourceVolumeName := mount.SourceWorkspaceVolume
 		referencedVolume := &v1alpha1.WorkspaceVolume{}
 		if err := r.Client.Get(ctx, types.NamespacedName{Name: sourceVolumeName, Namespace: resource.Namespace}, referencedVolume); err != nil {
 			return nil, fmt.Errorf("failed to get the referenced volume '%s' in resource '%s': %w", sourceVolumeName, resource.Name, err)

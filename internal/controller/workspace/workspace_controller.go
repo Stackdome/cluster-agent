@@ -92,7 +92,6 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	for i := range childResources.Items {
 		r.workspaceResourceQueue <- event.GenericEvent{Object: &childResources.Items[i]}
 	}
-
 	return res, r.Client.Status().Update(ctx, workspace)
 }
 
@@ -124,6 +123,7 @@ func reportWorkspaceNotReady(workspace *v1alpha1.Workspace, reason string, msg s
 		Reason:             reason,
 		Message:            msg,
 	})
+	workspace.Status.StatusHash = workspace.StatusHash()
 }
 
 func reportWorkspaceReady(workspace *v1alpha1.Workspace) {
@@ -136,6 +136,7 @@ func reportWorkspaceReady(workspace *v1alpha1.Workspace) {
 		Reason:             "WorkspaceReady",
 		Message:            "All workspace resources and storage ready",
 	})
+	workspace.Status.StatusHash = workspace.StatusHash()
 }
 
 func NewWorkspaceReconciler(client client.Client, scheme *runtime.Scheme, workspaceResourceQueue chan event.GenericEvent) *WorkspaceReconciler {

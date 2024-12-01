@@ -55,6 +55,7 @@ func reportWorkspaceApplicationBuildComplete(buildConfig *v1alpha1.WorkspaceAppl
 		Reason:             "BuildComplete",
 		Message:            "Image build compelete",
 	})
+	buildConfig.Status.StatusHash = buildConfig.StatusHash()
 }
 
 func (r *WorkspaceApplicationBuildReconciler) reconcile(ctx context.Context, buildConfig *v1alpha1.WorkspaceApplicationBuild) (ctrl.Result, error) {
@@ -193,6 +194,7 @@ func reportWorkspaceApplicationBuildStatus(
 		Reason:             reason,
 		Message:            reason,
 	})
+	buildConfig.Status.StatusHash = buildConfig.StatusHash()
 }
 
 // SetupWithManager sets up the controller with the Manager.

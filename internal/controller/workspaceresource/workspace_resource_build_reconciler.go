@@ -52,8 +52,10 @@ func (r *workspaceResourceBuildReconciler) reconcile(ctx context.Context, resour
 func (r *workspaceResourceBuildReconciler) createApplicationBuild(ctx context.Context, resource *v1alpha1.WorkspaceResource) (subReconcilerResult, error) {
 	desiredApplicationBuild := &v1alpha1.WorkspaceApplicationBuild{
 		ObjectMeta: v1.ObjectMeta{
-			Name:      ApplicationBuildName(resource),
-			Namespace: resource.Namespace,
+			Name:        ApplicationBuildName(resource),
+			Namespace:   resource.Namespace,
+			Labels:      resource.Labels,
+			Annotations: resource.Annotations,
 		},
 		Spec: v1alpha1.WorkspaceApplicationBuildSpec{
 			ResourceName: resource.Name,

@@ -114,6 +114,8 @@ spec:
                     number:
                       format: int32
                       type: integer
+                    subdomain:
+                      type: string
                   required:
                   - number
                   type: object
@@ -135,11 +137,14 @@ spec:
                   properties:
                     destination:
                       type: string
-                    source:
+                    sourceSubPath:
+                      type: string
+                    sourceWorkspaceVolume:
                       type: string
                   required:
                   - destination
-                  - source
+                  - sourceSubPath
+                  - sourceWorkspaceVolume
                   type: object
                 type: array
             type: object
@@ -263,12 +268,17 @@ spec:
                 description: The most recent generation observed by the controller.
                 format: int64
                 type: integer
+              observedStackdomeServerObjectGeneration:
+                format: int64
+                type: integer
               phase:
                 default: Pending
                 description: |-
                   DEPRECATED: This field is not part of any API contract
                   it will go away as soon as kubectl can print conditions!
                   Human readable status - please use .Conditions from code
+                type: string
+              statusHash:
                 type: string
             type: object
         type: object

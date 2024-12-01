@@ -73,8 +73,10 @@ func (r *WorkspaceReconciler) reconcileWorkspaceResource(
 func constructWorkspaceResourceCR(workspace *v1alpha1.Workspace, resourceSpec *v1alpha1.ResourceSpec) *v1alpha1.WorkspaceResource {
 	return &v1alpha1.WorkspaceResource{
 		ObjectMeta: v1.ObjectMeta{
-			Name:      v1alpha1.WorkspaceResourceName(resourceSpec.Name),
-			Namespace: workspace.Namespace,
+			Name:        v1alpha1.WorkspaceResourceName(resourceSpec.Name),
+			Namespace:   workspace.Namespace,
+			Labels:      workspace.Labels,
+			Annotations: workspace.Annotations,
 		},
 		Spec: v1alpha1.WorkspaceResourceSpec{
 			ImageRegistry:           resourceSpec.Spec.ImageRegistry,

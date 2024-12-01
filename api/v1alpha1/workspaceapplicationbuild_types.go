@@ -18,8 +18,11 @@ package v1alpha1
 
 import (
 	"fmt"
+	"hash/fnv"
 
+	"github.com/davecgh/go-spew/spew"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/rand"
 )
 
 type WorkspaceApplicationBuildPhase string
@@ -65,6 +68,7 @@ type WorkspaceApplicationBuildStatus struct {
 	Phase           WorkspaceApplicationBuildPhase `json:"phase,omitempty"`
 	BuildSourceHash string                         `json:"buildSourceHash,omitempty"`
 	ImageUrl        string                         `json:"imageUrl"`
+	StatusHash      string                         `json:"statusHash,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -78,6 +82,20 @@ type WorkspaceApplicationBuild struct {
 
 	Spec   WorkspaceApplicationBuildSpec   `json:"spec,omitempty"`
 	Status WorkspaceApplicationBuildStatus `json:"status,omitempty"`
+}
+
+func (w *WorkspaceApplicationBuild) StatusHash() string {
+	hasher := fnv.New32a()
+	hasher.Reset()
+	printer := spew.ConfigState{
+		Indent:         " ",
+		SortKeys:       true,
+		DisableMethods: true,
+		SpewKeys:       true,
+	}
+	w.Status.StatusHash = ""
+	printer.Fprintf(hasher, "%#v", w.Status)
+	return rand.SafeEncodeString(fmt.Sprint(hasher.Sum32()))
 }
 
 //+kubebuilder:object:root=true

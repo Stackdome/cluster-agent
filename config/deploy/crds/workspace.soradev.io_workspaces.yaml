@@ -128,6 +128,8 @@ spec:
                               number:
                                 format: int32
                                 type: integer
+                              subdomain:
+                                type: string
                             required:
                             - number
                             type: object
@@ -149,11 +151,14 @@ spec:
                             properties:
                               destination:
                                 type: string
-                              source:
+                              sourceSubPath:
+                                type: string
+                              sourceWorkspaceVolume:
                                 type: string
                             required:
                             - destination
-                            - source
+                            - sourceSubPath
+                            - sourceWorkspaceVolume
                             type: object
                           type: array
                       type: object
@@ -245,11 +250,16 @@ spec:
                   type: object
                 type: array
               observedGeneration:
+                format: int64
+                type: integer
+              observedStackdomeServerObjectGeneration:
                 description: The most recent generation observed by the controller.
                 format: int64
                 type: integer
               phase:
                 default: Pending
+                type: string
+              statusHash:
                 type: string
             type: object
         type: object

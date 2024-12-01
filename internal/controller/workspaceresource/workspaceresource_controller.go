@@ -128,6 +128,7 @@ func reportWorkspaceResourceNotReady(resource *v1alpha1.WorkspaceResource, reaso
 		Reason:             reason,
 		Message:            msg,
 	})
+	resource.Status.StatusHash = resource.StatusHash()
 }
 
 func (r *WorkspaceResourceReconciler) reportWorkspaceResourceReady(resource *v1alpha1.WorkspaceResource) {
@@ -144,7 +145,7 @@ func (r *WorkspaceResourceReconciler) reportWorkspaceResourceReady(resource *v1a
 		Reason:             "WorkspaceResourceAvailable",
 		Message:            "Workspace is ready",
 	})
-
+	resource.Status.StatusHash = resource.StatusHash()
 }
 
 func (r *WorkspaceResourceReconciler) getApplicationBuildStatus(ctx context.Context, resource *v1alpha1.WorkspaceResource) (*v1alpha1.BuildStatus, error) {

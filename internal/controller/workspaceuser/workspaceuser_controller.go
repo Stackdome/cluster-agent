@@ -414,7 +414,7 @@ func (r *WorkspaceUserReconciler) reconcileBusyBoxBinaryVolume(ctx context.Conte
 					Containers: []corev1.Container{
 						{
 							Name:  "rsync",
-							Image: "k8s.orb.local:5000/stackdome-tools:1",
+							Image: "docker.io/ashishmax31327/stackdome-tools:1",
 							Command: []string{
 								"sh",
 								"-c",

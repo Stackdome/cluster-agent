@@ -103,7 +103,7 @@ func (r *storageServerReconciler) ensureStorageServerDeployment(
 						{
 							Name: fmt.Sprintf("%s-storage-server", workspaceStorage.Name),
 							// TODO: Change
-							Image:           "k8s.orb.local:5000/stackdome-storage-server:2",
+							Image:           "docker.io/ashishmax31327/storage-server:1",
 							ImagePullPolicy: corev1.PullIfNotPresent,
 							Ports: []corev1.ContainerPort{
 								{

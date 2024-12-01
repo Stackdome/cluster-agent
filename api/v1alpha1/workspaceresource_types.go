@@ -17,9 +17,12 @@ limitations under the License.
 package v1alpha1
 
 import (
-	"strings"
+	"fmt"
+	"hash/fnv"
 
+	"github.com/davecgh/go-spew/spew"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/rand"
 )
 
 type WorkspaceResourcePhase string
@@ -87,6 +90,8 @@ type Port struct {
 	// +optional
 	// +kubebuilder:default=true
 	IsHttp bool `json:"isHttp"`
+	// +optional
+	Subdomain string `json:"subdomain"`
 }
 
 type EnvironmentVariables struct {
@@ -95,8 +100,9 @@ type EnvironmentVariables struct {
 }
 
 type VolumeMount struct {
-	Source      string `json:"source"`
-	Destination string `json:"destination"`
+	SourceWorkspaceVolume string `json:"sourceWorkspaceVolume"`
+	SourceSubPath         string `json:"sourceSubPath"`
+	Destination           string `json:"destination"`
 }
 
 type ApplicationBuildSpec struct {
@@ -128,7 +134,8 @@ type BuildStatus struct {
 // WorkspaceResourceStatus defines the observed state of WorkspaceResource
 type WorkspaceResourceStatus struct {
 	// The most recent generation observed by the controller.
-	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+	ObservedGeneration                      int64 `json:"observedGeneration,omitempty"`
+	ObservedStackdomeServerObjectGeneration int64 `json:"observedStackdomeServerObjectGeneration,omitempty"`
 	// Conditions is a list of status conditions ths object is in.
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 	// DEPRECATED: This field is not part of any API contract
@@ -144,6 +151,7 @@ type WorkspaceResourceStatus struct {
 	// Current build that this resource uses.
 	// Applicable only to resources which have ApplicationBuildSpec defined.
 	CurrentBuild *BuildStatus `json:"currentBuild,omitempty"`
+	StatusHash   string       `json:"statusHash,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -157,6 +165,20 @@ type WorkspaceResource struct {
 
 	Spec   WorkspaceResourceSpec   `json:"spec,omitempty"`
 	Status WorkspaceResourceStatus `json:"status,omitempty"`
+}
+
+func (w *WorkspaceResource) StatusHash() string {
+	hasher := fnv.New32a()
+	hasher.Reset()
+	printer := spew.ConfigState{
+		Indent:         " ",
+		SortKeys:       true,
+		DisableMethods: true,
+		SpewKeys:       true,
+	}
+	w.Status.StatusHash = ""
+	printer.Fprintf(hasher, "%#v", w.Status)
+	return rand.SafeEncodeString(fmt.Sprint(hasher.Sum32()))
 }
 
 // +kubebuilder:object:root=true
@@ -189,14 +211,10 @@ func (w *WorkspaceResource) SplitPortsByInternalAndExternal() ([]Port, []Port) {
 	return internalPorts, externalPorts
 }
 
-func (v VolumeMount) SourceVolumeName() string {
-	return strings.Split(v.Source, "/")[0]
-}
-
 func (w *WorkspaceResource) VolumeMountSources() []string {
 	res := make([]string, 0)
 	for _, volumeMount := range w.Spec.VolumeMounts {
-		res = append(res, volumeMount.SourceVolumeName())
+		res = append(res, volumeMount.SourceWorkspaceVolume)
 	}
 	return res
 }

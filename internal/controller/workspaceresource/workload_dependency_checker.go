@@ -90,7 +90,7 @@ func buildSyncCompletedAndUptoDate(buildSyncInfo v1alpha1.BuildArtifactSyncInfo,
 func (w *workloadDependencyChecker) getWorkspaceVolumes(ctx context.Context, resource *v1alpha1.WorkspaceResource) ([]*v1alpha1.WorkspaceVolume, error) {
 	volumeRefs := make([]string, 0)
 	for _, volumeMount := range resource.Spec.VolumeMounts {
-		volumeRefs = append(volumeRefs, volumeMount.SourceVolumeName())
+		volumeRefs = append(volumeRefs, volumeMount.SourceWorkspaceVolume)
 	}
 	volumeList := &v1alpha1.WorkspaceVolumeList{}
 	if err := w.Client.List(ctx, volumeList, client.InNamespace(resource.Namespace)); err != nil {

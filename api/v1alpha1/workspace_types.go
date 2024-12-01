@@ -17,7 +17,12 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"fmt"
+	"hash/fnv"
+
+	"github.com/davecgh/go-spew/spew"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/rand"
 )
 
 type WorkspacePhase string
@@ -51,11 +56,27 @@ type ResourceSpec struct {
 // WorkspaceStatus defines the observed state of Workspace
 type WorkspaceStatus struct {
 	// The most recent generation observed by the controller.
-	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+	ObservedStackdomeServerObjectGeneration int64 `json:"observedStackdomeServerObjectGeneration,omitempty"`
+	ObservedGeneration                      int64 `json:"observedGeneration,omitempty"`
 	// Conditions is a list of status conditions ths object is in.
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 	// +kubebuilder:default=Pending
-	Phase WorkspacePhase `json:"phase,omitempty"`
+	Phase      WorkspacePhase `json:"phase,omitempty"`
+	StatusHash string         `json:"statusHash,omitempty"`
+}
+
+func (w *Workspace) StatusHash() string {
+	hasher := fnv.New32a()
+	hasher.Reset()
+	printer := spew.ConfigState{
+		Indent:         " ",
+		SortKeys:       true,
+		DisableMethods: true,
+		SpewKeys:       true,
+	}
+	w.Status.StatusHash = ""
+	printer.Fprintf(hasher, "%#v", w.Status)
+	return rand.SafeEncodeString(fmt.Sprint(hasher.Sum32()))
 }
 
 // +kubebuilder:object:root=true

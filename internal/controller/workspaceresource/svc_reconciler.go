@@ -89,10 +89,10 @@ func (r *svcReconciler) reconcileHttpProxyForService(
 	serviceToBeExposed *corev1.Service,
 	workspace *v1alpha1.Workspace) (map[int]string, error) {
 	exposedPortSubdomainMap := map[int]string{}
-	for i, port := range resource.Spec.Ports {
+	for _, port := range resource.Spec.Ports {
 		if port.ExposeToPublic {
 			// RHS should be unique across all users.
-			exposedPortSubdomainMap[int(port.Number)] = createShortHash(workspace.Name, workspace.Namespace, resource.Name, intstr.FromInt(i).StrVal)
+			exposedPortSubdomainMap[int(port.Number)] = port.Subdomain
 		}
 	}
 
