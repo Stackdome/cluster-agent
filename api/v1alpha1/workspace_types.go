@@ -45,6 +45,8 @@ type WorkspaceSpec struct {
 	UserName     string         `json:"userName"`
 	Organisation string         `json:"organisation"`
 	// SLD+TLD. Example: example.io
+	// Should not be empty and is a valid domain.
+	// +kubebuilder:validation:Pattern=`^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z0-9][a-zA-Z0-9-]{0,61}[a-zA-Z0-9]\.[a-zA-Z]{2,}$`
 	Domain string `json:"domain"`
 }
 

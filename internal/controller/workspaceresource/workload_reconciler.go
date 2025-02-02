@@ -228,7 +228,7 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.W
 		existingDeployment.Spec.Template.Annotations[v1alpha1.RestartResourceAnnotation] = v1.Now().UTC().String()
 		resource.Status.LastRestartRequestProcessedAt = ptr.To(v1.NewTime(time.Now().UTC()))
 		reportWorkspaceResourceNotReady(resource, "WorkspaceResouceDeploymentNotReady", "WorkspaceResouceDeploymentNotReady")
-		return resultStop, r.Client.Status().Update(ctx, existingDeployment)
+		return resultStop, r.Client.Update(ctx, existingDeployment)
 	}
 
 	if controller.DeploymentAvailable(existingDeployment) {

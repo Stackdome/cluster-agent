@@ -9,6 +9,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/yaml"
 )
 
@@ -129,6 +130,8 @@ func GenerateImageBuildJob(params BuildParams) (*batchv1.Job, error) {
 			corev1.ResourceMemory: resource.MustParse("200Mi"),
 		},
 	}
+	// 30 minutes
+	job.Spec.TTLSecondsAfterFinished = ptr.To(int32(60 * 30))
 
 	container.Args = append(container.Args, "--cache=true", "--cache-copy-layers=true", "--cache-run-layers=true", "--cleanup=true")
 	return job, nil

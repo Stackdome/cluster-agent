@@ -2,10 +2,7 @@ package workspaceresource
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
-	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -217,13 +214,6 @@ func (r *svcReconciler) ensureSvc(ctx context.Context, resource *v1alpha1.Worksp
 		return existingSvc, nil
 	}
 	return nil, nil
-}
-
-func createShortHash(inputStrings ...string) string {
-	concatenated := strings.Join(inputStrings, ",")
-	hash := sha256.Sum256([]byte(concatenated))
-	shortHash := hex.EncodeToString(hash[:6])
-	return strings.ToLower(shortHash)
 }
 
 func (r *svcReconciler) getWorkspace(ctx context.Context, workpaceResource *v1alpha1.WorkspaceResource) (*v1alpha1.Workspace, error) {

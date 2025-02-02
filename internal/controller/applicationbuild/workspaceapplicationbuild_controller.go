@@ -110,6 +110,11 @@ func (r *WorkspaceApplicationBuildReconciler) reconcile(ctx context.Context, bui
 		return ctrl.Result{}, err
 	}
 
+	buildCompletedCondition := meta.FindStatusCondition(buildConfig.Status.Conditions, string(v1alpha1.WorkspaceApplicationBuildAvailable))
+	if buildCompletedCondition != nil && buildCompletedCondition.Status == metav1.ConditionTrue {
+		return ctrl.Result{}, nil
+	}
+
 	existingJob := &batchv1.Job{}
 	if err := r.Client.Get(
 		ctx,

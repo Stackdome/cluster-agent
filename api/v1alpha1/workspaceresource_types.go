@@ -40,7 +40,7 @@ const (
 )
 
 const (
-	RestartResourceAnnotation = "workspaceresource.soradev.io/restartedAt"
+	RestartResourceAnnotation = "kubectl.kubernetes.io/restartedAt"
 )
 
 // WorkspaceResourceSpec defines the desired state of WorkspaceResource

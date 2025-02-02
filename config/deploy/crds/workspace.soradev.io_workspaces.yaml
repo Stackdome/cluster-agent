@@ -44,7 +44,10 @@ spec:
             description: WorkspaceSpec defines the desired state of Workspace
             properties:
               domain:
-                description: 'SLD+TLD. Example: example.io'
+                description: |-
+                  SLD+TLD. Example: example.io
+                  Should not be empty and is a valid domain.
+                pattern: ^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z0-9][a-zA-Z0-9-]{0,61}[a-zA-Z0-9]\.[a-zA-Z]{2,}$
                 type: string
               organisation:
                 type: string
