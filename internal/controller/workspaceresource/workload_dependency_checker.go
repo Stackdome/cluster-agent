@@ -8,8 +8,8 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"soradev.io/cluster-agent/api/v1alpha1"
-	"soradev.io/cluster-agent/internal/controller"
+	"stackdome.io/cluster-agent/api/core/v1alpha1"
+	"stackdome.io/cluster-agent/internal/controller"
 )
 
 type workloadDependencyChecker struct {

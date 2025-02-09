@@ -10,7 +10,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"soradev.io/cluster-agent/api/v1alpha1"
+	buildsv1alpha1 "stackdome.io/cluster-agent/api/builds/v1alpha1"
+	"stackdome.io/cluster-agent/api/core/v1alpha1"
 )
 
 const DefaultClusterLocalImageRegistry = "local-registry:5000"
@@ -26,7 +27,7 @@ func (r *workspaceResourceBuildReconciler) reconcile(ctx context.Context, resour
 		return resultNil, nil
 	}
 
-	existingApplicationBuild := &v1alpha1.WorkspaceApplicationBuild{}
+	existingApplicationBuild := &buildsv1alpha1.WorkspaceApplicationBuild{}
 	if err := r.Client.Get(ctx,
 		types.NamespacedName{
 			Name:      ApplicationBuildName(resource),
@@ -50,17 +51,17 @@ func (r *workspaceResourceBuildReconciler) reconcile(ctx context.Context, resour
 }
 
 func (r *workspaceResourceBuildReconciler) createApplicationBuild(ctx context.Context, resource *v1alpha1.WorkspaceResource) (subReconcilerResult, error) {
-	desiredApplicationBuild := &v1alpha1.WorkspaceApplicationBuild{
+	desiredApplicationBuild := &buildsv1alpha1.WorkspaceApplicationBuild{
 		ObjectMeta: v1.ObjectMeta{
 			Name:        ApplicationBuildName(resource),
 			Namespace:   resource.Namespace,
 			Labels:      resource.Labels,
 			Annotations: resource.Annotations,
 		},
-		Spec: v1alpha1.WorkspaceApplicationBuildSpec{
+		Spec: buildsv1alpha1.WorkspaceApplicationBuildSpec{
 			ResourceName: resource.Name,
 			SourceHash:   resource.Spec.ApplicationBuildSpec.BuildSourceHash,
-			ContextRef: v1alpha1.ContextRef{
+			ContextRef: buildsv1alpha1.ContextRef{
 				VolumeName:     resource.Spec.ApplicationBuildSpec.VolumeName,
 				DockerfilePath: resource.Spec.ApplicationBuildSpec.DockerFile,
 				Context:        resource.Spec.ApplicationBuildSpec.Context,

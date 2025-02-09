@@ -30,8 +30,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	"soradev.io/cluster-agent/api/v1alpha1"
-	"soradev.io/cluster-agent/internal/controller"
+	"stackdome.io/cluster-agent/api/core/v1alpha1"
+	"stackdome.io/cluster-agent/internal/controller"
 )
 
 const (

@@ -8,8 +8,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"soradev.io/cluster-agent/api/v1alpha1"
-	"soradev.io/cluster-agent/internal/controller/workspaceuser"
+	buildsv1alpha1 "stackdome.io/cluster-agent/api/builds/v1alpha1"
+	"stackdome.io/cluster-agent/api/core/v1alpha1"
+	"stackdome.io/cluster-agent/internal/controller/workspaceuser"
 )
 
 const (
@@ -26,7 +27,7 @@ const (
 
 func CreateBuildArtifactsVolumeSyncJob(
 	volume *v1alpha1.WorkspaceVolume, buildSrcs []*v1alpha1.BuildArtifactSource,
-	wab *v1alpha1.WorkspaceApplicationBuild) *batchv1.Job {
+	wab *buildsv1alpha1.WorkspaceApplicationBuild) *batchv1.Job {
 	volumes, volumeMounts := createVolumesAndMounts(volume, buildSrcs)
 	copyCommands := generateCopyCommands(volume, buildSrcs)
 	job := batchv1.Job{

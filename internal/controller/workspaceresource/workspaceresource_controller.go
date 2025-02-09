@@ -36,8 +36,9 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"soradev.io/cluster-agent/api/v1alpha1"
-	"soradev.io/cluster-agent/internal/controller"
+	buildsv1alpha1 "stackdome.io/cluster-agent/api/builds/v1alpha1"
+	"stackdome.io/cluster-agent/api/core/v1alpha1"
+	"stackdome.io/cluster-agent/internal/controller"
 )
 
 const (
@@ -153,7 +154,7 @@ func (r *WorkspaceResourceReconciler) getApplicationBuildStatus(ctx context.Cont
 		return nil, nil
 	}
 
-	existingApplicationBuild := &v1alpha1.WorkspaceApplicationBuild{}
+	existingApplicationBuild := &buildsv1alpha1.WorkspaceApplicationBuild{}
 	if err := r.Client.Get(ctx,
 		types.NamespacedName{
 			Name:      ApplicationBuildName(resource),
@@ -174,7 +175,7 @@ func (r *WorkspaceResourceReconciler) getApplicationBuildStatus(ctx context.Cont
 		Phase:      string(existingApplicationBuild.Status.Phase),
 	}
 
-	availableCond := meta.FindStatusCondition(existingApplicationBuild.Status.Conditions, string(v1alpha1.WorkspaceApplicationBuildAvailable))
+	availableCond := meta.FindStatusCondition(existingApplicationBuild.Status.Conditions, string(buildsv1alpha1.WorkspaceApplicationBuildAvailable))
 	if availableCond != nil {
 		res.Available = availableCond.Status == metav1.ConditionTrue
 		res.Message = availableCond.Message
@@ -216,8 +217,8 @@ func NewWorkspaceResourceReconciler(client client.Client, scheme *runtime.Scheme
 	return w
 }
 
-func applicationBuildComplete(wab *v1alpha1.WorkspaceApplicationBuild) bool {
-	availableCond := meta.FindStatusCondition(wab.Status.Conditions, string(v1alpha1.WorkspaceApplicationBuildAvailable))
+func applicationBuildComplete(wab *buildsv1alpha1.WorkspaceApplicationBuild) bool {
+	availableCond := meta.FindStatusCondition(wab.Status.Conditions, string(buildsv1alpha1.WorkspaceApplicationBuildAvailable))
 	if availableCond != nil && availableCond.Status == v1.ConditionTrue {
 		return true
 	}
@@ -235,7 +236,7 @@ func (r *WorkspaceResourceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.WorkspaceResource{}).
-		Watches(&v1alpha1.WorkspaceApplicationBuild{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &v1alpha1.WorkspaceResource{})).
+		Watches(&buildsv1alpha1.WorkspaceApplicationBuild{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &v1alpha1.WorkspaceResource{})).
 		Watches(&corev1.Service{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &v1alpha1.WorkspaceResource{})).
 		Watches(&appsv1.Deployment{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &v1alpha1.WorkspaceResource{})).
 		Watches(&v1alpha1.WorkspaceVolume{}, handler.EnqueueRequestsFromMapFunc(

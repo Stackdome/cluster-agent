@@ -37,13 +37,18 @@ import (
 
 	projectcontourv1 "github.com/projectcontour/contour/apis/projectcontour/v1"
 
-	workspacev1alpha1 "soradev.io/cluster-agent/api/v1alpha1"
-	"soradev.io/cluster-agent/internal/controller/applicationbuild"
-	"soradev.io/cluster-agent/internal/controller/workspace"
-	"soradev.io/cluster-agent/internal/controller/workspaceresource"
-	"soradev.io/cluster-agent/internal/controller/workspacestorage"
-	"soradev.io/cluster-agent/internal/controller/workspaceuser"
-	"soradev.io/cluster-agent/internal/controller/workspacevolume"
+	buildsv1alpha1 "stackdome.io/cluster-agent/api/builds/v1alpha1"
+	corev1alpha1 "stackdome.io/cluster-agent/api/core/v1alpha1"
+	usersv1alpha1 "stackdome.io/cluster-agent/api/users/v1alpha1"
+	"stackdome.io/cluster-agent/internal/controller/applicationbuild"
+	"stackdome.io/cluster-agent/internal/controller/workspace"
+	"stackdome.io/cluster-agent/internal/controller/workspaceresource"
+	"stackdome.io/cluster-agent/internal/controller/workspacestorage"
+	"stackdome.io/cluster-agent/internal/controller/workspaceuser"
+	"stackdome.io/cluster-agent/internal/controller/workspacevolume"
+
+	registryv1alpha1 "stackdome.io/cluster-agent/api/registry/v1alpha1"
+	registrycontroller "stackdome.io/cluster-agent/internal/controller/registry"
 	//+kubebuilder:scaffold:imports
 )
 
@@ -55,8 +60,11 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
-	utilruntime.Must(workspacev1alpha1.AddToScheme(scheme))
+	utilruntime.Must(corev1alpha1.AddToScheme(scheme))
 	utilruntime.Must(projectcontourv1.AddToScheme(scheme))
+	utilruntime.Must(registryv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(buildsv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(usersv1alpha1.AddToScheme(scheme))
 	//+kubebuilder:scaffold:scheme
 }
 
@@ -113,7 +121,7 @@ func main() {
 		WebhookServer:          webhookServer,
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       "66da0ac8.soradev.io",
+		LeaderElectionID:       "66da0ac8.stackdome.io",
 		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
 		// when the Manager ends. This requires the binary to immediately end when the
 		// Manager is stopped, otherwise, this setting is unsafe. Setting this significantly
@@ -174,6 +182,13 @@ func main() {
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "WorkspaceUser")
+		os.Exit(1)
+	}
+	if err = (&registrycontroller.RegistryReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "Registry")
 		os.Exit(1)
 	}
 	//+kubebuilder:scaffold:builder

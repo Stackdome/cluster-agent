@@ -24,7 +24,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"soradev.io/cluster-agent/test/utils"
+	"stackdome.io/cluster-agent/test/utils"
 )
 
 const namespace = "cluster-agent-system"

@@ -21,8 +21,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-	workspacev1alpha1 "soradev.io/cluster-agent/api/v1alpha1"
-	"soradev.io/cluster-agent/internal/controller"
+	stackv1alpha1 "stackdome.io/cluster-agent/api/core/v1alpha1"
+	userv1alpha1 "stackdome.io/cluster-agent/api/users/v1alpha1"
+
+	"stackdome.io/cluster-agent/internal/controller"
 )
 
 const (
@@ -59,7 +61,7 @@ func (r *WorkspaceUserReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	logger.WithValues("workspaceuser", req.NamespacedName.String())
 	logger.Info("In workspace user reconciler")
 	ctx = controller.ContextWithLogger(ctx, logger)
-	workspaceUser := &workspacev1alpha1.WorkspaceUser{}
+	workspaceUser := &userv1alpha1.WorkspaceUser{}
 	if err := r.Client.Get(ctx, req.NamespacedName, workspaceUser); err != nil {
 		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
@@ -73,8 +75,8 @@ func (r *WorkspaceUserReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	return res, r.Status().Update(ctx, workspaceUser)
 }
 
-func (r *WorkspaceUserReconciler) reconcile(ctx context.Context, user *workspacev1alpha1.WorkspaceUser) (ctrl.Result, error) {
-	reconcileFns := []func(ctx context.Context, user *workspacev1alpha1.WorkspaceUser) (subReconcilerResult, error){
+func (r *WorkspaceUserReconciler) reconcile(ctx context.Context, user *userv1alpha1.WorkspaceUser) (ctrl.Result, error) {
+	reconcileFns := []func(ctx context.Context, user *userv1alpha1.WorkspaceUser) (subReconcilerResult, error){
 		r.reconcileConfigNamespace,
 		r.reconcileNamespaces,
 		r.reconcileSA,
@@ -100,7 +102,7 @@ func (r *WorkspaceUserReconciler) reconcile(ctx context.Context, user *workspace
 	return ctrl.Result{}, nil
 }
 
-func (r *WorkspaceUserReconciler) reconcileConfigNamespace(ctx context.Context, user *workspacev1alpha1.WorkspaceUser) (subReconcilerResult, error) {
+func (r *WorkspaceUserReconciler) reconcileConfigNamespace(ctx context.Context, user *userv1alpha1.WorkspaceUser) (subReconcilerResult, error) {
 	logger := log.FromContext(ctx)
 	logger.Info("in reconcileConfigNamespace")
 	configNamespace := &corev1.Namespace{
@@ -126,8 +128,8 @@ func (r *WorkspaceUserReconciler) reconcileConfigNamespace(ctx context.Context, 
 	return resultNil, nil
 }
 
-func (r *WorkspaceUserReconciler) statusReconciler(ctx context.Context, user *workspacev1alpha1.WorkspaceUser) (subReconcilerResult, error) {
-	objectStackdomeServerVersion, ok := user.Labels[workspacev1alpha1.StackdomeObjectGeneration]
+func (r *WorkspaceUserReconciler) statusReconciler(ctx context.Context, user *userv1alpha1.WorkspaceUser) (subReconcilerResult, error) {
+	objectStackdomeServerVersion, ok := user.Labels[stackv1alpha1.StackdomeObjectGeneration]
 	if ok {
 		generation, _ := strconv.ParseInt(objectStackdomeServerVersion, 10, 64)
 		user.Status.ObservedStackdomeServerObjectGeneration = generation
@@ -144,7 +146,7 @@ func (r *WorkspaceUserReconciler) statusReconciler(ctx context.Context, user *wo
 	SAtoken, present := existingSecret.Data[corev1.ServiceAccountTokenKey]
 	if !present {
 		meta.SetStatusCondition(&user.Status.Conditions, metav1.Condition{
-			Type:               workspacev1alpha1.WorkspaceUserAvailable,
+			Type:               userv1alpha1.WorkspaceUserAvailable,
 			ObservedGeneration: user.Generation,
 			Status:             metav1.ConditionFalse,
 			Reason:             "WorkspaceUserNotYetReady",
@@ -155,11 +157,11 @@ func (r *WorkspaceUserReconciler) statusReconciler(ctx context.Context, user *wo
 
 	userCopy := user.DeepCopy()
 	user.Status.Namespaces = userCopy.Spec.Namespaces
-	user.Status.Phase = workspacev1alpha1.WorkspaceUserPhasePhaseReady
+	user.Status.Phase = userv1alpha1.WorkspaceUserPhasePhaseReady
 	user.Status.ServiceAccountName = ServiceAccountName(user)
 	user.Status.ServiceAccountToken = string(SAtoken)
 	meta.SetStatusCondition(&user.Status.Conditions, metav1.Condition{
-		Type:               workspacev1alpha1.WorkspaceUserAvailable,
+		Type:               userv1alpha1.WorkspaceUserAvailable,
 		ObservedGeneration: user.Generation,
 		Status:             metav1.ConditionTrue,
 		Reason:             "WorkspaceUserReady",
@@ -169,7 +171,7 @@ func (r *WorkspaceUserReconciler) statusReconciler(ctx context.Context, user *wo
 	return resultNil, nil
 }
 
-func (r *WorkspaceUserReconciler) reconcileSA(ctx context.Context, user *workspacev1alpha1.WorkspaceUser) (subReconcilerResult, error) {
+func (r *WorkspaceUserReconciler) reconcileSA(ctx context.Context, user *userv1alpha1.WorkspaceUser) (subReconcilerResult, error) {
 	logger := log.FromContext(ctx)
 	logger.Info("in reconcileSA")
 	desiredServiceAccount := &corev1.ServiceAccount{
@@ -201,7 +203,7 @@ func (r *WorkspaceUserReconciler) reconcileSA(ctx context.Context, user *workspa
 
 }
 
-func (r *WorkspaceUserReconciler) reconcileRole(ctx context.Context, user *workspacev1alpha1.WorkspaceUser) (subReconcilerResult, error) {
+func (r *WorkspaceUserReconciler) reconcileRole(ctx context.Context, user *userv1alpha1.WorkspaceUser) (subReconcilerResult, error) {
 	desiredClusterRole := &rbacv1.ClusterRole{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: UserRoleName(user),
@@ -230,7 +232,7 @@ func (r *WorkspaceUserReconciler) reconcileRole(ctx context.Context, user *works
 }
 
 // TODO: Remove rolebindings when namespaces are removed.
-func (r *WorkspaceUserReconciler) reconcileRoleBinding(ctx context.Context, user *workspacev1alpha1.WorkspaceUser) (subReconcilerResult, error) {
+func (r *WorkspaceUserReconciler) reconcileRoleBinding(ctx context.Context, user *userv1alpha1.WorkspaceUser) (subReconcilerResult, error) {
 	desiredRoleBindings := make([]*rbacv1.RoleBinding, 0)
 	for _, ns := range user.Spec.Namespaces {
 		desiredRoleBinding := &rbacv1.RoleBinding{
@@ -289,7 +291,7 @@ func (r *WorkspaceUserReconciler) reconcileRoleBinding(ctx context.Context, user
 	return resultNil, nil
 }
 
-func (r *WorkspaceUserReconciler) reconcileSASecret(ctx context.Context, user *workspacev1alpha1.WorkspaceUser) (subReconcilerResult, error) {
+func (r *WorkspaceUserReconciler) reconcileSASecret(ctx context.Context, user *userv1alpha1.WorkspaceUser) (subReconcilerResult, error) {
 	desiredSecret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      ServiceAccountSecretName(user),
@@ -320,7 +322,7 @@ func (r *WorkspaceUserReconciler) reconcileSASecret(ctx context.Context, user *w
 	return resultNil, nil
 }
 
-func (r *WorkspaceUserReconciler) reconcileNamespaces(ctx context.Context, config *workspacev1alpha1.WorkspaceUser) (subReconcilerResult, error) {
+func (r *WorkspaceUserReconciler) reconcileNamespaces(ctx context.Context, config *userv1alpha1.WorkspaceUser) (subReconcilerResult, error) {
 	desiredNamespaces := make([]corev1.Namespace, 0)
 	for _, ns := range config.Spec.Namespaces {
 		desiredNS := corev1.Namespace{
@@ -372,7 +374,7 @@ func (r *WorkspaceUserReconciler) reconcileNamespaces(ctx context.Context, confi
 }
 
 // TODO: Move this to the volume sync controller.
-func (r *WorkspaceUserReconciler) reconcileBusyBoxBinaryVolume(ctx context.Context, config *workspacev1alpha1.WorkspaceUser) (subReconcilerResult, error) {
+func (r *WorkspaceUserReconciler) reconcileBusyBoxBinaryVolume(ctx context.Context, config *userv1alpha1.WorkspaceUser) (subReconcilerResult, error) {
 	jobName := "copy-busybox-binary-to-volume"
 	namespace := UserConfigNamespace(config)
 	pvcName := BusyBoxPVCName()
@@ -454,7 +456,7 @@ func (r *WorkspaceUserReconciler) reconcileBusyBoxBinaryVolume(ctx context.Conte
 	if err := r.Get(ctx, client.ObjectKey{Name: jobName, Namespace: namespace}, existingJob); err != nil {
 		if apierrors.IsNotFound(err) {
 			meta.SetStatusCondition(&config.Status.Conditions, metav1.Condition{
-				Type:               workspacev1alpha1.WorkspaceUserAvailable,
+				Type:               userv1alpha1.WorkspaceUserAvailable,
 				ObservedGeneration: config.Generation,
 				Status:             metav1.ConditionFalse,
 				Reason:             "BusyBoxBinaryNotYetCopied",
@@ -474,7 +476,7 @@ func (r *WorkspaceUserReconciler) reconcileBusyBoxBinaryVolume(ctx context.Conte
 	logger := log.FromContext(ctx)
 	logger.Info("Job not yet completed")
 	meta.SetStatusCondition(&config.Status.Conditions, metav1.Condition{
-		Type:               workspacev1alpha1.WorkspaceUserAvailable,
+		Type:               userv1alpha1.WorkspaceUserAvailable,
 		ObservedGeneration: config.Generation,
 		Status:             metav1.ConditionFalse,
 		Reason:             "BusyBoxBinaryNotYetCopied",
@@ -495,7 +497,7 @@ func findJobCompleteCondition(job *batchv1.Job) *batchv1.JobCondition {
 // SetupWithManager sets up the controller with the Manager.
 func (r *WorkspaceUserReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&workspacev1alpha1.WorkspaceUser{}).
+		For(&userv1alpha1.WorkspaceUser{}).
 		Owns(&corev1.Namespace{}).
 		Owns(&corev1.ServiceAccount{}).
 		Owns(&rbacv1.Role{}).

@@ -9,8 +9,8 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"soradev.io/cluster-agent/api/v1alpha1"
-	"soradev.io/cluster-agent/internal/controller"
+	"stackdome.io/cluster-agent/api/core/v1alpha1"
+	"stackdome.io/cluster-agent/internal/controller"
 )
 
 func (r *WorkspaceReconciler) ReconcileWorkspaceResources(ctx context.Context, workspace *v1alpha1.Workspace) (subReconcilerResult, error) {

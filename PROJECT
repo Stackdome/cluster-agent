@@ -2,64 +2,74 @@
 # This file is used to track the info used to scaffold your project
 # and allow the plugins properly work.
 # More info: https://book.kubebuilder.io/reference/project-config.html
-domain: soradev.io
+domain: stackdome.io
 layout:
 - go.kubebuilder.io/v4
+multigroup: true
 projectName: cluster-agent
-repo: soradev.io/cluster-agent
+repo: stackdome.io/cluster-agent
 resources:
 - api:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: soradev.io
-  group: workspace
-  kind: WorkspaceState
-  path: soradev.io/cluster-agent/api/v1alpha1
+  domain: stackdome.io
+  group: core
+  kind: Stack
+  path: stackdome.io/cluster-agent/api/core/v1alpha1
   version: v1alpha1
 - api:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: soradev.io
-  group: workspace
-  kind: WorkspaceResource
-  path: soradev.io/cluster-agent/api/v1alpha1
+  domain: stackdome.io
+  group: core
+  kind: StackResource
+  path: stackdome.io/cluster-agent/api/core/v1alpha1
   version: v1alpha1
 - api:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: soradev.io
-  group: workspace
-  kind: WorkspaceApplicationBuild
-  path: soradev.io/cluster-agent/api/v1alpha1
+  domain: stackdome.io
+  group: storage
+  kind: Storage
+  path: stackdome.io/cluster-agent/api/storage/v1alpha1
   version: v1alpha1
 - api:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: soradev.io
-  group: workspace
-  kind: Workspace
-  path: soradev.io/cluster-agent/api/v1alpha1
+  domain: stackdome.io
+  group: storage
+  kind: Volume
+  path: stackdome.io/cluster-agent/api/storage/v1alpha1
   version: v1alpha1
 - api:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: soradev.io
-  group: workspace
-  kind: WorkspaceVolume
-  path: soradev.io/cluster-agent/api/v1alpha1
+  domain: stackdome.io
+  group: builds
+  kind: Build
+  path: stackdome.io/cluster-agent/api/builds/v1alpha1
   version: v1alpha1
 - api:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: soradev.io
-  group: workspace
-  kind: WorkspaceConfiguration
-  path: soradev.io/cluster-agent/api/v1alpha1
+  domain: stackdome.io
+  group: users
+  kind: User
+  path: stackdome.io/cluster-agent/api/users/v1alpha1
+  version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: stackdome.io
+  group: registry
+  kind: Registry
+  path: stackdome.io/cluster-agent/api/registry/v1alpha1
   version: v1alpha1
 version: "3"

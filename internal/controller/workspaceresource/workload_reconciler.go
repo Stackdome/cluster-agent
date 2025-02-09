@@ -19,10 +19,11 @@ import (
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"soradev.io/cluster-agent/api/v1alpha1"
-	"soradev.io/cluster-agent/internal/controller"
-	"soradev.io/cluster-agent/internal/controller/workspacestorage"
-	"soradev.io/cluster-agent/pkg/interpolation"
+	buildsv1alpha1 "stackdome.io/cluster-agent/api/builds/v1alpha1"
+	"stackdome.io/cluster-agent/api/core/v1alpha1"
+	"stackdome.io/cluster-agent/internal/controller"
+	"stackdome.io/cluster-agent/internal/controller/workspacestorage"
+	"stackdome.io/cluster-agent/pkg/interpolation"
 )
 
 type DependencyChecker interface {
@@ -57,8 +58,8 @@ func GetDeploymentPodLabelForResource(resource *v1alpha1.WorkspaceResource) map[
 	}
 }
 
-func (r *workloadReconciler) getApplicationBuild(ctx context.Context, resource *v1alpha1.WorkspaceResource) (*v1alpha1.WorkspaceApplicationBuild, error) {
-	existingApplicationBuild := &v1alpha1.WorkspaceApplicationBuild{}
+func (r *workloadReconciler) getApplicationBuild(ctx context.Context, resource *v1alpha1.WorkspaceResource) (*buildsv1alpha1.WorkspaceApplicationBuild, error) {
+	existingApplicationBuild := &buildsv1alpha1.WorkspaceApplicationBuild{}
 	if err := r.Client.Get(ctx,
 		types.NamespacedName{
 			Name:      ApplicationBuildName(resource),

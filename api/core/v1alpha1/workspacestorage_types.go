@@ -42,7 +42,7 @@ const (
 )
 
 const (
-	WorkspaceStorageLabel = "workspace.soradev.io/workspacestorageName"
+	WorkspaceStorageLabel = "workspace.stackdome.io/workspacestorageName"
 )
 
 type WorkspaceStorageSpec struct {

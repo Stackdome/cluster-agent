@@ -47,7 +47,7 @@ const (
 )
 
 const (
-	LastSyncedAtAnnotation = "workspacevolume.soradev.io/LastSyncedAt"
+	LastSyncedAtAnnotation = "workspacevolume.stackdome.io/LastSyncedAt"
 )
 
 // WorkspaceVolumeSpec defines the desired state of WorkspaceVolume

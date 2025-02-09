@@ -4,20 +4,24 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.14.0
-  name: workspaceusers.workspace.soradev.io
+  name: workspaces.core.stackdome.io
 spec:
-  group: workspace.soradev.io
+  group: core.stackdome.io
   names:
-    kind: WorkspaceUser
-    listKind: WorkspaceUserList
-    plural: workspaceusers
-    singular: workspaceuser
-  scope: Cluster
+    kind: Workspace
+    listKind: WorkspaceList
+    plural: workspaces
+    singular: workspace
+  scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: WorkspaceUser is the Schema for the workspaceusers API
+        description: Workspace is the Schema for the workspaces API
         properties:
           apiVersion:
             description: |-
@@ -37,71 +41,148 @@ spec:
           metadata:
             type: object
           spec:
-            description: WorkspaceUserSpec defines the desired state of WorkspaceUser
+            description: WorkspaceSpec defines the desired state of Workspace
             properties:
-              accessRules:
+              domain:
+                description: |-
+                  SLD+TLD. Example: example.io
+                  Should not be empty and is a valid domain.
+                pattern: ^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z0-9][a-zA-Z0-9-]{0,61}[a-zA-Z0-9]\.[a-zA-Z]{2,}$
+                type: string
+              organisation:
+                type: string
+              resources:
                 items:
-                  description: |-
-                    PolicyRule holds information that describes a policy rule, but does not contain information
-                    about who the rule applies to or which namespace the rule applies to.
                   properties:
-                    apiGroups:
-                      description: |-
-                        APIGroups is the name of the APIGroup that contains the resources.  If multiple API groups are specified, any action requested against one of
-                        the enumerated resources in any API group will be allowed. "" represents the core API group and "*" represents all API groups.
-                      items:
-                        type: string
-                      type: array
-                    nonResourceURLs:
-                      description: |-
-                        NonResourceURLs is a set of partial urls that a user should have access to.  *s are allowed, but only as the full, final step in the path
-                        Since non-resource URLs are not namespaced, this field is only applicable for ClusterRoles referenced from a ClusterRoleBinding.
-                        Rules can either apply to API resources (such as "pods" or "secrets") or non-resource URL paths (such as "/api"),  but not both.
-                      items:
-                        type: string
-                      type: array
-                    resourceNames:
-                      description: ResourceNames is an optional white list of names
-                        that the rule applies to.  An empty set means that everything
-                        is allowed.
-                      items:
-                        type: string
-                      type: array
-                    resources:
-                      description: Resources is a list of resources this rule applies
-                        to. '*' represents all resources.
-                      items:
-                        type: string
-                      type: array
-                    verbs:
-                      description: Verbs is a list of Verbs that apply to ALL the
-                        ResourceKinds contained in this rule. '*' represents all verbs.
-                      items:
-                        type: string
-                      type: array
+                    name:
+                      type: string
+                    spec:
+                      description: WorkspaceResourceSpec defines the desired state
+                        of WorkspaceResource
+                      properties:
+                        applicationBuildSpec:
+                          description: Only one of the following fields should be
+                            specified
+                          properties:
+                            buildSourceHash:
+                              type: string
+                            context:
+                              type: string
+                            dockerFile:
+                              type: string
+                            volumeName:
+                              type: string
+                          required:
+                          - buildSourceHash
+                          - context
+                          - dockerFile
+                          - volumeName
+                          type: object
+                        args:
+                          items:
+                            type: string
+                          type: array
+                        command:
+                          items:
+                            type: string
+                          type: array
+                        dependsOn:
+                          description: Other resources this workspace resource depends
+                            on.
+                          items:
+                            type: string
+                          type: array
+                        environmentVariables:
+                          items:
+                            properties:
+                              name:
+                                type: string
+                              value:
+                                type: string
+                            required:
+                            - name
+                            - value
+                            type: object
+                          type: array
+                        imageRegistry:
+                          type: string
+                        init:
+                          properties:
+                            args:
+                              items:
+                                type: string
+                              type: array
+                            command:
+                              items:
+                                type: string
+                              type: array
+                          required:
+                          - command
+                          type: object
+                        ports:
+                          items:
+                            properties:
+                              exposeToPublic:
+                                default: false
+                                type: boolean
+                              isHttp:
+                                default: true
+                                type: boolean
+                              number:
+                                format: int32
+                                type: integer
+                              subdomain:
+                                type: string
+                            required:
+                            - number
+                            type: object
+                          type: array
+                        prebuiltApplicationSpec:
+                          properties:
+                            image:
+                              type: string
+                          required:
+                          - image
+                          type: object
+                        restartRequest:
+                          format: date-time
+                          type: string
+                        stateFul:
+                          type: boolean
+                        volumeMounts:
+                          items:
+                            properties:
+                              destination:
+                                type: string
+                              sourceSubPath:
+                                type: string
+                              sourceWorkspaceVolume:
+                                type: string
+                            required:
+                            - destination
+                            - sourceSubPath
+                            - sourceWorkspaceVolume
+                            type: object
+                          type: array
+                      type: object
                   required:
-                  - verbs
+                  - name
+                  - spec
                   type: object
                 type: array
-              baseDomain:
-                type: string
-              namespaces:
-                items:
-                  type: string
-                minItems: 1
-                type: array
-              username:
+              userName:
                 type: string
             required:
-            - accessRules
-            - namespaces
-            - username
+            - domain
+            - organisation
+            - resources
+            - userName
             type: object
           status:
-            description: WorkspaceUserStatus defines the observed state of WorkspaceUser
+            description: WorkspaceStatus defines the observed state of Workspace
             properties:
               conditions:
-                description: Conditions is a list of status conditions this object
+                description: Conditions is a list of status conditions ths object
                   is in.
                 items:
                   description: "Condition contains details for one aspect of the current
@@ -171,19 +252,15 @@ spec:
                   - type
                   type: object
                 type: array
-              namespaces:
-                items:
-                  type: string
-                type: array
+              observedGeneration:
+                format: int64
+                type: integer
               observedStackdomeServerObjectGeneration:
+                description: The most recent generation observed by the controller.
                 format: int64
                 type: integer
               phase:
                 default: Pending
-                type: string
-              serviceAccountName:
-                type: string
-              serviceAccountToken:
                 type: string
               statusHash:
                 type: string

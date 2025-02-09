@@ -23,6 +23,7 @@ import (
 	"github.com/davecgh/go-spew/spew"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/rand"
+	stackv1alpha1 "stackdome.io/cluster-agent/api/core/v1alpha1"
 )
 
 type WorkspaceApplicationBuildPhase string
@@ -107,7 +108,7 @@ type WorkspaceApplicationBuildList struct {
 	Items           []WorkspaceApplicationBuild `json:"items"`
 }
 
-func ApplicationBuildName(resource *WorkspaceResource) string {
+func ApplicationBuildName(resource *stackv1alpha1.WorkspaceResource) string {
 	return fmt.Sprintf("%s-%s", resource.Name, resource.Spec.ApplicationBuildSpec.BuildSourceHash[:7])
 }
 

@@ -16,9 +16,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-	"soradev.io/cluster-agent/api/v1alpha1"
-	"soradev.io/cluster-agent/internal/controller"
-	"soradev.io/cluster-agent/pkg/imagebuilder"
+	buildsv1alpha1 "stackdome.io/cluster-agent/api/builds/v1alpha1"
+	stackv1alpha1 "stackdome.io/cluster-agent/api/core/v1alpha1"
+
+	"stackdome.io/cluster-agent/internal/controller"
+	"stackdome.io/cluster-agent/pkg/imagebuilder"
 )
 
 // WorkspaceApplicationBuildReconciler reconciles a WorkspaceApplicationBuild object
@@ -30,7 +32,7 @@ type WorkspaceApplicationBuildReconciler struct {
 func (r *WorkspaceApplicationBuildReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 	ctx = controller.ContextWithLogger(ctx, logger.WithValues("WorkspaceApplicationBuild", req.String()))
-	applicationBuild := &v1alpha1.WorkspaceApplicationBuild{}
+	applicationBuild := &buildsv1alpha1.WorkspaceApplicationBuild{}
 
 	if err := r.Client.Get(ctx, req.NamespacedName, applicationBuild); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -45,11 +47,11 @@ func (r *WorkspaceApplicationBuildReconciler) Reconcile(ctx context.Context, req
 	return res, r.Client.Status().Update(ctx, applicationBuild)
 }
 
-func reportWorkspaceApplicationBuildComplete(buildConfig *v1alpha1.WorkspaceApplicationBuild) {
-	buildConfig.Status.Phase = v1alpha1.WorkspaceApplicationBuildPhaseSuccess
+func reportWorkspaceApplicationBuildComplete(buildConfig *buildsv1alpha1.WorkspaceApplicationBuild) {
+	buildConfig.Status.Phase = buildsv1alpha1.WorkspaceApplicationBuildPhaseSuccess
 	buildConfig.Status.BuildSourceHash = buildConfig.Spec.SourceHash
 	meta.SetStatusCondition(&buildConfig.Status.Conditions, metav1.Condition{
-		Type:               string(v1alpha1.WorkspaceApplicationBuildAvailable),
+		Type:               string(buildsv1alpha1.WorkspaceApplicationBuildAvailable),
 		Status:             metav1.ConditionTrue,
 		ObservedGeneration: buildConfig.Generation,
 		Reason:             "BuildComplete",
@@ -58,10 +60,10 @@ func reportWorkspaceApplicationBuildComplete(buildConfig *v1alpha1.WorkspaceAppl
 	buildConfig.Status.StatusHash = buildConfig.StatusHash()
 }
 
-func (r *WorkspaceApplicationBuildReconciler) reconcile(ctx context.Context, buildConfig *v1alpha1.WorkspaceApplicationBuild) (ctrl.Result, error) {
+func (r *WorkspaceApplicationBuildReconciler) reconcile(ctx context.Context, buildConfig *buildsv1alpha1.WorkspaceApplicationBuild) (ctrl.Result, error) {
 	logger := controller.LoggerFromContext(ctx)
 	logger.Info("reconciling application build")
-	volumeRef := &v1alpha1.WorkspaceVolume{}
+	volumeRef := &stackv1alpha1.WorkspaceVolume{}
 
 	if err := r.Client.Get(ctx, types.NamespacedName{
 		Name:      buildConfig.Spec.ContextRef.VolumeName,
@@ -73,7 +75,7 @@ func (r *WorkspaceApplicationBuildReconciler) reconcile(ctx context.Context, bui
 	if !volumeAvailable(volumeRef) {
 		reportWorkspaceApplicationBuildStatus(
 			buildConfig,
-			v1alpha1.WorkspaceApplicationBuildAvailable,
+			buildsv1alpha1.WorkspaceApplicationBuildAvailable,
 			metav1.ConditionFalse,
 			"WorkspaceStorageNotReady",
 		)
@@ -83,7 +85,7 @@ func (r *WorkspaceApplicationBuildReconciler) reconcile(ctx context.Context, bui
 	if !volumeReadyForBuild(volumeRef) {
 		reportWorkspaceApplicationBuildStatus(
 			buildConfig,
-			v1alpha1.WorkspaceApplicationBuildAvailable,
+			buildsv1alpha1.WorkspaceApplicationBuildAvailable,
 			metav1.ConditionFalse,
 			"VolumeNotReadyForBuild",
 		)
@@ -110,7 +112,7 @@ func (r *WorkspaceApplicationBuildReconciler) reconcile(ctx context.Context, bui
 		return ctrl.Result{}, err
 	}
 
-	buildCompletedCondition := meta.FindStatusCondition(buildConfig.Status.Conditions, string(v1alpha1.WorkspaceApplicationBuildAvailable))
+	buildCompletedCondition := meta.FindStatusCondition(buildConfig.Status.Conditions, string(buildsv1alpha1.WorkspaceApplicationBuildAvailable))
 	if buildCompletedCondition != nil && buildCompletedCondition.Status == metav1.ConditionTrue {
 		return ctrl.Result{}, nil
 	}
@@ -137,21 +139,21 @@ func (r *WorkspaceApplicationBuildReconciler) reconcile(ctx context.Context, bui
 		return ctrl.Result{}, nil
 	}
 	if JobFailedCondition != nil && JobFailedCondition.Status == v1.ConditionStatus(metav1.ConditionTrue) {
-		reportWorkspaceApplicationBuildStatus(buildConfig, v1alpha1.WorkspaceApplicationBuildFailed, metav1.ConditionTrue, "BuildJobFailed")
+		reportWorkspaceApplicationBuildStatus(buildConfig, buildsv1alpha1.WorkspaceApplicationBuildFailed, metav1.ConditionTrue, "BuildJobFailed")
 		return ctrl.Result{}, nil
 	}
 
-	reportWorkspaceApplicationBuildStatus(buildConfig, v1alpha1.WorkspaceApplicationBuildAvailable, metav1.ConditionFalse, "BuildJobNotYetComplete")
+	reportWorkspaceApplicationBuildStatus(buildConfig, buildsv1alpha1.WorkspaceApplicationBuildAvailable, metav1.ConditionFalse, "BuildJobNotYetComplete")
 	return ctrl.Result{}, nil
 }
 
-func (r *WorkspaceApplicationBuildReconciler) handleBuildJobCreation(ctx context.Context, desiredJob *batchv1.Job, buildConfig *v1alpha1.WorkspaceApplicationBuild) error {
+func (r *WorkspaceApplicationBuildReconciler) handleBuildJobCreation(ctx context.Context, desiredJob *batchv1.Job, buildConfig *buildsv1alpha1.WorkspaceApplicationBuild) error {
 	if err := r.Client.Create(ctx, desiredJob); err != nil {
 		return err
 	}
 	buildConfig.Status.BuildSourceHash = buildConfig.Spec.SourceHash
 	meta.SetStatusCondition(&buildConfig.Status.Conditions, metav1.Condition{
-		Type:    string(v1alpha1.WorkspaceApplicationJobCreated),
+		Type:    string(buildsv1alpha1.WorkspaceApplicationJobCreated),
 		Status:  metav1.ConditionTrue,
 		Reason:  "BuildJobCreated",
 		Message: "BuildJobCreated",
@@ -168,16 +170,16 @@ func findJobCondition(job *batchv1.Job, jobCondition batchv1.JobConditionType) *
 	return nil
 }
 
-func volumeAvailable(volume *v1alpha1.WorkspaceVolume) bool {
-	cond := meta.FindStatusCondition(volume.Status.Conditions, string(v1alpha1.WorkspaceVolumeConditionAvailable))
+func volumeAvailable(volume *stackv1alpha1.WorkspaceVolume) bool {
+	cond := meta.FindStatusCondition(volume.Status.Conditions, string(stackv1alpha1.WorkspaceVolumeConditionAvailable))
 	if cond == nil || cond.Status == metav1.ConditionFalse {
 		return false
 	}
 	return true
 }
 
-func volumeReadyForBuild(volume *v1alpha1.WorkspaceVolume) bool {
-	cond := meta.FindStatusCondition(volume.Status.Conditions, string(v1alpha1.WorkspaceVolumeConditionSyncedOnce))
+func volumeReadyForBuild(volume *stackv1alpha1.WorkspaceVolume) bool {
+	cond := meta.FindStatusCondition(volume.Status.Conditions, string(stackv1alpha1.WorkspaceVolumeConditionSyncedOnce))
 	if cond == nil || cond.Status == metav1.ConditionFalse {
 		return false
 	}
@@ -185,8 +187,8 @@ func volumeReadyForBuild(volume *v1alpha1.WorkspaceVolume) bool {
 }
 
 func reportWorkspaceApplicationBuildStatus(
-	buildConfig *v1alpha1.WorkspaceApplicationBuild,
-	condition v1alpha1.WorkspaceApplicationBuildStatusCondition,
+	buildConfig *buildsv1alpha1.WorkspaceApplicationBuild,
+	condition buildsv1alpha1.WorkspaceApplicationBuildStatusCondition,
 	value metav1.ConditionStatus,
 	reason string,
 ) {
@@ -205,7 +207,7 @@ func reportWorkspaceApplicationBuildStatus(
 // SetupWithManager sets up the controller with the Manager.
 func (r *WorkspaceApplicationBuildReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&v1alpha1.WorkspaceApplicationBuild{}).
-		Watches(&batchv1.Job{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &v1alpha1.WorkspaceApplicationBuild{})).
+		For(&buildsv1alpha1.WorkspaceApplicationBuild{}).
+		Watches(&batchv1.Job{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &buildsv1alpha1.WorkspaceApplicationBuild{})).
 		Complete(r)
 }

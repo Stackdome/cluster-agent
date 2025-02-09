@@ -4,16 +4,16 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.14.0
-  name: workspaceresources.workspace.soradev.io
+  name: workspaceapplicationbuilds.builds.stackdome.io
 spec:
-  group: workspace.soradev.io
+  group: builds.stackdome.io
   names:
-    kind: WorkspaceResource
-    listKind: WorkspaceResourceList
-    plural: workspaceresources
+    kind: WorkspaceApplicationBuild
+    listKind: WorkspaceApplicationBuildList
+    plural: workspaceapplicationbuilds
     shortNames:
-    - wr
-    singular: workspaceresource
+    - wab
+    singular: workspaceapplicationbuild
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
@@ -23,7 +23,8 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: WorkspaceResource is the Schema for the workspaceresources API
+        description: WorkspaceApplicationBuild is the Schema for the workspaceapplicationbuilds
+          API
         properties:
           apiVersion:
             description: |-
@@ -43,114 +44,40 @@ spec:
           metadata:
             type: object
           spec:
-            description: WorkspaceResourceSpec defines the desired state of WorkspaceResource
+            description: WorkspaceApplicationBuildSpec defines the desired state of
+              WorkspaceApplicationBuild
             properties:
-              applicationBuildSpec:
-                description: Only one of the following fields should be specified
+              contextRef:
                 properties:
-                  buildSourceHash:
-                    type: string
                   context:
                     type: string
-                  dockerFile:
+                  dockerfilePath:
                     type: string
                   volumeName:
                     type: string
                 required:
-                - buildSourceHash
                 - context
-                - dockerFile
+                - dockerfilePath
                 - volumeName
                 type: object
-              args:
-                items:
-                  type: string
-                type: array
-              command:
-                items:
-                  type: string
-                type: array
-              dependsOn:
-                description: Other resources this workspace resource depends on.
-                items:
-                  type: string
-                type: array
-              environmentVariables:
-                items:
-                  properties:
-                    name:
-                      type: string
-                    value:
-                      type: string
-                  required:
-                  - name
-                  - value
-                  type: object
-                type: array
-              imageRegistry:
+              registry:
                 type: string
-              init:
-                properties:
-                  args:
-                    items:
-                      type: string
-                    type: array
-                  command:
-                    items:
-                      type: string
-                    type: array
-                required:
-                - command
-                type: object
-              ports:
-                items:
-                  properties:
-                    exposeToPublic:
-                      default: false
-                      type: boolean
-                    isHttp:
-                      default: true
-                      type: boolean
-                    number:
-                      format: int32
-                      type: integer
-                    subdomain:
-                      type: string
-                  required:
-                  - number
-                  type: object
-                type: array
-              prebuiltApplicationSpec:
-                properties:
-                  image:
-                    type: string
-                required:
-                - image
-                type: object
-              restartRequest:
-                format: date-time
+              resourceName:
                 type: string
-              stateFul:
-                type: boolean
-              volumeMounts:
-                items:
-                  properties:
-                    destination:
-                      type: string
-                    sourceSubPath:
-                      type: string
-                    sourceWorkspaceVolume:
-                      type: string
-                  required:
-                  - destination
-                  - sourceSubPath
-                  - sourceWorkspaceVolume
-                  type: object
-                type: array
+              sourceHash:
+                type: string
+            required:
+            - contextRef
+            - registry
+            - resourceName
+            - sourceHash
             type: object
           status:
-            description: WorkspaceResourceStatus defines the observed state of WorkspaceResource
+            description: WorkspaceApplicationBuildStatus defines the observed state
+              of WorkspaceApplicationBuild
             properties:
+              buildSourceHash:
+                type: string
               conditions:
                 description: Conditions is a list of status conditions ths object
                   is in.
@@ -222,53 +149,10 @@ spec:
                   - type
                   type: object
                 type: array
-              currentBuild:
-                description: |-
-                  Current build that this resource uses.
-                  Applicable only to resources which have ApplicationBuildSpec defined.
-                properties:
-                  available:
-                    type: boolean
-                  message:
-                    type: string
-                  name:
-                    type: string
-                  phase:
-                    type: string
-                  reason:
-                    type: string
-                  shortHash:
-                    type: string
-                  sourceHash:
-                    type: string
-                type: object
-              externalAddress:
-                items:
-                  properties:
-                    address:
-                      type: string
-                    targetPort:
-                      format: int32
-                      type: integer
-                  required:
-                  - address
-                  - targetPort
-                  type: object
-                type: array
-              imageSourceHash:
-                type: string
-              internalAddress:
-                description: Internal address is always the cluster wide resolvable
-                  internal domain name.
-                type: string
-              lastRestartRequestProcessedAt:
-                format: date-time
+              imageUrl:
                 type: string
               observedGeneration:
                 description: The most recent generation observed by the controller.
-                format: int64
-                type: integer
-              observedStackdomeServerObjectGeneration:
                 format: int64
                 type: integer
               phase:
@@ -280,6 +164,8 @@ spec:
                 type: string
               statusHash:
                 type: string
+            required:
+            - imageUrl
             type: object
         type: object
     served: true

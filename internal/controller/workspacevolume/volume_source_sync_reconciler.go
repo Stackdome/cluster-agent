@@ -12,8 +12,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"soradev.io/cluster-agent/api/v1alpha1"
-	"soradev.io/cluster-agent/pkg/volumesync"
+	buildsv1alpha1 "stackdome.io/cluster-agent/api/builds/v1alpha1"
+	"stackdome.io/cluster-agent/api/core/v1alpha1"
+	"stackdome.io/cluster-agent/pkg/volumesync"
 )
 
 const (
@@ -80,7 +81,7 @@ func (r *WorkspaceVolumeReconciler) reconcileBuildArtifactsSrcsForResource(
 	ctx context.Context,
 	volume *v1alpha1.WorkspaceVolume,
 	resourceName string,
-	applicationBuild *v1alpha1.WorkspaceApplicationBuild,
+	applicationBuild *buildsv1alpha1.WorkspaceApplicationBuild,
 	buildArtifacts []*v1alpha1.BuildArtifactSource) error {
 	if applicationBuildAvailable(applicationBuild) {
 		desiredJob := volumesync.CreateBuildArtifactsVolumeSyncJob(volume, buildArtifacts, applicationBuild)
@@ -111,7 +112,7 @@ func (r *WorkspaceVolumeReconciler) reconcileBuildArtifactsSrcsForResource(
 		}
 	}
 
-	failedCond := meta.FindStatusCondition(applicationBuild.Status.Conditions, string(v1alpha1.WorkspaceApplicationBuildFailed))
+	failedCond := meta.FindStatusCondition(applicationBuild.Status.Conditions, string(buildsv1alpha1.WorkspaceApplicationBuildFailed))
 	if failedCond != nil && failedCond.Status == metav1.ConditionTrue {
 		volume.Status.SetBuildArtifactSyncStatus(v1alpha1.ResourceRef(resourceName), applicationBuild.ShortBuildSrcHashFromSpec(), v1alpha1.BuildArtifactSyncStatusFailed)
 		return nil
@@ -120,8 +121,8 @@ func (r *WorkspaceVolumeReconciler) reconcileBuildArtifactsSrcsForResource(
 	return nil
 }
 
-func applicationBuildAvailable(applicationBuild *v1alpha1.WorkspaceApplicationBuild) bool {
-	availableCond := meta.FindStatusCondition(applicationBuild.Status.Conditions, string(v1alpha1.WorkspaceApplicationBuildAvailable))
+func applicationBuildAvailable(applicationBuild *buildsv1alpha1.WorkspaceApplicationBuild) bool {
+	availableCond := meta.FindStatusCondition(applicationBuild.Status.Conditions, string(buildsv1alpha1.WorkspaceApplicationBuildAvailable))
 	if availableCond != nil && availableCond.Status == metav1.ConditionTrue {
 		return true
 	}
@@ -139,8 +140,8 @@ func buildArtifactSrcsGroupedByResource(volume *v1alpha1.WorkspaceVolume) map[st
 	return res
 }
 
-func (r *WorkspaceVolumeReconciler) getApplicationBuildsForResources(ctx context.Context, volume *v1alpha1.WorkspaceVolume) (map[string]*v1alpha1.WorkspaceApplicationBuild, error) {
-	res := make(map[string]*v1alpha1.WorkspaceApplicationBuild)
+func (r *WorkspaceVolumeReconciler) getApplicationBuildsForResources(ctx context.Context, volume *v1alpha1.WorkspaceVolume) (map[string]*buildsv1alpha1.WorkspaceApplicationBuild, error) {
+	res := make(map[string]*buildsv1alpha1.WorkspaceApplicationBuild)
 	for _, artifact := range volume.Spec.Source.BuildArtifacts {
 		resourceRef := artifact.ResourceRef
 		resource := &v1alpha1.WorkspaceResource{}
@@ -150,8 +151,8 @@ func (r *WorkspaceVolumeReconciler) getApplicationBuildsForResources(ctx context
 			}
 			return nil, fmt.Errorf("failed to get the resource '%s' in volume '%s': %w", resourceRef, volume.Name, err)
 		}
-		applicationBuildName := v1alpha1.ApplicationBuildName(resource)
-		applicationBuild := &v1alpha1.WorkspaceApplicationBuild{}
+		applicationBuildName := buildsv1alpha1.ApplicationBuildName(resource)
+		applicationBuild := &buildsv1alpha1.WorkspaceApplicationBuild{}
 		if err := r.Client.Get(ctx, types.NamespacedName{Name: applicationBuildName, Namespace: volume.Namespace}, applicationBuild); err != nil {
 			if apierrors.IsNotFound(err) {
 				return nil, err
