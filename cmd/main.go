@@ -39,6 +39,7 @@ import (
 
 	buildsv1alpha1 "stackdome.io/cluster-agent/api/builds/v1alpha1"
 	corev1alpha1 "stackdome.io/cluster-agent/api/core/v1alpha1"
+	registryv1alpha1 "stackdome.io/cluster-agent/api/registry/v1alpha1"
 	usersv1alpha1 "stackdome.io/cluster-agent/api/users/v1alpha1"
 	"stackdome.io/cluster-agent/internal/controller/applicationbuild"
 	"stackdome.io/cluster-agent/internal/controller/workspace"
@@ -46,9 +47,9 @@ import (
 	"stackdome.io/cluster-agent/internal/controller/workspacestorage"
 	"stackdome.io/cluster-agent/internal/controller/workspaceuser"
 	"stackdome.io/cluster-agent/internal/controller/workspacevolume"
+	"stackdome.io/cluster-agent/pkg/registry/zotregistry"
 
-	registryv1alpha1 "stackdome.io/cluster-agent/api/registry/v1alpha1"
-	registrycontroller "stackdome.io/cluster-agent/internal/controller/registry"
+	registry "stackdome.io/cluster-agent/internal/controller/registry"
 	//+kubebuilder:scaffold:imports
 )
 
@@ -59,7 +60,6 @@ var (
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-
 	utilruntime.Must(corev1alpha1.AddToScheme(scheme))
 	utilruntime.Must(projectcontourv1.AddToScheme(scheme))
 	utilruntime.Must(registryv1alpha1.AddToScheme(scheme))
@@ -109,6 +109,18 @@ func main() {
 
 	webhookServer := webhook.NewServer(webhook.Options{
 		TLSOpts: tlsOpts,
+	})
+
+	registryBuilder := zotregistry.NewZotRegistry(zotregistry.ZotRegistryOpts{
+		RegistryImage:    "ghcr.io/project-zot/zot-linux-amd64:latest",
+		GCDelay:          "1h",
+		GCInterval:       "24h",
+		EnableGC:         true,
+		RegistryLogLevel: "info",
+		LayerCachingOpts: zotregistry.LayerCachingOpts{
+			Enabled:          true,
+			RepoGlobPatterns: []string{"*-cache", "*/cache", "*/cache/*"},
+		},
 	})
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
@@ -184,10 +196,11 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "WorkspaceUser")
 		os.Exit(1)
 	}
-	if err = (&registrycontroller.RegistryReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
+
+	if err = registry.NewRegistryReconciler(
+		mgr.GetClient(),
+		mgr.GetScheme(),
+		registryBuilder).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Registry")
 		os.Exit(1)
 	}

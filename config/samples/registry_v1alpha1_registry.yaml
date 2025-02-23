@@ -1,9 +1,21 @@
 apiVersion: registry.stackdome.io/v1alpha1
-kind: Registry
+kind: ClusterRegistry
 metadata:
-  labels:
-    app.kubernetes.io/name: cluster-agent
-    app.kubernetes.io/managed-by: kustomize
-  name: registry-sample
+  name: cluster-registry
 spec:
-  # TODO(user): Add fields here
+  owner:
+    type: Organization
+    id: engineering-dept
+  storage:
+    size: 10Gi
+  auth:
+    htPasswordCredentials:
+      username: ashish
+      passwordSecretRef:
+        name: password
+        namespace: stackdome-registry
+  retentionPolicy:
+    maxRepositoryCount: 100
+    tagsPerRepo: 10
+    deleteUntagged: true
+  port: 5000
