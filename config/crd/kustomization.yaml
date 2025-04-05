@@ -3,6 +3,7 @@
 # It should be run by config/default
 resources:
 - bases/registry.stackdome.io_registries.yaml
+- bases/storage.stackdome.io_nfsservers.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:

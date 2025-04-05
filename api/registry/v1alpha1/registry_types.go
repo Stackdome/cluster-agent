@@ -1,7 +1,6 @@
 package v1alpha1
 
 import (
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -10,8 +9,6 @@ type RegistryStatusConditionType string
 const (
 	RegistryReady RegistryStatusConditionType = "Ready"
 )
-
-//+kubebuilder:validation:Required
 
 type RegistryAuthSpec struct {
 	// Basic authentication credentials for the registry
@@ -22,8 +19,19 @@ type RegistryAuthSpec struct {
 type HtPasswordCredentialsSpec struct {
 	// Reference to a secret containing the username and password.
 	// +kubebuilder:validation:Required
-	Username          string                 `json:"username"`
-	PasswordSecretRef corev1.SecretReference `json:"passwordSecretRef"`
+	Username string `json:"username"`
+	// +kubebuilder:validation:Required
+	// +required
+	PasswordSecretRef SecretRef `json:"passwordSecretRef"`
+}
+
+type SecretRef struct {
+	// name is unique within a namespace to reference a secret resource.
+	// +required
+	Name string `json:"name,omitempty" protobuf:"bytes,1,opt,name=name"`
+	// namespace defines the space within which the secret name must be unique.
+	// +required
+	Namespace string `json:"namespace,omitempty" protobuf:"bytes,2,opt,name=namespace"`
 }
 
 func (h *HtPasswordCredentialsSpec) HTPasswordFileName() string {

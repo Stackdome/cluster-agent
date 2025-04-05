@@ -5,9 +5,9 @@ metadata:
   name: manager-role
 rules:
 - apiGroups:
-  - registry.stackdome.io
+  - storage.stackdome.io
   resources:
-  - registries
+  - nfsservers
   verbs:
   - create
   - delete
@@ -17,15 +17,15 @@ rules:
   - update
   - watch
 - apiGroups:
-  - registry.stackdome.io
+  - storage.stackdome.io
   resources:
-  - registries/finalizers
+  - nfsservers/finalizers
   verbs:
   - update
 - apiGroups:
-  - registry.stackdome.io
+  - storage.stackdome.io
   resources:
-  - registries/status
+  - nfsservers/status
   verbs:
   - get
   - patch

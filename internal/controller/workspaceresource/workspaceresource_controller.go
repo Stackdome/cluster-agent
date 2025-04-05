@@ -30,7 +30,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -256,6 +255,6 @@ func (r *WorkspaceResourceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				return res
 			},
 		)).
-		WatchesRawSource(&source.Channel{Source: r.RequeueCh}, &handler.EnqueueRequestForObject{}).
+		// WatchesRawSource(&source.Channel{Source: r.RequeueCh}, &handler.EnqueueRequestForObject{}).
 		Complete(r)
 }

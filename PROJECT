@@ -72,4 +72,13 @@ resources:
   kind: Registry
   path: stackdome.io/cluster-agent/api/registry/v1alpha1
   version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: stackdome.io
+  group: storage
+  kind: NFSServer
+  path: stackdome.io/cluster-agent/api/storage/v1alpha1
+  version: v1alpha1
 version: "3"

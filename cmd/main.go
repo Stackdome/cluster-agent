@@ -17,13 +17,17 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"flag"
 	"os"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
+	clientgocorev1 "k8s.io/api/core/v1"
+	"k8s.io/client-go/kubernetes"
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
+	"k8s.io/utils/ptr"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -47,9 +51,13 @@ import (
 	"stackdome.io/cluster-agent/internal/controller/workspacestorage"
 	"stackdome.io/cluster-agent/internal/controller/workspaceuser"
 	"stackdome.io/cluster-agent/internal/controller/workspacevolume"
+	"stackdome.io/cluster-agent/pkg/execute"
 	"stackdome.io/cluster-agent/pkg/registry/zotregistry"
+	"stackdome.io/cluster-agent/pkg/rwmany_provisioner"
 
+	storagev1alpha1 "stackdome.io/cluster-agent/api/storage/v1alpha1"
 	registry "stackdome.io/cluster-agent/internal/controller/registry"
+	storagecontroller "stackdome.io/cluster-agent/internal/controller/storage"
 	//+kubebuilder:scaffold:imports
 )
 
@@ -65,6 +73,7 @@ func init() {
 	utilruntime.Must(registryv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(buildsv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(usersv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(storagev1alpha1.AddToScheme(scheme))
 	//+kubebuilder:scaffold:scheme
 }
 
@@ -168,6 +177,7 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "WorkspaceResource")
 		os.Exit(1)
 	}
+
 	if err = (&applicationbuild.WorkspaceApplicationBuildReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
@@ -204,6 +214,61 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "Registry")
 		os.Exit(1)
 	}
+
+	stackdomeProvisionerName := "stackdome.io/nfs-rwmany"
+
+	storageClassOpts := storagecontroller.StorageClassOpts{
+		Name:            "stackdome-rwmany",
+		ProvisionerName: stackdomeProvisionerName,
+		ReclaimPolicy:   ptr.To(clientgocorev1.PersistentVolumeReclaimDelete),
+		MountOptions:    []string{},
+	}
+
+	storageReconciler, err := storagecontroller.NewNFSServerReconciler(
+		uncachedClient,
+		mgr.GetClient(),
+		mgr.GetScheme(),
+		storageClassOpts,
+		getNfsServerImage(),
+	)
+	if err != nil {
+		setupLog.Error(err, "unable to create storageReconciler", "reconciler", "NFSServer")
+		os.Exit(1)
+	}
+
+	if err := storageReconciler.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "NFSServer")
+		os.Exit(1)
+	}
+
+	podExecuter, err := execute.NewPodExecuter(ctrl.GetConfigOrDie())
+	if err != nil {
+		setupLog.Error(err, "unable to create podexecuter", "controller", "NFSServer")
+		os.Exit(1)
+	}
+
+	clientset, err := kubernetes.NewForConfig(ctrl.GetConfigOrDie())
+	if err != nil {
+		setupLog.Error(err, "unable to create k8s clientset", "controller", "NFSServer")
+		os.Exit(1)
+	}
+
+	stackdomeNfsManyProvisioner, err := rwmany_provisioner.NewStackdomeRWManyProvisioner(
+		context.Background(),
+		rwmany_provisioner.StackdomeRWManyProvisionerSpec{
+			ClientSet:       clientset,
+			ProvisionerName: stackdomeProvisionerName,
+			PodExecuter:     podExecuter,
+			Logger:          setupLog,
+			Client:          mgr.GetClient(),
+		})
+	if err != nil {
+		setupLog.Error(err, "unable to create stackdomeNfsManyProvisioner", "controller", "NFSServer")
+		os.Exit(1)
+	}
+
+	mgr.Add(stackdomeNfsManyProvisioner)
+
 	//+kubebuilder:scaffold:builder
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
@@ -220,4 +285,8 @@ func main() {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
+}
+
+func getNfsServerImage() string {
+	return "adnanhodzic/nfs-server-k8s:1"
 }
