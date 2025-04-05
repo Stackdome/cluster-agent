@@ -4,20 +4,20 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.14.0
-  name: workspaceusers.users.stackdome.io
+  name: nfsservers.storage.stackdome.io
 spec:
-  group: users.stackdome.io
+  group: storage.stackdome.io
   names:
-    kind: WorkspaceUser
-    listKind: WorkspaceUserList
-    plural: workspaceusers
-    singular: workspaceuser
-  scope: Cluster
+    kind: NFSServer
+    listKind: NFSServerList
+    plural: nfsservers
+    singular: nfsserver
+  scope: Namespaced
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: WorkspaceUser is the Schema for the workspaceusers API
+        description: NFSServer is the Schema for the nfsservers API.
         properties:
           apiVersion:
             description: |-
@@ -37,77 +37,33 @@ spec:
           metadata:
             type: object
           spec:
-            description: WorkspaceUserSpec defines the desired state of WorkspaceUser
+            description: NFSServerSpec defines the desired state of NFSServer.
             properties:
-              accessRules:
-                items:
-                  description: |-
-                    PolicyRule holds information that describes a policy rule, but does not contain information
-                    about who the rule applies to or which namespace the rule applies to.
-                  properties:
-                    apiGroups:
-                      description: |-
-                        APIGroups is the name of the APIGroup that contains the resources.  If multiple API groups are specified, any action requested against one of
-                        the enumerated resources in any API group will be allowed. "" represents the core API group and "*" represents all API groups.
-                      items:
-                        type: string
-                      type: array
-                      x-kubernetes-list-type: atomic
-                    nonResourceURLs:
-                      description: |-
-                        NonResourceURLs is a set of partial urls that a user should have access to.  *s are allowed, but only as the full, final step in the path
-                        Since non-resource URLs are not namespaced, this field is only applicable for ClusterRoles referenced from a ClusterRoleBinding.
-                        Rules can either apply to API resources (such as "pods" or "secrets") or non-resource URL paths (such as "/api"),  but not both.
-                      items:
-                        type: string
-                      type: array
-                      x-kubernetes-list-type: atomic
-                    resourceNames:
-                      description: ResourceNames is an optional white list of names
-                        that the rule applies to.  An empty set means that everything
-                        is allowed.
-                      items:
-                        type: string
-                      type: array
-                      x-kubernetes-list-type: atomic
-                    resources:
-                      description: Resources is a list of resources this rule applies
-                        to. '*' represents all resources.
-                      items:
-                        type: string
-                      type: array
-                      x-kubernetes-list-type: atomic
-                    verbs:
-                      description: Verbs is a list of Verbs that apply to ALL the
-                        ResourceKinds contained in this rule. '*' represents all verbs.
-                      items:
-                        type: string
-                      type: array
-                      x-kubernetes-list-type: atomic
-                  required:
-                  - verbs
-                  type: object
-                type: array
-              baseDomain:
+              backingStorageClassName:
+                maxLength: 100
                 type: string
-              namespaces:
-                items:
-                  type: string
-                minItems: 1
-                type: array
-              username:
+                x-kubernetes-validations:
+                - message: backingStorageClassName is immutable
+                  rule: self == oldSelf
+              capacity:
+                maxLength: 100
+                type: string
+                x-kubernetes-validations:
+                - message: capacity is immutable
+                  rule: self == oldSelf
+              exportDir:
+                default: /exports
                 type: string
             required:
-            - accessRules
-            - namespaces
-            - username
+            - capacity
             type: object
+            x-kubernetes-validations:
+            - message: backingStorageClassName is required once set
+              rule: '!has(oldSelf.backingStorageClassName) || has(self.backingStorageClassName)'
           status:
-            description: WorkspaceUserStatus defines the observed state of WorkspaceUser
+            description: NFSServerStatus defines the observed state of NFSServer.
             properties:
               conditions:
-                description: Conditions is a list of status conditions this object
-                  is in.
                 items:
                   description: "Condition contains details for one aspect of the current
                     state of this API Resource.\n---\nThis struct is intended for
@@ -176,21 +132,10 @@ spec:
                   - type
                   type: object
                 type: array
-              namespaces:
-                items:
-                  type: string
-                type: array
-              observedStackdomeServerObjectGeneration:
-                format: int64
-                type: integer
+              nfsServerURL:
+                type: string
               phase:
                 default: Pending
-                type: string
-              serviceAccountName:
-                type: string
-              serviceAccountToken:
-                type: string
-              statusHash:
                 type: string
             type: object
         type: object

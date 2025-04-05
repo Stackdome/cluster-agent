@@ -7,4 +7,5 @@ resources:
 - workspace_v1alpha1_workspacevolume.yaml
 - workspace_v1alpha1_workspaceconfiguration.yaml
 - registry_v1alpha1_registry.yaml
+- storage_v1alpha1_nfsserver.yaml
 #+kubebuilder:scaffold:manifestskustomizesamples

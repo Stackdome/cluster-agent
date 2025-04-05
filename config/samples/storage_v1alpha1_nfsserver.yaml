@@ -1,0 +1,9 @@
+apiVersion: storage.stackdome.io/v1alpha1
+kind: NFSServer
+metadata:
+  name: development-nfs
+  namespace: stackdome-control-plane
+  labels:
+    user: ashish
+spec:
+  capacity: "10Gi"
