@@ -11,12 +11,15 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/kubectl/pkg/polymorphichelpers"
 	"k8s.io/kubectl/pkg/util/podutils"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	externalprovisioner "sigs.k8s.io/sig-storage-lib-external-provisioner/v11/controller"
+	stackdomecorev1 "stackdome.io/cluster-agent/api/core/v1alpha1"
 	storagev1alpha1 "stackdome.io/cluster-agent/api/storage/v1alpha1"
 )
 
@@ -70,19 +73,23 @@ func (r *stackdomeRWManyProvisioner) Start(ctx context.Context) error {
 }
 
 func (r *stackdomeRWManyProvisioner) Provision(ctx context.Context, options externalprovisioner.ProvisionOptions) (*corev1.PersistentVolume, externalprovisioner.ProvisioningState, error) {
-	nfsServerSelector, err := metav1.LabelSelectorAsSelector(options.PVC.Spec.Selector)
-	if err != nil {
-		return nil, externalprovisioner.ProvisioningFinished, fmt.Errorf("failed to convert label selector: %w", err)
+	val, ok := options.PVC.Labels[stackdomecorev1.WorkspaceStorageLabel]
+	if !ok {
+		return nil, externalprovisioner.ProvisioningFinished, fmt.Errorf("missing label '%s' in pvc", stackdomecorev1.WorkspaceStorageLabel)
 	}
 
-	if !contains(options.PVC.Spec.AccessModes, corev1.ReadWriteMany) {
-		return nil, externalprovisioner.ProvisioningFinished, fmt.Errorf("RWMany access mode is not requested")
+	// Create a requirement for the label
+	req, err := labels.NewRequirement(stackdomecorev1.WorkspaceStorageLabel, selection.Equals, []string{val})
+	if err != nil {
+		return nil, externalprovisioner.ProvisioningFinished, fmt.Errorf("failed to create label requirement: %w", err)
 	}
+
+	selector := labels.NewSelector().Add(*req)
 
 	nfsServerList := storagev1alpha1.NFSServerList{}
 	listOpts := &client.ListOptions{
 		Namespace:     options.PVC.Namespace,
-		LabelSelector: nfsServerSelector,
+		LabelSelector: selector,
 	}
 	if err := r.client.List(ctx, &nfsServerList, listOpts); err != nil {
 		return nil, externalprovisioner.ProvisioningFinished, fmt.Errorf("failed to list nfs Servers in pvc namespace %s: %w", options.PVC.Namespace, err)

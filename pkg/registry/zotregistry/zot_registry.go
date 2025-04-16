@@ -287,7 +287,7 @@ func (z *zotRegistry) BuildService(ctx context.Context, registry *registryv1alph
 	return service, registryURL, nil
 }
 
-func (z *zotRegistry) BuildHTPasswordSecret(ctx context.Context, registry *registryv1alpha1.ClusterRegistry, password string) (*corev1.Secret, string, error) {
+func (z *zotRegistry) BuildHTPasswordSecret(ctx context.Context, registry *registryv1alpha1.ClusterRegistry, username, password string) (*corev1.Secret, string, error) {
 	if registry.Spec.Auth.HtPasswordCredentials == nil {
 		return nil, "", fmt.Errorf("htpasswd credentials not provided")
 	}
@@ -297,7 +297,7 @@ func (z *zotRegistry) BuildHTPasswordSecret(ctx context.Context, registry *regis
 		return nil, "", fmt.Errorf("failed to generate bcrypt hash for htpasswd: %w", err)
 	}
 	// Arrange in the format of "username:hashed_password"
-	usernamePassword := fmt.Sprintf("%s:%s", registry.Spec.Auth.HtPasswordCredentials.Username, string(htpasswdHash))
+	usernamePassword := fmt.Sprintf("%s:%s", username, string(htpasswdHash))
 
 	secret := &corev1.Secret{
 		ObjectMeta: v1.ObjectMeta{

@@ -1,0 +1,36 @@
+apiVersion: core.stackdome.io/v1alpha1
+kind: WorkspaceStorage
+metadata:
+  name: infisical-storage
+  labels:
+    app: stackdome
+    component: storage
+    workspace: infisical
+spec:
+  workspaceName: infisical
+  userPublicSSHKey: "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDKObYSip5C7xdqlRrcvhfKXG8p/K21mij+cDC3ThN6S5MFWbYwBkMctIXBbH5Nf4BZvDnZd3uLEBqtUxEcQG08BL7YX/XncfJrt8wbmxVjabPdQurfnPXlWUbez3NJI4OtXa2zI9pEdvWMALIdLsp0+hyZSCzDjboKuev0yldNpM51bocFk4nSAS+Cai9WRB2XE1Z6xofooe7oqe6WZkIjqrYyGXMh0ut5Et+TxD4eQF0oqaKmmbZa5B7y57jVvy4ZDzZskxZN0k4eDJzOxnS0V1DYKUduDrMdsBbhY2nlBqqTpt0572yIcit9SskjLXFh2yCwXAnRiXUKMcQZdoc3"
+  resourceStorageSpecs:
+    # Persistent database storage
+    postgresdata:
+      size: "2Gi"
+      storageClass: ""
+      accessMode: "ReadWriteOnce"
+      needsSyncBeforeUse: false
+    
+    # Persistent Redis storage
+    redisdata:
+      size: "2Gi"
+      storageClass: ""
+      accessMode: "ReadWriteOnce"
+      needsSyncBeforeUse: false
+    
+    # Application code with continuous sync
+    code:
+      size: "2Gi"
+      storageClass: "stackdome-rwmany"
+      accessMode: "ReadWriteMany"
+      needsSyncBeforeUse: true
+      source:
+        localDir:
+          path: "."
+          continousSync: true

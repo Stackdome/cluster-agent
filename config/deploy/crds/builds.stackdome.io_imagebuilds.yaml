@@ -3,17 +3,17 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.14.0
-  name: workspaceapplicationbuilds.builds.stackdome.io
+    controller-gen.kubebuilder.io/version: v0.17.3
+  name: imagebuilds.builds.stackdome.io
 spec:
   group: builds.stackdome.io
   names:
-    kind: WorkspaceApplicationBuild
-    listKind: WorkspaceApplicationBuildList
-    plural: workspaceapplicationbuilds
+    kind: ImageBuild
+    listKind: ImageBuildList
+    plural: imagebuilds
     shortNames:
-    - wab
-    singular: workspaceapplicationbuild
+    - imgbuild
+    singular: imagebuild
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
@@ -23,8 +23,7 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: WorkspaceApplicationBuild is the Schema for the workspaceapplicationbuilds
-          API
+        description: ImageBuild is the Schema for the imagebuilds API
         properties:
           apiVersion:
             description: |-
@@ -44,10 +43,41 @@ spec:
           metadata:
             type: object
           spec:
-            description: WorkspaceApplicationBuildSpec defines the desired state of
-              WorkspaceApplicationBuild
+            description: ImageBuildSpec defines the desired state of a Build
             properties:
+              auth:
+                description: This is populated by the WorkspaceResource controller
+                  before creating the build job.
+                properties:
+                  dockerAuthSecretRef:
+                    description: DockerConfigAuth contains the Docker config authentication
+                      details
+                    properties:
+                      authKey:
+                        description: Key in the secret containing the Docker config
+                        type: string
+                      secretName:
+                        description: Name of the secret
+                        type: string
+                      secretNamespace:
+                        description: Namespace where the secret is located
+                        type: string
+                    required:
+                    - authKey
+                    - secretName
+                    - secretNamespace
+                    type: object
+                  type:
+                    description: Type of the registry authentication
+                    enum:
+                    - DockerHub
+                    - InClusterZotRegistry
+                    type: string
+                required:
+                - type
+                type: object
               contextRef:
+                description: Build context.
                 properties:
                   context:
                     type: string
@@ -60,21 +90,27 @@ spec:
                 - dockerfilePath
                 - volumeName
                 type: object
-              registry:
+              insecureRegistry:
+                description: Is registry insecure
+                type: boolean
+              registryUrl:
+                description: Registry details for pushing the built image
                 type: string
               resourceName:
+                description: Resource for which the image is being build.
                 type: string
               sourceHash:
+                description: Current source hash for the build context.
                 type: string
             required:
             - contextRef
-            - registry
+            - insecureRegistry
+            - registryUrl
             - resourceName
             - sourceHash
             type: object
           status:
-            description: WorkspaceApplicationBuildStatus defines the observed state
-              of WorkspaceApplicationBuild
+            description: ImageBuildStatus defines the observed state of ImageBuild
             properties:
               buildSourceHash:
                 type: string
@@ -82,16 +118,8 @@ spec:
                 description: Conditions is a list of status conditions ths object
                   is in.
                 items:
-                  description: "Condition contains details for one aspect of the current
-                    state of this API Resource.\n---\nThis struct is intended for
-                    direct use as an array at the field path .status.conditions.  For
-                    example,\n\n\n\ttype FooStatus struct{\n\t    // Represents the
-                    observations of a foo's current state.\n\t    // Known .status.conditions.type
-                    are: \"Available\", \"Progressing\", and \"Degraded\"\n\t    //
-                    +patchMergeKey=type\n\t    // +patchStrategy=merge\n\t    // +listType=map\n\t
-                    \   // +listMapKey=type\n\t    Conditions []metav1.Condition `json:\"conditions,omitempty\"
-                    patchStrategy:\"merge\" patchMergeKey:\"type\" protobuf:\"bytes,1,rep,name=conditions\"`\n\n\n\t
-                    \   // other fields\n\t}"
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
                   properties:
                     lastTransitionTime:
                       description: |-
@@ -132,12 +160,7 @@ spec:
                       - Unknown
                       type: string
                     type:
-                      description: |-
-                        type of condition in CamelCase or in foo.example.com/CamelCase.
-                        ---
-                        Many .condition.type values are consistent across resources like Available, but because arbitrary conditions can be
-                        useful (see .node.status.conditions), the ability to deconflict is important.
-                        The regex it matches is (dns1123SubdomainFmt/)?(qualifiedNameFmt)
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
                       maxLength: 316
                       pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
                       type: string

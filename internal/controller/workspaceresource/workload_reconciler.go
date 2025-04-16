@@ -22,7 +22,6 @@ import (
 	buildsv1alpha1 "stackdome.io/cluster-agent/api/builds/v1alpha1"
 	"stackdome.io/cluster-agent/api/core/v1alpha1"
 	"stackdome.io/cluster-agent/internal/controller"
-	"stackdome.io/cluster-agent/internal/controller/workspacestorage"
 	"stackdome.io/cluster-agent/pkg/interpolation"
 )
 
@@ -58,11 +57,11 @@ func GetDeploymentPodLabelForResource(resource *v1alpha1.WorkspaceResource) map[
 	}
 }
 
-func (r *workloadReconciler) getApplicationBuild(ctx context.Context, resource *v1alpha1.WorkspaceResource) (*buildsv1alpha1.WorkspaceApplicationBuild, error) {
-	existingApplicationBuild := &buildsv1alpha1.WorkspaceApplicationBuild{}
+func (r *workloadReconciler) getImageBuild(ctx context.Context, resource *v1alpha1.WorkspaceResource) (*buildsv1alpha1.ImageBuild, error) {
+	existingApplicationBuild := &buildsv1alpha1.ImageBuild{}
 	if err := r.Client.Get(ctx,
 		types.NamespacedName{
-			Name:      ApplicationBuildName(resource),
+			Name:      buildsv1alpha1.ImageBuildName(resource.Name, resource.Spec.BuildSpec.BuildSourceHash),
 			Namespace: resource.Namespace,
 		},
 		existingApplicationBuild,
@@ -73,14 +72,14 @@ func (r *workloadReconciler) getApplicationBuild(ctx context.Context, resource *
 }
 
 func (r *workloadReconciler) getImageForResource(ctx context.Context, resource *v1alpha1.WorkspaceResource) (*string, error) {
-	if resource.Spec.ApplicationBuildSpec != nil {
-		requiredBuild, err := r.getApplicationBuild(ctx, resource)
+	if resource.Spec.BuildSpec != nil {
+		requiredBuild, err := r.getImageBuild(ctx, resource)
 		if err != nil {
 			return nil, err
 		}
 		return ptr.To(requiredBuild.Status.ImageUrl), nil
 	}
-	return ptr.To(resource.Spec.PrebuiltApplicationSpec.Image), nil
+	return ptr.To(resource.Spec.ImageSpec.Image), nil
 }
 
 func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.WorkspaceResource) (subReconcilerResult, error) {
@@ -110,13 +109,13 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.W
 		return resultRequeueAfter(DefaultRequeueTime), nil
 	}
 
-	if resource.Spec.ApplicationBuildSpec != nil {
-		currentApplicationBuild, err := r.getApplicationBuild(ctx, resource)
+	if resource.Spec.BuildSpec != nil {
+		currentApplicationBuild, err := r.getImageBuild(ctx, resource)
 		if err != nil {
 			return resultNil, err
 		}
 
-		if !applicationBuildComplete(currentApplicationBuild) {
+		if !imageBuildComplete(currentApplicationBuild) {
 			reportWorkspaceResourceNotReady(resource, "ApplicationBuildNotYetReady", "Application build is not yet ready")
 			return resultStop, nil
 		}
@@ -154,18 +153,18 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.W
 					Labels: GetDeploymentPodLabelForResource(resource),
 				},
 				Spec: corev1.PodSpec{
-					Affinity: &corev1.Affinity{
-						PodAffinity: &corev1.PodAffinity{
-							RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{
-								{
-									LabelSelector: &metav1.LabelSelector{
-										MatchLabels: map[string]string{workspacestorage.WorkspaceStorageLabel: metav1.GetControllerOf(resource).Name},
-									},
-									TopologyKey: "kubernetes.io/hostname",
-								},
-							},
-						},
-					},
+					// Affinity: &corev1.Affinity{
+					// 	PodAffinity: &corev1.PodAffinity{
+					// 		RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{
+					// 			{
+					// 				LabelSelector: &metav1.LabelSelector{
+					// 					MatchLabels: map[string]string{workspacestorage.WorkspaceStorageLabel: metav1.GetControllerOf(resource).Name},
+					// 				},
+					// 				TopologyKey: "kubernetes.io/hostname",
+					// 			},
+					// 		},
+					// 	},
+					// },
 					Volumes: InterpolatedVolumesList(resource, volumeMountInfo),
 					Containers: []corev1.Container{
 						{
@@ -179,9 +178,14 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.W
 							VolumeMounts:    InterpolatedVolumeMountList(resource),
 						},
 					},
+					// TODO:
 				},
 			},
 		},
+	}
+
+	if err := r.setImagePullSecret(ctx, resource, desiredDeploymentForResource); err != nil {
+		return resultNil, err
 	}
 
 	if resource.Spec.Init != nil {
@@ -238,6 +242,37 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.W
 	logger.Info("deployment not ready")
 	reportWorkspaceResourceNotReady(resource, "WorkspaceResouceDeploymentNotReady", "WorkspaceResouceDeploymentNotReady")
 	return resultStop, nil
+}
+
+func (r *workloadReconciler) setImagePullSecret(ctx context.Context, resource *v1alpha1.WorkspaceResource, deployment *appsv1.Deployment) error {
+	if resource.NeedsPullSecret() {
+		authUrl, err := resource.RegistryAuthUrl()
+		if err != nil {
+			return fmt.Errorf("failed to get registry auth url: %w", err)
+		}
+		authType := resource.RegistryAuthType()
+		switch authType {
+		case v1alpha1.RegistryAuthTypeDockerHub, v1alpha1.RegistryAuthTypeInClusterZotRegistry:
+			dockerConfigSecret := &corev1.Secret{}
+			if err := r.Client.Get(ctx, types.NamespacedName{
+				Name:      registrySecretName(authUrl),
+				Namespace: resource.Namespace,
+			}, dockerConfigSecret); err != nil {
+				if apierrors.IsNotFound(err) {
+					return fmt.Errorf("docker config secret not found: %w", err)
+				}
+				return fmt.Errorf("failed to get docker config secret: %w", err)
+			}
+			deployment.Spec.Template.Spec.ImagePullSecrets = []corev1.LocalObjectReference{
+				{
+					Name: registrySecretName(authUrl),
+				},
+			}
+		default:
+			return fmt.Errorf("unsupported registry auth type: %s", authType)
+		}
+	}
+	return nil
 }
 
 func (r *workloadReconciler) requiresRestart(resource *v1alpha1.WorkspaceResource) bool {

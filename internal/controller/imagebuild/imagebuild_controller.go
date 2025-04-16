@@ -1,4 +1,4 @@
-package applicationbuild
+package imagebuild
 
 import (
 	"context"
@@ -23,46 +23,33 @@ import (
 	"stackdome.io/cluster-agent/pkg/imagebuilder"
 )
 
-// WorkspaceApplicationBuildReconciler reconciles a WorkspaceApplicationBuild object
-type WorkspaceApplicationBuildReconciler struct {
+// ImageBuildReconciler reconciles a ImageBuild object
+type ImageBuildReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 }
 
-func (r *WorkspaceApplicationBuildReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *ImageBuildReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
-	ctx = controller.ContextWithLogger(ctx, logger.WithValues("WorkspaceApplicationBuild", req.String()))
-	applicationBuild := &buildsv1alpha1.WorkspaceApplicationBuild{}
+	ctx = controller.ContextWithLogger(ctx, logger.WithValues("ImageBuild", req.String()))
+	imageBuild := &buildsv1alpha1.ImageBuild{}
 
-	if err := r.Client.Get(ctx, req.NamespacedName, applicationBuild); err != nil {
+	if err := r.Client.Get(ctx, req.NamespacedName, imageBuild); err != nil {
 		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
 	}
-	res, err := r.reconcile(ctx, applicationBuild)
+	res, err := r.reconcile(ctx, imageBuild)
 	if err != nil {
 		return res, err
 	}
-	return res, r.Client.Status().Update(ctx, applicationBuild)
+	return res, r.Client.Status().Update(ctx, imageBuild)
 }
 
-func reportWorkspaceApplicationBuildComplete(buildConfig *buildsv1alpha1.WorkspaceApplicationBuild) {
-	buildConfig.Status.Phase = buildsv1alpha1.WorkspaceApplicationBuildPhaseSuccess
-	buildConfig.Status.BuildSourceHash = buildConfig.Spec.SourceHash
-	meta.SetStatusCondition(&buildConfig.Status.Conditions, metav1.Condition{
-		Type:               string(buildsv1alpha1.WorkspaceApplicationBuildAvailable),
-		Status:             metav1.ConditionTrue,
-		ObservedGeneration: buildConfig.Generation,
-		Reason:             "BuildComplete",
-		Message:            "Image build compelete",
-	})
-	buildConfig.Status.StatusHash = buildConfig.StatusHash()
-}
-
-func (r *WorkspaceApplicationBuildReconciler) reconcile(ctx context.Context, buildConfig *buildsv1alpha1.WorkspaceApplicationBuild) (ctrl.Result, error) {
+func (r *ImageBuildReconciler) reconcile(ctx context.Context, buildConfig *buildsv1alpha1.ImageBuild) (ctrl.Result, error) {
 	logger := controller.LoggerFromContext(ctx)
-	logger.Info("reconciling application build")
+	logger.Info("reconciling image build")
 	volumeRef := &stackv1alpha1.WorkspaceVolume{}
 
 	if err := r.Client.Get(ctx, types.NamespacedName{
@@ -73,9 +60,9 @@ func (r *WorkspaceApplicationBuildReconciler) reconcile(ctx context.Context, bui
 	}
 
 	if !volumeAvailable(volumeRef) {
-		reportWorkspaceApplicationBuildStatus(
+		reportImageBuildStatus(
 			buildConfig,
-			buildsv1alpha1.WorkspaceApplicationBuildAvailable,
+			buildsv1alpha1.BuildAvailable,
 			metav1.ConditionFalse,
 			"WorkspaceStorageNotReady",
 		)
@@ -83,9 +70,9 @@ func (r *WorkspaceApplicationBuildReconciler) reconcile(ctx context.Context, bui
 	}
 
 	if !volumeReadyForBuild(volumeRef) {
-		reportWorkspaceApplicationBuildStatus(
+		reportImageBuildStatus(
 			buildConfig,
-			buildsv1alpha1.WorkspaceApplicationBuildAvailable,
+			buildsv1alpha1.BuildAvailable,
 			metav1.ConditionFalse,
 			"VolumeNotReadyForBuild",
 		)
@@ -98,10 +85,14 @@ func (r *WorkspaceApplicationBuildReconciler) reconcile(ctx context.Context, bui
 		PVCName:        volumeRef.Status.PvcName,
 		Context:        buildConfig.Spec.ContextRef.Context,
 		DockerfilePath: buildConfig.Spec.ContextRef.DockerfilePath,
-		Registry:       buildConfig.Spec.Registry,
+		RegistryURL:    buildConfig.Spec.RegistryURL,
 		ImageName:      buildConfig.Spec.ResourceName,
 		Tag:            buildConfig.Spec.SourceHash,
-		Insecure:       false,
+		Insecure:       buildConfig.Spec.InsecureRegistry,
+	}
+
+	if err := r.configureAuth(ctx, buildConfig, &jobConfig); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	desiredImageBuilderJob, err := imagebuilder.GenerateImageBuildJob(jobConfig)
@@ -112,7 +103,7 @@ func (r *WorkspaceApplicationBuildReconciler) reconcile(ctx context.Context, bui
 		return ctrl.Result{}, err
 	}
 
-	buildCompletedCondition := meta.FindStatusCondition(buildConfig.Status.Conditions, string(buildsv1alpha1.WorkspaceApplicationBuildAvailable))
+	buildCompletedCondition := meta.FindStatusCondition(buildConfig.Status.Conditions, string(buildsv1alpha1.BuildAvailable))
 	if buildCompletedCondition != nil && buildCompletedCondition.Status == metav1.ConditionTrue {
 		return ctrl.Result{}, nil
 	}
@@ -135,25 +126,59 @@ func (r *WorkspaceApplicationBuildReconciler) reconcile(ctx context.Context, bui
 	JobFailedCondition := findJobCondition(existingJob, batchv1.JobFailed)
 	if JobCompletedCondition != nil && JobCompletedCondition.Status == v1.ConditionStatus(metav1.ConditionTrue) {
 		buildConfig.Status.ImageUrl = jobConfig.ImageUrl()
-		reportWorkspaceApplicationBuildComplete(buildConfig)
+		reportImageBuildComplete(buildConfig)
 		return ctrl.Result{}, nil
 	}
 	if JobFailedCondition != nil && JobFailedCondition.Status == v1.ConditionStatus(metav1.ConditionTrue) {
-		reportWorkspaceApplicationBuildStatus(buildConfig, buildsv1alpha1.WorkspaceApplicationBuildFailed, metav1.ConditionTrue, "BuildJobFailed")
+		reportImageBuildStatus(buildConfig, buildsv1alpha1.BuildFailed, metav1.ConditionTrue, "BuildJobFailed")
 		return ctrl.Result{}, nil
 	}
 
-	reportWorkspaceApplicationBuildStatus(buildConfig, buildsv1alpha1.WorkspaceApplicationBuildAvailable, metav1.ConditionFalse, "BuildJobNotYetComplete")
+	reportImageBuildStatus(buildConfig, buildsv1alpha1.BuildAvailable, metav1.ConditionFalse, "BuildJobNotYetComplete")
 	return ctrl.Result{}, nil
 }
 
-func (r *WorkspaceApplicationBuildReconciler) handleBuildJobCreation(ctx context.Context, desiredJob *batchv1.Job, buildConfig *buildsv1alpha1.WorkspaceApplicationBuild) error {
+func (r *ImageBuildReconciler) configureAuth(ctx context.Context, buildConfig *buildsv1alpha1.ImageBuild, jobConfig *imagebuilder.BuildParams) error {
+	if buildConfig.Spec.Auth == nil {
+		return nil
+	}
+
+	auth := buildConfig.Spec.Auth
+	switch auth.Type {
+	case stackv1alpha1.RegistryAuthTypeDockerHub, stackv1alpha1.RegistryAuthTypeInClusterZotRegistry:
+		dockerConfigSecret, err := r.getDockerConfigSecret(ctx, auth.DockerAuthSecretRef)
+		if err != nil {
+			return err
+		}
+		jobConfig.DockerConfigSecret = dockerConfigSecret
+		jobConfig.DockerConfigSecretKey = auth.DockerAuthSecretRef.AuthKey
+		return nil
+	default:
+		return fmt.Errorf("unsupported registry auth type: %s", auth.Type)
+	}
+}
+
+func (r *ImageBuildReconciler) getDockerConfigSecret(ctx context.Context, secretRef *buildsv1alpha1.DockerAuthSecretRef) (*v1.Secret, error) {
+	dockerConfigSecret := &v1.Secret{}
+	if err := r.Client.Get(ctx, types.NamespacedName{
+		Name:      secretRef.SecretName,
+		Namespace: secretRef.SecretNamespace,
+	}, dockerConfigSecret); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, fmt.Errorf("docker config secret not found")
+		}
+		return nil, err
+	}
+	return dockerConfigSecret, nil
+}
+
+func (r *ImageBuildReconciler) handleBuildJobCreation(ctx context.Context, desiredJob *batchv1.Job, buildConfig *buildsv1alpha1.ImageBuild) error {
 	if err := r.Client.Create(ctx, desiredJob); err != nil {
 		return err
 	}
 	buildConfig.Status.BuildSourceHash = buildConfig.Spec.SourceHash
 	meta.SetStatusCondition(&buildConfig.Status.Conditions, metav1.Condition{
-		Type:    string(buildsv1alpha1.WorkspaceApplicationJobCreated),
+		Type:    string(buildsv1alpha1.BuildJobCreated),
 		Status:  metav1.ConditionTrue,
 		Reason:  "BuildJobCreated",
 		Message: "BuildJobCreated",
@@ -186,9 +211,9 @@ func volumeReadyForBuild(volume *stackv1alpha1.WorkspaceVolume) bool {
 	return true
 }
 
-func reportWorkspaceApplicationBuildStatus(
-	buildConfig *buildsv1alpha1.WorkspaceApplicationBuild,
-	condition buildsv1alpha1.WorkspaceApplicationBuildStatusCondition,
+func reportImageBuildStatus(
+	buildConfig *buildsv1alpha1.ImageBuild,
+	condition buildsv1alpha1.BuildStatusCondition,
 	value metav1.ConditionStatus,
 	reason string,
 ) {
@@ -204,10 +229,23 @@ func reportWorkspaceApplicationBuildStatus(
 	buildConfig.Status.StatusHash = buildConfig.StatusHash()
 }
 
+func reportImageBuildComplete(buildConfig *buildsv1alpha1.ImageBuild) {
+	buildConfig.Status.Phase = buildsv1alpha1.BuildPhaseSuccess
+	buildConfig.Status.BuildSourceHash = buildConfig.Spec.SourceHash
+	meta.SetStatusCondition(&buildConfig.Status.Conditions, metav1.Condition{
+		Type:               string(buildsv1alpha1.BuildAvailable),
+		Status:             metav1.ConditionTrue,
+		ObservedGeneration: buildConfig.Generation,
+		Reason:             "BuildComplete",
+		Message:            "Image build compelete",
+	})
+	buildConfig.Status.StatusHash = buildConfig.StatusHash()
+}
+
 // SetupWithManager sets up the controller with the Manager.
-func (r *WorkspaceApplicationBuildReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *ImageBuildReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&buildsv1alpha1.WorkspaceApplicationBuild{}).
-		Watches(&batchv1.Job{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &buildsv1alpha1.WorkspaceApplicationBuild{})).
+		For(&buildsv1alpha1.ImageBuild{}).
+		Watches(&batchv1.Job{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &buildsv1alpha1.ImageBuild{})).
 		Complete(r)
 }

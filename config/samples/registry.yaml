@@ -10,10 +10,11 @@ spec:
     size: 10Gi
   auth:
     htPasswordCredentials:
-      username: ashish
-      passwordSecretRef:
-        name: password
-        namespace: stackdome-registry
+      credentialsRef:
+        secretName: registry-creds
+        secretNamespace: stackdome-registry
+        usernameKey: username
+        passwordKey: password
   retentionPolicy:
     maxRepositoryCount: 100
     tagsPerRepo: 10

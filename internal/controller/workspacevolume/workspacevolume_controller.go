@@ -94,14 +94,16 @@ func (r *WorkspaceVolumeReconciler) reconcilePVC(ctx context.Context, volume *v1
 		return fmt.Errorf("failed to parse resource size in the resource: %w", err)
 	}
 
+	// TODO: Improve the api to better handle label selection for nfs servers.
 	desiredPVC := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      volume.Name,
 			Namespace: volume.Namespace,
+			Labels:    volume.Labels,
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
 			AccessModes: []corev1.PersistentVolumeAccessMode{
-				corev1.ReadWriteOnce,
+				volume.Spec.AccessMode,
 			},
 			Resources: corev1.VolumeResourceRequirements{
 				Requests: corev1.ResourceList{corev1.ResourceStorage: resourceSize},

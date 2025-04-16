@@ -21,16 +21,12 @@ import (
 	"hash/fnv"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+
 	"github.com/davecgh/go-spew/spew"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/rand"
 )
-
-type ResourceRef string
-
-func (r ResourceRef) String() string {
-	return string(r)
-}
 
 type WorkspaceVolumePhase string
 
@@ -62,8 +58,11 @@ type WorkspaceVolumeSpec struct {
 	// +optional
 	StorageClass string `json:"storageClass"`
 	// +optional
-	Source             *VolumeSource `json:"source,omitempty"`
-	NeedsSyncBeforeUse bool          `json:"needsSyncBeforeUse"`
+	Source *VolumeSource `json:"source,omitempty"`
+	// +required
+	NeedsSyncBeforeUse bool `json:"needsSyncBeforeUse"`
+	// +required
+	AccessMode corev1.PersistentVolumeAccessMode `json:"accessMode"`
 }
 
 type VolumeSource struct {
@@ -79,10 +78,22 @@ type LocalDirSource struct {
 	ContinousSync bool   `json:"continousSync"`
 }
 
+// BuildArtifactSource defines how to copy artifacts from a application built to a volume
 type BuildArtifactSource struct {
-	ResourceRef     ResourceRef `json:"resourceRef"`
-	SourcePath      string      `json:"sourcePath"`
-	DestinationPath string      `json:"destinationPath"`
+	// BuildSource references the stack resource whose build artifacts should be copied.
+	// This must reference a StackResource with ApplicationBuildSpec defined.
+	BuildSource StackResourceReference `json:"buildSource"`
+
+	// SourcePath is the path within the built image where artifacts are located
+	SourcePath string `json:"sourcePath"`
+
+	// DestinationPath is the path within the volume where artifacts should be synced
+	DestinationPath string `json:"destinationPath"`
+}
+
+type StackResourceReference struct {
+	// Name of the StackResource
+	Name string `json:"name"`
 }
 
 // WorkspaceVolumeStatus defines the observed state of WorkspaceVolume
@@ -96,8 +107,8 @@ type WorkspaceVolumeStatus struct {
 	Phase        WorkspaceVolumePhase `json:"phase,omitempty"`
 	LastSyncedAt *metav1.Time         `json:"LastSyncedAt,omitempty"`
 	// +optional
-	BuildArtifactSyncs map[ResourceRef]BuildArtifactSyncInfo `json:"buildArtifactSyncs,omitempty"`
-	StatusHash         string                                `json:"statusHash,omitempty"`
+	BuildArtifactSyncs map[string]BuildArtifactSyncInfo `json:"buildArtifactSyncs,omitempty"`
+	StatusHash         string                           `json:"statusHash,omitempty"`
 }
 
 func (w *WorkspaceVolume) StatusHash() string {
@@ -156,11 +167,11 @@ func (w *WorkspaceVolume) MarkAsSynced() {
 	w.Annotations[LastSyncedAtAnnotation] = metav1.NewTime(time.Now().UTC()).String()
 }
 
-func (s *WorkspaceVolumeStatus) SetBuildArtifactSyncStatus(resourceRef ResourceRef, buildID string, status BuildArtifactSyncStatus) {
+func (s *WorkspaceVolumeStatus) SetBuildArtifactSyncStatus(stackResourceRef StackResourceReference, buildID string, status BuildArtifactSyncStatus) {
 	if s.BuildArtifactSyncs == nil {
-		s.BuildArtifactSyncs = map[ResourceRef]BuildArtifactSyncInfo{}
+		s.BuildArtifactSyncs = map[string]BuildArtifactSyncInfo{}
 	}
-	s.BuildArtifactSyncs[resourceRef] = BuildArtifactSyncInfo{
+	s.BuildArtifactSyncs[stackResourceRef.Name] = BuildArtifactSyncInfo{
 		BuildID: buildID,
 		Status:  status,
 	}

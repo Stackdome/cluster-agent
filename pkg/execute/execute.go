@@ -41,6 +41,7 @@ func (p *podExecuter) ExecuteCommand(ctx context.Context, targetPod *corev1.Pod,
 		Name(targetPod.Name).
 		Namespace(namespace).
 		SubResource("exec")
+
 	var stdout, stderr bytes.Buffer
 	execOptions := &corev1.PodExecOptions{
 		Container: containerName,
@@ -64,7 +65,7 @@ func (p *podExecuter) ExecuteCommand(ctx context.Context, targetPod *corev1.Pod,
 
 	streamErr := executer.StreamWithContext(ctx, streamOptions)
 	if streamErr != nil {
-		return "", fmt.Errorf("command execution failed: streamErr:%w, CommandErr: %s", streamErr, stderr.String())
+		return "", fmt.Errorf("command execution failed: streamErr: %w, CommandErr: %s", streamErr, stderr.String())
 	}
 
 	return stdout.String(), nil
