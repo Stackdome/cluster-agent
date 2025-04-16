@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.14.0
+    controller-gen.kubebuilder.io/version: v0.17.3
   name: workspacestorages.core.stackdome.io
 spec:
   group: core.stackdome.io
@@ -51,6 +51,8 @@ spec:
                 additionalProperties:
                   description: WorkspaceVolumeSpec defines the desired state of WorkspaceVolume
                   properties:
+                    accessMode:
+                      type: string
                     annotations:
                       additionalProperties:
                         type: string
@@ -68,16 +70,31 @@ spec:
                       properties:
                         buildArtifacts:
                           items:
+                            description: BuildArtifactSource defines how to copy artifacts
+                              from a application built to a volume
                             properties:
+                              buildSource:
+                                description: |-
+                                  BuildSource references the stack resource whose build artifacts should be copied.
+                                  This must reference a StackResource with ApplicationBuildSpec defined.
+                                properties:
+                                  name:
+                                    description: Name of the StackResource
+                                    type: string
+                                required:
+                                - name
+                                type: object
                               destinationPath:
-                                type: string
-                              resourceRef:
+                                description: DestinationPath is the path within the
+                                  volume where artifacts should be synced
                                 type: string
                               sourcePath:
+                                description: SourcePath is the path within the built
+                                  image where artifacts are located
                                 type: string
                             required:
+                            - buildSource
                             - destinationPath
-                            - resourceRef
                             - sourcePath
                             type: object
                           type: array
@@ -95,6 +112,7 @@ spec:
                     storageClass:
                       type: string
                   required:
+                  - accessMode
                   - needsSyncBeforeUse
                   - size
                   type: object
@@ -105,6 +123,7 @@ spec:
               workspaceName:
                 type: string
             required:
+            - resourceStorageSpecs
             - userPublicSSHKey
             - workspaceName
             type: object
@@ -114,16 +133,8 @@ spec:
                 description: Conditions is a list of status conditions ths object
                   is in.
                 items:
-                  description: "Condition contains details for one aspect of the current
-                    state of this API Resource.\n---\nThis struct is intended for
-                    direct use as an array at the field path .status.conditions.  For
-                    example,\n\n\n\ttype FooStatus struct{\n\t    // Represents the
-                    observations of a foo's current state.\n\t    // Known .status.conditions.type
-                    are: \"Available\", \"Progressing\", and \"Degraded\"\n\t    //
-                    +patchMergeKey=type\n\t    // +patchStrategy=merge\n\t    // +listType=map\n\t
-                    \   // +listMapKey=type\n\t    Conditions []metav1.Condition `json:\"conditions,omitempty\"
-                    patchStrategy:\"merge\" patchMergeKey:\"type\" protobuf:\"bytes,1,rep,name=conditions\"`\n\n\n\t
-                    \   // other fields\n\t}"
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
                   properties:
                     lastTransitionTime:
                       description: |-
@@ -164,12 +175,7 @@ spec:
                       - Unknown
                       type: string
                     type:
-                      description: |-
-                        type of condition in CamelCase or in foo.example.com/CamelCase.
-                        ---
-                        Many .condition.type values are consistent across resources like Available, but because arbitrary conditions can be
-                        useful (see .node.status.conditions), the ability to deconflict is important.
-                        The regex it matches is (dns1123SubdomainFmt/)?(qualifiedNameFmt)
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
                       maxLength: 316
                       pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
                       type: string

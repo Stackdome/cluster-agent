@@ -1,0 +1,159 @@
+apiVersion: core.stackdome.io/v1alpha1
+kind: Workspace
+metadata:
+  name: infisical-app
+spec:
+  userName: developer
+  organisation: infisical
+  domain: stackdome.io
+  resources:
+    - name: nginx
+      spec:
+        imageSpec:
+          image: "nginx:1"
+        dependsOn:
+          - backend
+          - frontend
+        volumeMounts:
+          - sourceWorkspaceVolume: code
+            sourceSubPath: "nginx/default.dev.conf"
+            destination: "/etc/nginx/conf.d/default.conf"
+        ports:
+          - number: 80
+            exposeToPublic: true
+            isHttp: true
+            subdomain: "nginx"
+    
+    - name: db
+      spec:
+        imageSpec:
+          image: "postgres:14-alpine"
+        volumeMounts:
+          - sourceWorkspaceVolume: "postgresdata"
+            sourceSubPath: ""
+            destination: "/var/lib/postgresql/data"
+        environmentVariables:
+          - name: POSTGRES_PASSWORD
+            value: infisical
+          - name: POSTGRES_USER
+            value: infisical
+          - name: POSTGRES_DB
+            value: infisical
+        ports:
+          - number: 5432
+            exposeToPublic: false
+            isHttp: false
+            subdomain: "db"
+        stateFul: true
+    - name: redis
+      spec:
+        imageSpec:
+          image: "redis:1"
+        environmentVariables:
+          - name: ALLOW_EMPTY_PASSWORD
+            value: "yes"
+        volumeMounts:
+          - sourceWorkspaceVolume: redisdata
+            sourceSubPath: ""
+            destination: "/data"
+        ports:
+          - number: 6379
+            exposeToPublic: false
+            isHttp: false
+            subdomain: "redis"
+        stateFul: true
+    - name: rediscommander
+      spec:
+        imageSpec:
+          image: "rediscommander:1"
+        dependsOn:
+          - redis
+        environmentVariables:
+          - name: REDIS_HOSTS
+            value: local:redis:6379
+        ports:
+          - number: 8081
+            exposeToPublic: false
+            isHttp: false
+            subdomain: "rediscommander"
+  
+    - name: backend
+      spec:
+        buildSpec:
+          sourceVolumeName: "code"
+          buildContext: "/backend"
+          dockerFilePath: "/backend/Dockerfile.dev"
+          buildSourceHash: "aeff1eeb0c3f2a4d1e5c7f8a9b6e4d2c"
+          registry:
+            repositoryUrl: "cluster-registry.stackdome-registry.svc.cluster.local/infisical-backend"
+            auth:
+              type: "InClusterZotRegistry"
+              dockerConfigAuth:
+                credentialsRef:
+                  secretName: registry-creds
+                  secretNamespace: stackdome-registry
+                  usernameKey: username
+                  passwordKey: password
+        command: ["/bin/sh", "-c"]
+        args:
+          - "npm run migration:latest && npm run dev:docker"
+        dependsOn:
+          - db
+          - redis
+        ports:
+          - number: 4000
+            exposeToPublic: true
+            isHttp: true
+            subdomain: "backend"
+        environmentVariables:
+          - name: NODE_ENV
+            value: development
+          - name: DB_CONNECTION_URI
+            value: postgres://infisical:infisical@db/infisical?sslmode=disable
+          - name: TELEMETRY_ENABLED
+            value: "false"
+          - name: TELEMETRY
+            value: "false"
+        volumeMounts:
+          - sourceWorkspaceVolume: "code"
+            sourceSubPath: "backend/src"
+            destination: "/app/src"
+    
+    - name: frontend
+      spec:
+        buildSpec:
+          sourceVolumeName: "code"
+          buildContext: "/frontend"
+          dockerFilePath: "/frontend/Dockerfile.dev"
+          buildSourceHash: "aeff1eeb0c3f2a4d1e5c7f8a9b6e4d2c"
+          registry:
+            repositoryUrl: "cluster-registry.stackdome-registry.svc.cluster.local/infisical-frontend"
+            auth:
+              type: "InClusterZotRegistry"
+              dockerConfigAuth:
+                credentialsRef:
+                  secretName: registry-creds
+                  secretNamespace: stackdome-registry
+                  usernameKey: username
+                  passwordKey: password
+        dependsOn:
+          - backend
+          - redis
+          - db
+        ports:
+          - number: 3000
+            exposeToPublic: true
+            isHttp: true
+            subdomain: "frontend"
+        volumeMounts:
+          - sourceWorkspaceVolume: "code"
+            sourceSubPath: "frontend/src"
+            destination: "/app/src"
+          - sourceWorkspaceVolume: "code"
+            sourceSubPath: "frontend/public"
+            destination: "/app/public"
+        environmentVariables:
+          - name: NEXT_PUBLIC_ENV
+            value: development
+          - name: INFISICAL_TELEMETRY_ENABLED
+            value: "false"

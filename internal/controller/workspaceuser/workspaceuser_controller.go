@@ -83,7 +83,6 @@ func (r *WorkspaceUserReconciler) reconcile(ctx context.Context, user *userv1alp
 		r.reconcileRole,
 		r.reconcileRoleBinding,
 		r.reconcileSASecret,
-		r.reconcileBusyBoxBinaryVolume,
 		r.statusReconciler,
 	}
 	for _, reconcileFn := range reconcileFns {

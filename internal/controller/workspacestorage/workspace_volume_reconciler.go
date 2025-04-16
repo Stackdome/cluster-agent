@@ -104,6 +104,7 @@ func (r *workspaceVolumeReconciler) reconcileWorkspaceVolume(
 			StorageClass:       volumeSpec.StorageClass,
 			NeedsSyncBeforeUse: volumeSpec.NeedsSyncBeforeUse,
 			Source:             volumeSpec.Source,
+			AccessMode:         volumeSpec.AccessMode,
 		},
 	}
 

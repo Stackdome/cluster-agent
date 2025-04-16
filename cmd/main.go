@@ -45,7 +45,7 @@ import (
 	corev1alpha1 "stackdome.io/cluster-agent/api/core/v1alpha1"
 	registryv1alpha1 "stackdome.io/cluster-agent/api/registry/v1alpha1"
 	usersv1alpha1 "stackdome.io/cluster-agent/api/users/v1alpha1"
-	"stackdome.io/cluster-agent/internal/controller/applicationbuild"
+	"stackdome.io/cluster-agent/internal/controller/imagebuild"
 	"stackdome.io/cluster-agent/internal/controller/workspace"
 	"stackdome.io/cluster-agent/internal/controller/workspaceresource"
 	"stackdome.io/cluster-agent/internal/controller/workspacestorage"
@@ -121,7 +121,7 @@ func main() {
 	})
 
 	registryBuilder := zotregistry.NewZotRegistry(zotregistry.ZotRegistryOpts{
-		RegistryImage:    "ghcr.io/project-zot/zot-linux-amd64:latest",
+		RegistryImage:    "zot:a558e48ae5ba",
 		GCDelay:          "1h",
 		GCInterval:       "24h",
 		EnableGC:         true,
@@ -178,7 +178,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = (&applicationbuild.WorkspaceApplicationBuildReconciler{
+	if err = (&imagebuild.ImageBuildReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {

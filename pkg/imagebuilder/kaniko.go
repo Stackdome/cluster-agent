@@ -24,11 +24,11 @@ spec:
     spec:
       containers:
       - name: kaniko
-        image: gcr.io/kaniko-project/executor:latest
+        image: kaniko:1
         args:
         - "--dockerfile={{ .DockerfilePath }}"
         - "--context=dir://{{ .Context }}"
-        - "--destination={{ .Registry }}/{{ .ImageName }}:{{ .Tag }}"
+        - "--destination={{ .RegistryURL }}/{{ .ImageName }}:{{ .Tag }}"
         - "--insecure-registry={{ .Insecure }}"
         - "--insecure={{ .Insecure }}"
         - "--insecure-pull={{ .Insecure }}"
@@ -50,17 +50,25 @@ spec:
 `
 
 type BuildParams struct {
-	JobName        string
-	Namespace      string
-	PVCName        string
-	DockerfilePath string
-	Context        string
-	Registry       string
-	ImageName      string
-	Tag            string
-	Insecure       bool
-	UniqueVolumes  []string
-	VolumeMounts   []VolumeMount
+	JobName               string
+	Namespace             string
+	PVCName               string
+	DockerfilePath        string
+	Context               string
+	RegistryURL           string
+	DockerConfigSecret    *corev1.Secret
+	DockerConfigSecretKey string
+	ImageName             string
+	Tag                   string
+	Insecure              bool
+	UniqueVolumes         []string
+	VolumeMounts          []VolumeMount
+}
+
+type DockerAuthSecretRef struct {
+	SecretName      string
+	SecretNamespace string
+	AuthKey         string
 }
 
 type VolumeMount struct {
@@ -106,7 +114,7 @@ func (b *BuildParams) generateImageBuildJobYAML() (string, error) {
 }
 
 func (b *BuildParams) ImageUrl() string {
-	return fmt.Sprintf("%s/%s:%s", b.Registry, b.ImageName, b.Tag)
+	return fmt.Sprintf("%s/%s:%s", b.RegistryURL, b.ImageName, b.Tag)
 }
 
 // TODO: Configurable resource requirements
@@ -130,9 +138,38 @@ func GenerateImageBuildJob(params BuildParams) (*batchv1.Job, error) {
 			corev1.ResourceMemory: resource.MustParse("200Mi"),
 		},
 	}
+
+	configureAuth(job, params)
 	// 30 minutes
 	job.Spec.TTLSecondsAfterFinished = ptr.To(int32(60 * 30))
 
 	container.Args = append(container.Args, "--cache=true", "--cache-copy-layers=true", "--cache-run-layers=true", "--cleanup=true")
 	return job, nil
+}
+
+func configureAuth(job *batchv1.Job, params BuildParams) {
+	container := &job.Spec.Template.Spec.Containers[0]
+	if params.DockerConfigSecret != nil {
+		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
+			Name:      "dockerconfig",
+			ReadOnly:  true,
+			MountPath: "/kaniko/.docker",
+		})
+		job.Spec.Template.Spec.Volumes = append(job.Spec.Template.Spec.Volumes, corev1.Volume{
+			Name: "dockerconfig",
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName: params.DockerConfigSecret.Name,
+					Items: []corev1.KeyToPath{
+						{
+							Key:  params.DockerConfigSecretKey,
+							Path: "config.json",
+						},
+					},
+				},
+			},
+		})
+	}
+
+	// Add more auth configurations if needed
 }

@@ -19,10 +19,20 @@ package v1alpha1
 import (
 	"fmt"
 	"hash/fnv"
+	"net/url"
+	"strings"
 
 	"github.com/davecgh/go-spew/spew"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/rand"
+	common "stackdome.io/cluster-agent/api"
+)
+
+type RegistryAuthType string
+
+const (
+	RegistryAuthTypeDockerHub            RegistryAuthType = "DockerHub"
+	RegistryAuthTypeInClusterZotRegistry RegistryAuthType = "InClusterZotRegistry"
 )
 
 type WorkspaceResourcePhase string
@@ -45,14 +55,12 @@ const (
 
 // WorkspaceResourceSpec defines the desired state of WorkspaceResource
 type WorkspaceResourceSpec struct {
-	// +optional
-	ImageRegistry *string `json:"imageRegistry"`
 	// Only one of the following fields should be specified
 	// +union
-	ApplicationBuildSpec    *ApplicationBuildSpec    `json:"applicationBuildSpec,omitempty"`
-	PrebuiltApplicationSpec *PrebuiltApplicationSpec `json:"prebuiltApplicationSpec,omitempty"`
+	BuildSpec *ResourceBuildSpec `json:"buildSpec,omitempty"`
+	ImageSpec *ImageSpec         `json:"imageSpec,omitempty"`
 	// +optional
-	Init *WorkspaceResourceInit `json:"init,omitempty"`
+	Init *InitSpec `json:"init,omitempty"`
 	// +optional
 	Command []string `json:"command"`
 	// +optional
@@ -72,7 +80,8 @@ type WorkspaceResourceSpec struct {
 	StateFul bool `json:"stateFul"`
 }
 
-type WorkspaceResourceInit struct {
+type InitSpec struct {
+	// +required
 	Command []string `json:"command"`
 	// +optional
 	Args []string `json:"args"`
@@ -90,7 +99,7 @@ type Port struct {
 	// +optional
 	// +kubebuilder:default=true
 	IsHttp bool `json:"isHttp"`
-	// +optional
+	// +required
 	Subdomain string `json:"subdomain"`
 }
 
@@ -105,15 +114,69 @@ type VolumeMount struct {
 	Destination           string `json:"destination"`
 }
 
-type ApplicationBuildSpec struct {
-	VolumeName      string `json:"volumeName"`
-	Context         string `json:"context"`
-	DockerFile      string `json:"dockerFile"`
+type ResourceBuildSpec struct {
+	// Source volume where the build context is present.
+	// +required
+	SourceVolumeName string `json:"sourceVolumeName"`
+	// Build Context within the source volume.
+	// +required
+	BuildContext string `json:"buildContext"`
+	// Path to the docker file within the source volume.
+	// +required
+	DockerFilePath string `json:"dockerFilePath"`
+	// +required
 	BuildSourceHash string `json:"buildSourceHash"`
+	// Registry specification for pushing the built image
+	// +required
+	Registry RegistrySpec `json:"registry"`
 }
 
-type PrebuiltApplicationSpec struct {
+type RegistrySpec struct {
+	// Repository URL for constructing the image tag (e.g., docker.io/myorg)
+	// +required
+	RepositoryURL string `json:"repositoryUrl"`
+	// Is the registry insecure
+	// +optional
+	// +kubebuilder:default=false
+	Insecure bool `json:"insecure"`
+	// +optional
+	Auth *RegistryAuth `json:"auth"`
+}
+
+type RegistryAuth struct {
+	// +required
+	Type             RegistryAuthType  `json:"type"`
+	DockerConfigAuth *DockerConfigAuth `json:"dockerConfigAuth,omitempty"`
+	// Add more config for other auth types like gcr, aws ecr etc.
+}
+
+type DockerConfigAuth struct {
+	CredentialsRef *common.CredentialSecretKeyPair `json:"credentialsRef,omitempty"`
+}
+
+func (r *RegistryAuth) GetDockerConfigSecretKey() string {
+	return ".dockerconfigjson"
+}
+
+func (r *RegistryAuth) GetAuthURL(registryHost string) string {
+	switch r.Type {
+	case RegistryAuthTypeDockerHub:
+		return "https://index.docker.io/v1/"
+	default:
+		if strings.HasPrefix(registryHost, "https://") || strings.HasPrefix(registryHost, "http://") {
+			return registryHost
+		}
+		return fmt.Sprintf("http://%s", registryHost)
+	}
+}
+
+type ImageSpec struct {
+	// Image reference (e.g., docker.io/myorg/myimage:tag)
+	// +required
 	Image string `json:"image"`
+	// Registry authentication for pulling the image
+	// +optional
+	PullAuth *RegistryAuth `json:"pullAuth,omitempty"`
 }
 
 type ExternalAddress struct {
@@ -165,6 +228,64 @@ type WorkspaceResource struct {
 
 	Spec   WorkspaceResourceSpec   `json:"spec,omitempty"`
 	Status WorkspaceResourceStatus `json:"status,omitempty"`
+}
+
+func (w *WorkspaceResource) NeedsPullSecret() bool {
+	if w.Spec.ImageSpec != nil && w.Spec.ImageSpec.PullAuth != nil {
+		return true
+	}
+	if w.Spec.BuildSpec != nil && w.Spec.BuildSpec.Registry.Auth != nil {
+		return true
+	}
+	return false
+}
+
+func (w *WorkspaceResource) RegistryAuthUrl() (string, error) {
+	var registryHost string
+	var err error
+	if w.Spec.ImageSpec != nil {
+		registryHost, err = getHostFromURL(w.Spec.ImageSpec.Image)
+		if err != nil {
+			return "", err
+		}
+	} else {
+		registryHost, err = getHostFromURL(w.Spec.BuildSpec.Registry.RepositoryURL)
+		if err != nil {
+			return "", err
+		}
+	}
+
+	if w.Spec.ImageSpec != nil && w.Spec.ImageSpec.PullAuth != nil {
+		return w.Spec.ImageSpec.PullAuth.GetAuthURL(registryHost), nil
+	}
+	if w.Spec.BuildSpec != nil && w.Spec.BuildSpec.Registry.Auth != nil {
+		return w.Spec.BuildSpec.Registry.Auth.GetAuthURL(registryHost), nil
+	}
+	return "", fmt.Errorf("missing registry auth url")
+}
+
+func (w *WorkspaceResource) RegistryAuthType() RegistryAuthType {
+	if w.Spec.ImageSpec != nil && w.Spec.ImageSpec.PullAuth != nil {
+		return w.Spec.ImageSpec.PullAuth.Type
+	}
+	if w.Spec.BuildSpec != nil && w.Spec.BuildSpec.Registry.Auth != nil {
+		return w.Spec.BuildSpec.Registry.Auth.Type
+	}
+	return ""
+}
+
+func getHostFromURL(urlString string) (string, error) {
+	// Handle URLs that might not have a scheme
+	if !strings.HasPrefix(urlString, "http://") && !strings.HasPrefix(urlString, "https://") {
+		urlString = "http://" + urlString
+	}
+
+	parsedURL, err := url.Parse(urlString)
+	if err != nil {
+		return "", err
+	}
+
+	return parsedURL.Host, nil
 }
 
 func (w *WorkspaceResource) StatusHash() string {

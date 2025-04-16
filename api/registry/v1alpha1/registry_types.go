@@ -2,6 +2,7 @@ package v1alpha1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	common "stackdome.io/cluster-agent/api"
 )
 
 type RegistryStatusConditionType string
@@ -17,12 +18,8 @@ type RegistryAuthSpec struct {
 }
 
 type HtPasswordCredentialsSpec struct {
-	// Reference to a secret containing the username and password.
-	// +kubebuilder:validation:Required
-	Username string `json:"username"`
-	// +kubebuilder:validation:Required
 	// +required
-	PasswordSecretRef SecretRef `json:"passwordSecretRef"`
+	CredentialsRef *common.CredentialSecretKeyPair `json:"credentialsRef,omitempty"`
 }
 
 type SecretRef struct {

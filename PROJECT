@@ -51,7 +51,7 @@ resources:
   controller: true
   domain: stackdome.io
   group: builds
-  kind: Build
+  kind: ImageBuild
   path: stackdome.io/cluster-agent/api/builds/v1alpha1
   version: v1alpha1
 - api:

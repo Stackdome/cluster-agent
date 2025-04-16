@@ -1,0 +1,9 @@
+apiVersion: storage.stackdome.io/v1alpha1
+kind: NFSServer
+metadata:
+  name: ashish-nfs-server
+  namespace: ashish-test
+  labels:
+    workspace.stackdome.io/workspacestorageName: "infisical-storage"
+spec:
+  capacity: "10Gi"

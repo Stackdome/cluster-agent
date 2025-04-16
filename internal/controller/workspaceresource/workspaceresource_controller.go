@@ -91,7 +91,7 @@ func (r *WorkspaceResourceReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	applicationBuildStatus, err := r.getApplicationBuildStatus(ctx, workspaceResource)
+	applicationBuildStatus, err := r.getImageBuildStatus(ctx, workspaceResource)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -134,8 +134,8 @@ func reportWorkspaceResourceNotReady(resource *v1alpha1.WorkspaceResource, reaso
 func (r *WorkspaceResourceReconciler) reportWorkspaceResourceReady(resource *v1alpha1.WorkspaceResource) {
 	//TODO: Set source hash
 	resource.Status.ObservedGeneration = resource.Generation
-	if resource.Spec.ApplicationBuildSpec != nil {
-		resource.Status.ImageSourceHash = resource.Spec.ApplicationBuildSpec.BuildSourceHash
+	if resource.Spec.BuildSpec != nil {
+		resource.Status.ImageSourceHash = resource.Spec.BuildSpec.BuildSourceHash
 	}
 	resource.Status.Phase = v1alpha1.WorkspaceResourcePhaseReady
 	meta.SetStatusCondition(&resource.Status.Conditions, metav1.Condition{
@@ -148,18 +148,18 @@ func (r *WorkspaceResourceReconciler) reportWorkspaceResourceReady(resource *v1a
 	resource.Status.StatusHash = resource.StatusHash()
 }
 
-func (r *WorkspaceResourceReconciler) getApplicationBuildStatus(ctx context.Context, resource *v1alpha1.WorkspaceResource) (*v1alpha1.BuildStatus, error) {
-	if resource.Spec.ApplicationBuildSpec == nil {
+func (r *WorkspaceResourceReconciler) getImageBuildStatus(ctx context.Context, resource *v1alpha1.WorkspaceResource) (*v1alpha1.BuildStatus, error) {
+	if resource.Spec.BuildSpec == nil {
 		return nil, nil
 	}
 
-	existingApplicationBuild := &buildsv1alpha1.WorkspaceApplicationBuild{}
+	existingImageBuild := &buildsv1alpha1.ImageBuild{}
 	if err := r.Client.Get(ctx,
 		types.NamespacedName{
-			Name:      ApplicationBuildName(resource),
+			Name:      buildsv1alpha1.ImageBuildName(resource.Name, resource.Spec.BuildSpec.BuildSourceHash),
 			Namespace: resource.Namespace,
 		},
-		existingApplicationBuild,
+		existingImageBuild,
 	); err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil, nil
@@ -168,13 +168,13 @@ func (r *WorkspaceResourceReconciler) getApplicationBuildStatus(ctx context.Cont
 	}
 
 	res := &v1alpha1.BuildStatus{
-		Name:       existingApplicationBuild.Name,
-		SourceHash: existingApplicationBuild.Spec.SourceHash,
-		ShortHash:  existingApplicationBuild.Spec.SourceHash[:7],
-		Phase:      string(existingApplicationBuild.Status.Phase),
+		Name:       existingImageBuild.Name,
+		SourceHash: existingImageBuild.Spec.SourceHash,
+		ShortHash:  existingImageBuild.Spec.SourceHash[:7],
+		Phase:      string(existingImageBuild.Status.Phase),
 	}
 
-	availableCond := meta.FindStatusCondition(existingApplicationBuild.Status.Conditions, string(buildsv1alpha1.WorkspaceApplicationBuildAvailable))
+	availableCond := meta.FindStatusCondition(existingImageBuild.Status.Conditions, string(buildsv1alpha1.BuildAvailable))
 	if availableCond != nil {
 		res.Available = availableCond.Status == metav1.ConditionTrue
 		res.Message = availableCond.Message
@@ -202,9 +202,13 @@ func NewWorkspaceResourceReconciler(client client.Client, scheme *runtime.Scheme
 		RequeueCh: make(chan event.GenericEvent),
 	}
 	subReconcilers := []subReconciler{
-		&workspaceResourceBuildReconciler{
+		&registryAuthReconciler{
+			client: client,
+			scheme: scheme,
+		},
+		&imageBuildReconciler{
 			Client: client,
-			Scheme: scheme,
+			scheme: scheme,
 		},
 		newWorkloadReconciler(client, scheme),
 		&svcReconciler{
@@ -216,8 +220,8 @@ func NewWorkspaceResourceReconciler(client client.Client, scheme *runtime.Scheme
 	return w
 }
 
-func applicationBuildComplete(wab *buildsv1alpha1.WorkspaceApplicationBuild) bool {
-	availableCond := meta.FindStatusCondition(wab.Status.Conditions, string(buildsv1alpha1.WorkspaceApplicationBuildAvailable))
+func imageBuildComplete(imageBuild *buildsv1alpha1.ImageBuild) bool {
+	availableCond := meta.FindStatusCondition(imageBuild.Status.Conditions, string(buildsv1alpha1.BuildAvailable))
 	if availableCond != nil && availableCond.Status == v1.ConditionTrue {
 		return true
 	}
@@ -235,7 +239,7 @@ func (r *WorkspaceResourceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.WorkspaceResource{}).
-		Watches(&buildsv1alpha1.WorkspaceApplicationBuild{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &v1alpha1.WorkspaceResource{})).
+		Watches(&buildsv1alpha1.ImageBuild{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &v1alpha1.WorkspaceResource{})).
 		Watches(&corev1.Service{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &v1alpha1.WorkspaceResource{})).
 		Watches(&appsv1.Deployment{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &v1alpha1.WorkspaceResource{})).
 		Watches(&v1alpha1.WorkspaceVolume{}, handler.EnqueueRequestsFromMapFunc(
@@ -247,7 +251,7 @@ func (r *WorkspaceResourceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 						res = append(res, reconcile.Request{
 							NamespacedName: types.NamespacedName{
 								Namespace: volume.Namespace,
-								Name:      artifact.ResourceRef.String(),
+								Name:      artifact.BuildSource.Name,
 							},
 						})
 					}

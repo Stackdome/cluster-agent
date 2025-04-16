@@ -56,10 +56,10 @@ func (r *WorkspaceVolumeReconciler) reconcileBuildArtifactsSources(ctx context.C
 
 	resourceBuildArtififactSrcsMap := buildArtifactSrcsGroupedByResource(volume)
 
-	resourceBuildMap, err := r.getApplicationBuildsForResources(ctx, volume)
+	resourceBuildMap, err := r.getImageBuildsForResources(ctx, volume)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			// We will get requueued when the application build/workspace resource is created.
+			// We will get requeued when the application build/workspace resource is created.
 			return resultStop, nil
 		}
 		return resultNil, err
@@ -81,10 +81,10 @@ func (r *WorkspaceVolumeReconciler) reconcileBuildArtifactsSrcsForResource(
 	ctx context.Context,
 	volume *v1alpha1.WorkspaceVolume,
 	resourceName string,
-	applicationBuild *buildsv1alpha1.WorkspaceApplicationBuild,
+	imageBuild *buildsv1alpha1.ImageBuild,
 	buildArtifacts []*v1alpha1.BuildArtifactSource) error {
-	if applicationBuildAvailable(applicationBuild) {
-		desiredJob := volumesync.CreateBuildArtifactsVolumeSyncJob(volume, buildArtifacts, applicationBuild)
+	if buildAvailable(imageBuild) {
+		desiredJob := volumesync.CreateBuildArtifactsVolumeSyncJob(volume, buildArtifacts, imageBuild)
 		desiredJob.Labels = map[string]string{
 			ResourceNameLabel: resourceName,
 		}
@@ -103,8 +103,8 @@ func (r *WorkspaceVolumeReconciler) reconcileBuildArtifactsSrcsForResource(
 		jobcompletedCond := findJobCompleteCondition(existingJob)
 		if jobcompletedCond != nil && jobcompletedCond.Status == corev1.ConditionTrue {
 			volume.Status.SetBuildArtifactSyncStatus(
-				v1alpha1.ResourceRef(resourceName),
-				applicationBuild.ShortBuildSrcHashFromStatus(),
+				v1alpha1.StackResourceReference{Name: resourceName},
+				imageBuild.ShortBuildSrcHashFromStatus(),
 				v1alpha1.BuildArtifactSyncStatusCompleted,
 			)
 			// TODO: Cleanup failed and completed jobs.
@@ -112,17 +112,17 @@ func (r *WorkspaceVolumeReconciler) reconcileBuildArtifactsSrcsForResource(
 		}
 	}
 
-	failedCond := meta.FindStatusCondition(applicationBuild.Status.Conditions, string(buildsv1alpha1.WorkspaceApplicationBuildFailed))
+	failedCond := meta.FindStatusCondition(imageBuild.Status.Conditions, string(buildsv1alpha1.BuildFailed))
 	if failedCond != nil && failedCond.Status == metav1.ConditionTrue {
-		volume.Status.SetBuildArtifactSyncStatus(v1alpha1.ResourceRef(resourceName), applicationBuild.ShortBuildSrcHashFromSpec(), v1alpha1.BuildArtifactSyncStatusFailed)
+		volume.Status.SetBuildArtifactSyncStatus(v1alpha1.StackResourceReference{Name: resourceName}, imageBuild.ShortBuildSrcHashFromSpec(), v1alpha1.BuildArtifactSyncStatusFailed)
 		return nil
 	}
-	volume.Status.SetBuildArtifactSyncStatus(v1alpha1.ResourceRef(resourceName), applicationBuild.ShortBuildSrcHashFromSpec(), v1alpha1.BuildArtifactSyncStatusPending)
+	volume.Status.SetBuildArtifactSyncStatus(v1alpha1.StackResourceReference{Name: resourceName}, imageBuild.ShortBuildSrcHashFromSpec(), v1alpha1.BuildArtifactSyncStatusPending)
 	return nil
 }
 
-func applicationBuildAvailable(applicationBuild *buildsv1alpha1.WorkspaceApplicationBuild) bool {
-	availableCond := meta.FindStatusCondition(applicationBuild.Status.Conditions, string(buildsv1alpha1.WorkspaceApplicationBuildAvailable))
+func buildAvailable(imageBuild *buildsv1alpha1.ImageBuild) bool {
+	availableCond := meta.FindStatusCondition(imageBuild.Status.Conditions, string(buildsv1alpha1.BuildAvailable))
 	if availableCond != nil && availableCond.Status == metav1.ConditionTrue {
 		return true
 	}
@@ -132,34 +132,34 @@ func applicationBuildAvailable(applicationBuild *buildsv1alpha1.WorkspaceApplica
 func buildArtifactSrcsGroupedByResource(volume *v1alpha1.WorkspaceVolume) map[string][]*v1alpha1.BuildArtifactSource {
 	res := make(map[string][]*v1alpha1.BuildArtifactSource)
 	for _, artifact := range volume.Spec.Source.BuildArtifacts {
-		if _, ok := res[artifact.ResourceRef.String()]; !ok {
-			res[artifact.ResourceRef.String()] = make([]*v1alpha1.BuildArtifactSource, 0)
+		if _, ok := res[artifact.BuildSource.Name]; !ok {
+			res[artifact.BuildSource.Name] = make([]*v1alpha1.BuildArtifactSource, 0)
 		}
-		res[artifact.ResourceRef.String()] = append(res[artifact.ResourceRef.String()], &artifact)
+		res[artifact.BuildSource.Name] = append(res[artifact.BuildSource.Name], &artifact)
 	}
 	return res
 }
 
-func (r *WorkspaceVolumeReconciler) getApplicationBuildsForResources(ctx context.Context, volume *v1alpha1.WorkspaceVolume) (map[string]*buildsv1alpha1.WorkspaceApplicationBuild, error) {
-	res := make(map[string]*buildsv1alpha1.WorkspaceApplicationBuild)
+func (r *WorkspaceVolumeReconciler) getImageBuildsForResources(ctx context.Context, volume *v1alpha1.WorkspaceVolume) (map[string]*buildsv1alpha1.ImageBuild, error) {
+	res := make(map[string]*buildsv1alpha1.ImageBuild)
 	for _, artifact := range volume.Spec.Source.BuildArtifacts {
-		resourceRef := artifact.ResourceRef
+		stackresourceRef := artifact.BuildSource.Name
 		resource := &v1alpha1.WorkspaceResource{}
-		if err := r.Client.Get(ctx, types.NamespacedName{Name: resourceRef.String(), Namespace: volume.Namespace}, resource); err != nil {
+		if err := r.Client.Get(ctx, types.NamespacedName{Name: stackresourceRef, Namespace: volume.Namespace}, resource); err != nil {
 			if apierrors.IsNotFound(err) {
 				return nil, err
 			}
-			return nil, fmt.Errorf("failed to get the resource '%s' in volume '%s': %w", resourceRef, volume.Name, err)
+			return nil, fmt.Errorf("failed to get the resource '%s' in volume '%s': %w", stackresourceRef, volume.Name, err)
 		}
-		applicationBuildName := buildsv1alpha1.ApplicationBuildName(resource)
-		applicationBuild := &buildsv1alpha1.WorkspaceApplicationBuild{}
-		if err := r.Client.Get(ctx, types.NamespacedName{Name: applicationBuildName, Namespace: volume.Namespace}, applicationBuild); err != nil {
+		imageBuildName := buildsv1alpha1.ImageBuildName(resource.Name, resource.Spec.BuildSpec.BuildSourceHash)
+		imageBuild := &buildsv1alpha1.ImageBuild{}
+		if err := r.Client.Get(ctx, types.NamespacedName{Name: imageBuildName, Namespace: volume.Namespace}, imageBuild); err != nil {
 			if apierrors.IsNotFound(err) {
 				return nil, err
 			}
-			return nil, fmt.Errorf("failed to get the application build '%s' for volume sync'%s': %w", applicationBuildName, volume.Name, err)
+			return nil, fmt.Errorf("failed to get the application build '%s' for volume sync'%s': %w", imageBuildName, volume.Name, err)
 		}
-		res[resourceRef.String()] = applicationBuild
+		res[stackresourceRef] = imageBuild
 	}
 	return res, nil
 }
@@ -174,8 +174,5 @@ func findJobCompleteCondition(job *batchv1.Job) *batchv1.JobCondition {
 }
 
 func shouldSkipVolumeSourceReconcile(volume *v1alpha1.WorkspaceVolume) bool {
-	if volume.Spec.Source == nil {
-		return true
-	}
-	return false
+	return volume.Spec.Source == nil
 }

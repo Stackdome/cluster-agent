@@ -311,10 +311,11 @@ func (r *RegistryReconciler) reconcileRegistryAuth(ctx context.Context, registry
 }
 
 func (r *RegistryReconciler) reconcileHtPasswordAuthSecret(ctx context.Context, registry *registryv1alpha1.ClusterRegistry) (subReconcilerResult, error) {
+	credentialsInfo := registry.Spec.Auth.HtPasswordCredentials.CredentialsRef
 	htpasswdSecret := &corev1.Secret{}
 	if err := r.Client.Get(ctx, types.NamespacedName{
-		Name:      registry.Spec.Auth.HtPasswordCredentials.PasswordSecretRef.Name,
-		Namespace: registry.Spec.Auth.HtPasswordCredentials.PasswordSecretRef.Namespace,
+		Name:      credentialsInfo.SecretName,
+		Namespace: credentialsInfo.SecretNamespace,
 	}, htpasswdSecret); err != nil {
 		if apierrors.IsNotFound(err) {
 			// set status condition
@@ -333,14 +334,14 @@ func (r *RegistryReconciler) reconcileHtPasswordAuthSecret(ctx context.Context, 
 		return resultNil, err
 	}
 
-	password := string(htpasswdSecret.Data["password"])
+	password := string(htpasswdSecret.Data[credentialsInfo.PasswordKey])
 	if len(password) == 0 {
 		// set status condition
 		meta.SetStatusCondition(&registry.Status.Conditions, metav1.Condition{
 			Type:               string(registryv1alpha1.RegistryReady),
 			Status:             metav1.ConditionFalse,
-			Reason:             "HtPasswordAuthSecretEmpty",
-			Message:            "HtPasswordAuthSecret is empty",
+			Reason:             "HtPasswordAuthSecretError",
+			Message:            "Missing password in secret",
 			ObservedGeneration: registry.Generation,
 		})
 		registry.Status.InternalURL = ""
@@ -348,7 +349,23 @@ func (r *RegistryReconciler) reconcileHtPasswordAuthSecret(ctx context.Context, 
 		registry.Status.ObservedGeneration = registry.Generation
 		return resultStop, nil
 	}
-	desiredSecret, secretKey, err := r.registryBuilder.BuildHTPasswordSecret(ctx, registry, password)
+
+	username := string(htpasswdSecret.Data[credentialsInfo.UsernameKey])
+	if len(username) == 0 {
+		// set status condition
+		meta.SetStatusCondition(&registry.Status.Conditions, metav1.Condition{
+			Type:               string(registryv1alpha1.RegistryReady),
+			Status:             metav1.ConditionFalse,
+			Reason:             "HtPasswordAuthSecretError",
+			Message:            "Missing username in secret",
+			ObservedGeneration: registry.Generation,
+		})
+		registry.Status.InternalURL = ""
+		registry.Status.Phase = registryv1alpha1.RegistryPhasePending
+		registry.Status.ObservedGeneration = registry.Generation
+		return resultStop, nil
+	}
+	desiredSecret, secretKey, err := r.registryBuilder.BuildHTPasswordSecret(ctx, registry, username, password)
 	if err != nil {
 		return resultNil, err
 	}

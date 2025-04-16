@@ -1,0 +1,25 @@
+apiVersion: users.stackdome.io/v1alpha1
+kind: WorkspaceUser
+metadata:
+  name: admin-user
+  labels:
+    role: admin
+    team: platform
+spec:
+  username: admin
+  baseDomain: "stackdome.io"
+  namespaces:
+    - "ashish-test"
+  accessRules:
+    # Full cluster admin access
+    - apiGroups: ["*"]
+      resources: ["*"]
+      verbs: ["*"]
+    # Access to view logs
+    - apiGroups: [""]
+      resources: ["pods", "pods/log"]
+      verbs: ["get", "list", "watch"]
+    # Access to exec into pods
+    - apiGroups: [""]
+      resources: ["pods/exec"]
+      verbs: ["create"]

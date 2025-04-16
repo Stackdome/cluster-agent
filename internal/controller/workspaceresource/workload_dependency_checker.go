@@ -70,7 +70,7 @@ func (w *workloadDependencyChecker) isVolumeReady(volume *v1alpha1.WorkspaceVolu
 			return false, "Current build not yet available"
 		}
 		currentBuildID := resource.Status.CurrentBuild.ShortHash
-		buildSyncStatus, found := volume.Status.BuildArtifactSyncs[v1alpha1.ResourceRef(resource.Name)]
+		buildSyncStatus, found := volume.Status.BuildArtifactSyncs[resource.Name]
 		if !found || !buildSyncCompletedAndUptoDate(buildSyncStatus, currentBuildID) {
 			return false, "Volume sync from build not yet complete"
 		}
