@@ -2,7 +2,9 @@ package registry
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/url"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -22,13 +24,16 @@ import (
 
 	registryv1alpha1 "stackdome.io/cluster-agent/api/registry/v1alpha1"
 	"stackdome.io/cluster-agent/internal/controller"
+	internaltypes "stackdome.io/cluster-agent/internal/types"
+
 	reg "stackdome.io/cluster-agent/pkg/registry"
 )
 
 const (
-	registryNamespace  = "stackdome-registry"
-	cacheFinalizer     = "registry.stackdome.io/cache"
-	registryController = "ClusterRegistryController"
+	registryNamespace               = "stackdome-registry"
+	cacheFinalizer                  = "registry.stackdome.io/cache"
+	registryController              = "ClusterRegistryController"
+	nodeRegistryAccessConfigMapName = "stackdome-insecure-registries"
 )
 
 type subReconcilerResult struct {
@@ -76,12 +81,14 @@ func NewRegistryReconciler(client client.Client, scheme *runtime.Scheme, registr
 	}))
 
 	r.subReconcilers = map[string]subReconciler{
-		"NamepspaceReonciler":          r.reconcileRegistryNamespace,
-		"RegistryAuthReconciler":       r.reconcileRegistryAuth,
-		"RegistryStorageReconciler":    r.reconcileRegistryStorage,
-		"RegistryConfigReconciler":     r.reconcileRegistryConfig,
-		"RegistryDeploymentReconciler": r.reconcileRegistryDeployment,
-		"RegistryServiceReconciler":    r.reconcileRegistryService,
+		"NamepspaceReonciler":                     r.reconcileRegistryNamespace,
+		"RegistryAuthReconciler":                  r.reconcileRegistryAuth,
+		"RegistryStorageReconciler":               r.reconcileRegistryStorage,
+		"RegistryConfigReconciler":                r.reconcileRegistryConfig,
+		"RegistryDeploymentReconciler":            r.reconcileRegistryDeployment,
+		"RegistryServiceReconciler":               r.reconcileRegistryService,
+		"NodeRegistryAccessConfigMapReconciler":   r.reconcileNodeRegistryAccessConfigMap,
+		"SharedRegistryConfigDaemonSetReconciler": r.reconcileSharedRegistryConfigDaemonSet,
 	}
 	return r
 }
@@ -121,6 +128,130 @@ func (r *RegistryReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	return result, r.Client.Status().Update(ctx, registry)
 }
 
+func (r *RegistryReconciler) reconcileNodeRegistryAccessConfigMap(ctx context.Context, registry *registryv1alpha1.ClusterRegistry) (subReconcilerResult, error) {
+	logger := log.FromContext(ctx)
+	logger.Info("reconciling node registry access configuration")
+
+	if len(registry.Status.InternalURL) == 0 {
+		return resultNil, nil
+	}
+
+	existingConfigMap := &corev1.ConfigMap{}
+	err := r.Get(ctx, types.NamespacedName{
+		Name:      nodeRegistryAccessConfigMapName,
+		Namespace: registryNamespace,
+	}, existingConfigMap)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return r.createRegistryConfigCM(ctx, registry)
+		}
+		return resultNil, fmt.Errorf("failed to get ConfigMap: %w", err)
+	}
+
+	u, err := url.Parse(registry.Status.InternalURL)
+	if err != nil {
+		return resultNil, fmt.Errorf("failed to parse registry URL: %w", err)
+	}
+	registryHost := u.Hostname()
+	// Update existing ConfigMap by adding/updating this registry's configuration
+	existingRegistryConfig, err := unmarshalRegistryConfig(existingConfigMap.Data["registries.json"])
+	if err != nil {
+		return resultNil, err
+	}
+
+	if existingRegistryConfig.AddRegistry(registryHost, registry.Status.InternalURL) {
+		existingRegistryConfigJson, err := marshalRegistryConfig(existingRegistryConfig)
+		if err != nil {
+			return resultNil, err
+		}
+		existingConfigMap.Data["registries.json"] = existingRegistryConfigJson
+		return resultNil, r.Client.Update(ctx, existingConfigMap)
+	}
+	return resultNil, nil
+}
+
+func unmarshalRegistryConfig(registryInfoJson string) (*internaltypes.RegistryConfig, error) {
+	var res internaltypes.RegistryConfig
+	if err := json.Unmarshal([]byte(registryInfoJson), &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (r *RegistryReconciler) createRegistryConfigCM(ctx context.Context, registry *registryv1alpha1.ClusterRegistry) (subReconcilerResult, error) {
+	u, err := url.Parse(registry.Status.InternalURL)
+	if err != nil {
+		return resultNil, fmt.Errorf("failed to parse registry URL: %w", err)
+	}
+	registryHost := u.Hostname()
+
+	registryConfig := internaltypes.NewRegistryConfig()
+	registryConfig.AddRegistry(registryHost, registry.Status.InternalURL)
+
+	registryConfigJson, err := marshalRegistryConfig(registryConfig)
+	if err != nil {
+		return resultNil, err
+	}
+
+	desiredCM := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      nodeRegistryAccessConfigMapName,
+			Namespace: registryNamespace,
+		},
+		Data: map[string]string{
+			"registries.json": registryConfigJson,
+		},
+	}
+
+	return resultNil, r.Create(ctx, desiredCM)
+}
+
+func marshalRegistryConfig(registryConfig *internaltypes.RegistryConfig) (string, error) {
+	resBytes, err := json.Marshal(registryConfig)
+	if err != nil {
+		return "", err
+	}
+	return string(resBytes), nil
+}
+
+func (r *RegistryReconciler) reconcileSharedRegistryConfigDaemonSet(ctx context.Context, registry *registryv1alpha1.ClusterRegistry) (subReconcilerResult, error) {
+	logger := log.FromContext(ctx)
+	logger.Info("reconciling shared registry config daemonset")
+	desiredDaemonSet := r.registryBuilder.BuildRegistryConfigReconcilerDaemonset(ctx, registry, nodeRegistryAccessConfigMapName, "registries.json")
+	existingDaemonSet := &appsv1.DaemonSet{}
+	if err := r.Client.Get(ctx, client.ObjectKeyFromObject(desiredDaemonSet), existingDaemonSet); err != nil {
+		if apierrors.IsNotFound(err) {
+			return resultRequeue, r.Client.Create(ctx, desiredDaemonSet)
+		}
+		return resultNil, err
+	}
+
+	if existingDaemonSet.Status.DesiredNumberScheduled == existingDaemonSet.Status.NumberAvailable &&
+		existingDaemonSet.Status.DesiredNumberScheduled == existingDaemonSet.Status.NumberReady {
+		meta.SetStatusCondition(&registry.Status.Conditions, metav1.Condition{
+			Type:               string(registryv1alpha1.RegistryReady),
+			Status:             metav1.ConditionTrue,
+			Reason:             "RegistryDeploymentAndServiceAvailable",
+			Message:            "Registry Deployment and Service are Available",
+			ObservedGeneration: registry.Generation,
+		})
+		registry.Status.Phase = registryv1alpha1.RegistryPhaseRunning
+		registry.Status.ObservedGeneration = registry.Generation
+		return resultNil, nil
+	}
+	meta.SetStatusCondition(&registry.Status.Conditions, metav1.Condition{
+		Type:               string(registryv1alpha1.RegistryReady),
+		Status:             metav1.ConditionFalse,
+		Reason:             "RegistryConfigReconcilerDaemonsetNotAvailable",
+		Message:            "RegistryConfigReconcilerDaemonset is not Available",
+		ObservedGeneration: registry.Generation,
+	})
+	registry.Status.Phase = registryv1alpha1.RegistryPhaseFailed
+	registry.Status.ObservedGeneration = registry.Generation
+	return resultRequeue, nil
+}
+
+// TODO: Handle removal of hosts from CM and finally delete the daemonset if required.
 func (r *RegistryReconciler) reconcileDelete(ctx context.Context, registry *registryv1alpha1.ClusterRegistry) error {
 	meta.SetStatusCondition(&registry.Status.Conditions, metav1.Condition{
 		Type:               string(registryv1alpha1.RegistryReady),
@@ -241,16 +372,6 @@ func (r *RegistryReconciler) reconcileRegistryService(ctx context.Context, regis
 	}); err != nil {
 		return resultNil, err
 	}
-
-	meta.SetStatusCondition(&registry.Status.Conditions, metav1.Condition{
-		Type:               string(registryv1alpha1.RegistryReady),
-		Status:             metav1.ConditionTrue,
-		Reason:             "RegistryDeploymentAndServiceAvailable",
-		Message:            "Registry Deployment and Service are Available",
-		ObservedGeneration: registry.Generation,
-	})
-	registry.Status.Phase = registryv1alpha1.RegistryPhaseRunning
-	registry.Status.ObservedGeneration = registry.Generation
 	registry.Status.InternalURL = registryURL
 	return resultNil, nil
 }

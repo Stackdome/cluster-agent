@@ -121,11 +121,12 @@ func main() {
 	})
 
 	registryBuilder := zotregistry.NewZotRegistry(zotregistry.ZotRegistryOpts{
-		RegistryImage:    "zot:a558e48ae5ba",
-		GCDelay:          "1h",
-		GCInterval:       "24h",
-		EnableGC:         true,
-		RegistryLogLevel: "info",
+		RegistryImage:                 "zot:a558e48ae5ba",
+		RegistryConfigReconcilerImage: "containerd-config-reconciler:3",
+		GCDelay:                       "1h",
+		GCInterval:                    "24h",
+		EnableGC:                      true,
+		RegistryLogLevel:              "info",
 		LayerCachingOpts: zotregistry.LayerCachingOpts{
 			Enabled:          true,
 			RepoGlobPatterns: []string{"*-cache", "*/cache", "*/cache/*"},

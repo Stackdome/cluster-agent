@@ -113,6 +113,10 @@ spec:
                                   required:
                                   - type
                                   type: object
+                                insecure:
+                                  default: false
+                                  description: Is the registry insecure
+                                  type: boolean
                                 repositoryUrl:
                                   description: Repository URL for constructing the
                                     image tag (e.g., docker.io/myorg)

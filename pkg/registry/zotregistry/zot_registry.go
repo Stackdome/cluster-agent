@@ -24,22 +24,24 @@ const (
 )
 
 type zotRegistry struct {
-	gcDelay          string
-	gcInterval       string
-	enableGC         bool
-	registryLogLevel string
-	layerCachingOpts LayerCachingOpts
-	RegistryImage    string
-	opts             registry.RegistryBuilderOpts
+	gcDelay                       string
+	gcInterval                    string
+	enableGC                      bool
+	registryLogLevel              string
+	layerCachingOpts              LayerCachingOpts
+	RegistryImage                 string
+	RegistryConfigReconcilerImage string
+	opts                          registry.RegistryBuilderOpts
 }
 
 type ZotRegistryOpts struct {
-	RegistryImage    string
-	GCDelay          string
-	GCInterval       string
-	EnableGC         bool
-	RegistryLogLevel string
-	LayerCachingOpts LayerCachingOpts
+	RegistryImage                 string
+	RegistryConfigReconcilerImage string
+	GCDelay                       string
+	GCInterval                    string
+	EnableGC                      bool
+	RegistryLogLevel              string
+	LayerCachingOpts              LayerCachingOpts
 }
 
 type LayerCachingOpts struct {
@@ -49,12 +51,13 @@ type LayerCachingOpts struct {
 
 func NewZotRegistry(opts ZotRegistryOpts) registry.RegistryBuilder {
 	return &zotRegistry{
-		gcDelay:          opts.GCDelay,
-		gcInterval:       opts.GCInterval,
-		enableGC:         opts.EnableGC,
-		registryLogLevel: opts.RegistryLogLevel,
-		layerCachingOpts: opts.LayerCachingOpts,
-		RegistryImage:    opts.RegistryImage,
+		gcDelay:                       opts.GCDelay,
+		gcInterval:                    opts.GCInterval,
+		enableGC:                      opts.EnableGC,
+		registryLogLevel:              opts.RegistryLogLevel,
+		layerCachingOpts:              opts.LayerCachingOpts,
+		RegistryImage:                 opts.RegistryImage,
+		RegistryConfigReconcilerImage: opts.RegistryConfigReconcilerImage,
 	}
 }
 
@@ -285,6 +288,82 @@ func (z *zotRegistry) BuildService(ctx context.Context, registry *registryv1alph
 
 	registryURL := fmt.Sprintf("http://%s.%s.svc.cluster.local", registry.Name, z.opts.Namespace)
 	return service, registryURL, nil
+}
+
+func (z *zotRegistry) BuildRegistryConfigReconcilerDaemonset(ctx context.Context, registry *registryv1alpha1.ClusterRegistry, registryConfigCMName string, registryConfigKey string) *appsv1.DaemonSet {
+	desiredDaemonset := appsv1.DaemonSet{
+		ObjectMeta: v1.ObjectMeta{
+			Name:      "registry-config-reconciler",
+			Namespace: z.opts.Namespace,
+		},
+		Spec: appsv1.DaemonSetSpec{
+			Selector: &v1.LabelSelector{
+				MatchLabels: map[string]string{
+					"demonset-for": "registry-config-reconciler",
+				},
+			},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: v1.ObjectMeta{
+					Labels: map[string]string{
+						"demonset-for": "registry-config-reconciler",
+					},
+				},
+				Spec: corev1.PodSpec{
+					HostPID: true,
+					Volumes: []corev1.Volume{
+						{
+							Name: "registry-config",
+							VolumeSource: corev1.VolumeSource{
+								ConfigMap: &corev1.ConfigMapVolumeSource{
+									LocalObjectReference: corev1.LocalObjectReference{
+										Name: registryConfigCMName,
+									},
+									Items: []corev1.KeyToPath{
+										{
+											Key:  registryConfigKey,
+											Path: "registries.json",
+										},
+									},
+								},
+							},
+						},
+						{
+							Name: "containerd-config",
+							VolumeSource: corev1.VolumeSource{
+								HostPath: &corev1.HostPathVolumeSource{
+									Path: "/etc/containerd",
+									Type: ptr.To(corev1.HostPathDirectory),
+								},
+							},
+						},
+					},
+					Containers: []corev1.Container{
+						{
+							Name:  "containerd-registry-config-reconciler",
+							Image: z.RegistryConfigReconcilerImage,
+							Args: []string{
+								"--config-dir=/etc/containerd",
+								"--config-file=config.toml",
+								"--registry-config=/config/registries.json",
+							},
+							VolumeMounts: []corev1.VolumeMount{
+								{
+									Name:      "containerd-config",
+									MountPath: "/etc/containerd",
+								},
+								{
+									Name:      "registry-config",
+									MountPath: "/config",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	return &desiredDaemonset
 }
 
 func (z *zotRegistry) BuildHTPasswordSecret(ctx context.Context, registry *registryv1alpha1.ClusterRegistry, username, password string) (*corev1.Secret, string, error) {
