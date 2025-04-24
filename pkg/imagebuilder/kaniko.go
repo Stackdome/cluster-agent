@@ -11,6 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/yaml"
+	"stackdome.io/cluster-agent/pkg/config"
 )
 
 const jobTemplate = `
@@ -24,7 +25,7 @@ spec:
     spec:
       containers:
       - name: kaniko
-        image: kaniko:1
+        image: kaniko-image
         args:
         - "--dockerfile={{ .DockerfilePath }}"
         - "--context=dir://{{ .Context }}"
@@ -128,10 +129,13 @@ func GenerateImageBuildJob(params BuildParams) (*batchv1.Job, error) {
 		return nil, fmt.Errorf("failed to decode Job YAML: %v", err)
 	}
 	container := &job.Spec.Template.Spec.Containers[0]
+
+	// set kaniko image
+	container.Image = config.KanikoExecutorImage
+
 	container.Resources = corev1.ResourceRequirements{
 		Limits: corev1.ResourceList{
-			corev1.ResourceCPU:    resource.MustParse("2000m"),
-			corev1.ResourceMemory: resource.MustParse("8Gi"),
+			corev1.ResourceMemory: resource.MustParse("4Gi"),
 		},
 		Requests: corev1.ResourceList{
 			corev1.ResourceCPU:    resource.MustParse("200m"),

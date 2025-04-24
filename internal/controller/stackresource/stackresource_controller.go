@@ -1,20 +1,4 @@
-/*
-Copyright 2024.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
-package workspaceresource
+package stackresource
 
 import (
 	"context"
@@ -30,6 +14,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -37,11 +22,12 @@ import (
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	buildsv1alpha1 "stackdome.io/cluster-agent/api/builds/v1alpha1"
 	"stackdome.io/cluster-agent/api/core/v1alpha1"
+	storagev1alpha1 "stackdome.io/cluster-agent/api/storage/v1alpha1"
 	"stackdome.io/cluster-agent/internal/controller"
 )
 
 const (
-	ownerKey = ".metadata.controller"
+	ownerKey = ".metadata.owner"
 )
 
 type subReconcilerResult struct {
@@ -61,26 +47,26 @@ var (
 )
 
 type subReconciler interface {
-	reconcile(context.Context, *v1alpha1.WorkspaceResource) (subReconcilerResult, error)
+	reconcile(context.Context, *v1alpha1.StackResource) (subReconcilerResult, error)
 }
 
 const DefaultRequeueTime = 5 * time.Second
 
-// WorkspaceResourceReconciler reconciles a WorkspaceResource object
-type WorkspaceResourceReconciler struct {
+// StackResourceReconciler reconciles a StackResource object
+type StackResourceReconciler struct {
 	client.Client
 	Scheme         *runtime.Scheme
 	subReconcilers []subReconciler
 	RequeueCh      chan event.GenericEvent
 }
 
-func (r *WorkspaceResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *StackResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
-	logger = logger.WithValues("workspaceResource:", req.String())
-	logger.Info("in workspace resource reconciler")
+	logger = logger.WithValues("stackResource:", req.String())
+	logger.Info("in stack resource reconciler")
 	ctx = controller.ContextWithLogger(ctx, logger)
 
-	workspaceResource := &v1alpha1.WorkspaceResource{}
+	workspaceResource := &v1alpha1.StackResource{}
 	if err := r.Client.Get(ctx, req.NamespacedName, workspaceResource); err != nil {
 		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
@@ -99,7 +85,7 @@ func (r *WorkspaceResourceReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	return res, r.Client.Status().Update(ctx, workspaceResource)
 }
 
-func (r *WorkspaceResourceReconciler) reconcile(ctx context.Context, resource *v1alpha1.WorkspaceResource) (ctrl.Result, error) {
+func (r *StackResourceReconciler) reconcile(ctx context.Context, resource *v1alpha1.StackResource) (ctrl.Result, error) {
 	for _, subReconciler := range r.subReconcilers {
 		subReconcilerRes, err := subReconciler.reconcile(ctx, resource)
 		switch {
@@ -116,13 +102,13 @@ func (r *WorkspaceResourceReconciler) reconcile(ctx context.Context, resource *v
 	return ctrl.Result{}, nil
 }
 
-func reportWorkspaceResourceNotReady(resource *v1alpha1.WorkspaceResource, reason, msg string) {
+func reportStackResourceNotReady(resource *v1alpha1.StackResource, reason, msg string) {
 	resource.Status.ObservedGeneration = resource.Generation
-	resource.Status.Phase = v1alpha1.WorkspaceResourcePhasePending
+	resource.Status.Phase = v1alpha1.StackResourcePhasePending
 	resource.Status.ExternalAddress = nil
 	resource.Status.InternalAddress = nil
 	meta.SetStatusCondition(&resource.Status.Conditions, metav1.Condition{
-		Type:               string(v1alpha1.WorkspaceResourceStatusAvailable),
+		Type:               string(v1alpha1.StackResourceStatusAvailable),
 		Status:             metav1.ConditionFalse,
 		ObservedGeneration: resource.Generation,
 		Reason:             reason,
@@ -131,24 +117,23 @@ func reportWorkspaceResourceNotReady(resource *v1alpha1.WorkspaceResource, reaso
 	resource.Status.StatusHash = resource.StatusHash()
 }
 
-func (r *WorkspaceResourceReconciler) reportWorkspaceResourceReady(resource *v1alpha1.WorkspaceResource) {
-	//TODO: Set source hash
+func reportStackResourceReady(resource *v1alpha1.StackResource) {
 	resource.Status.ObservedGeneration = resource.Generation
 	if resource.Spec.BuildSpec != nil {
 		resource.Status.ImageSourceHash = resource.Spec.BuildSpec.BuildSourceHash
 	}
-	resource.Status.Phase = v1alpha1.WorkspaceResourcePhaseReady
+	resource.Status.Phase = v1alpha1.StackResourcePhaseReady
 	meta.SetStatusCondition(&resource.Status.Conditions, metav1.Condition{
-		Type:               string(v1alpha1.WorkspaceResourceStatusAvailable),
+		Type:               string(v1alpha1.StackResourceStatusAvailable),
 		Status:             metav1.ConditionTrue,
 		ObservedGeneration: resource.Generation,
-		Reason:             "WorkspaceResourceAvailable",
-		Message:            "Workspace is ready",
+		Reason:             "StackResourceAvailable",
+		Message:            "StackResource is available",
 	})
 	resource.Status.StatusHash = resource.StatusHash()
 }
 
-func (r *WorkspaceResourceReconciler) getImageBuildStatus(ctx context.Context, resource *v1alpha1.WorkspaceResource) (*v1alpha1.BuildStatus, error) {
+func (r *StackResourceReconciler) getImageBuildStatus(ctx context.Context, resource *v1alpha1.StackResource) (*v1alpha1.BuildStatus, error) {
 	if resource.Spec.BuildSpec == nil {
 		return nil, nil
 	}
@@ -185,8 +170,8 @@ func (r *WorkspaceResourceReconciler) getImageBuildStatus(ctx context.Context, r
 	return res, nil
 }
 
-func workspaceAvailable(resource *v1alpha1.WorkspaceResource) bool {
-	availableCond := meta.FindStatusCondition(resource.Status.Conditions, string(v1alpha1.WorkspaceResourceStatusAvailable))
+func stackResourceAvailable(resource *v1alpha1.StackResource) bool {
+	availableCond := meta.FindStatusCondition(resource.Status.Conditions, string(v1alpha1.StackResourceStatusAvailable))
 	if availableCond != nil &&
 		availableCond.Status == metav1.ConditionTrue &&
 		availableCond.ObservedGeneration == resource.Generation {
@@ -195,11 +180,15 @@ func workspaceAvailable(resource *v1alpha1.WorkspaceResource) bool {
 	return false
 }
 
-func NewWorkspaceResourceReconciler(client client.Client, scheme *runtime.Scheme) *WorkspaceResourceReconciler {
-	w := &WorkspaceResourceReconciler{
+func NewStackResourceReconciler(client client.Client, scheme *runtime.Scheme) *StackResourceReconciler {
+	w := &StackResourceReconciler{
 		Client:    client,
 		Scheme:    scheme,
 		RequeueCh: make(chan event.GenericEvent),
+	}
+
+	depChecker := &workloadDependencyChecker{
+		Client: client,
 	}
 	subReconcilers := []subReconciler{
 		&registryAuthReconciler{
@@ -210,7 +199,11 @@ func NewWorkspaceResourceReconciler(client client.Client, scheme *runtime.Scheme
 			Client: client,
 			scheme: scheme,
 		},
-		newWorkloadReconciler(client, scheme),
+		&workloadReconciler{
+			Client:            client,
+			Scheme:            scheme,
+			DependencyChecker: depChecker,
+		},
 		&svcReconciler{
 			Client: client,
 			Scheme: scheme,
@@ -229,22 +222,22 @@ func imageBuildComplete(imageBuild *buildsv1alpha1.ImageBuild) bool {
 }
 
 // SetupWithManager sets up the controller with the Manager.
-func (r *WorkspaceResourceReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &v1alpha1.WorkspaceResource{}, ownerKey, func(rawObj client.Object) []string {
-		wr := rawObj.(*v1alpha1.WorkspaceResource)
-		owner := metav1.GetControllerOf(wr)
+func (r *StackResourceReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &v1alpha1.StackResource{}, ownerKey, func(rawObj client.Object) []string {
+		sr := rawObj.(*v1alpha1.StackResource)
+		owner := metav1.GetControllerOf(sr)
 		return []string{owner.Name}
 	}); err != nil {
 		return err
 	}
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&v1alpha1.WorkspaceResource{}).
-		Watches(&buildsv1alpha1.ImageBuild{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &v1alpha1.WorkspaceResource{})).
-		Watches(&corev1.Service{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &v1alpha1.WorkspaceResource{})).
-		Watches(&appsv1.Deployment{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &v1alpha1.WorkspaceResource{})).
-		Watches(&v1alpha1.WorkspaceVolume{}, handler.EnqueueRequestsFromMapFunc(
+		For(&v1alpha1.StackResource{}).
+		Watches(&buildsv1alpha1.ImageBuild{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &v1alpha1.StackResource{})).
+		Watches(&corev1.Service{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &v1alpha1.StackResource{})).
+		Watches(&appsv1.Deployment{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &v1alpha1.StackResource{})).
+		Watches(&storagev1alpha1.Volume{}, handler.EnqueueRequestsFromMapFunc(
 			func(ctx context.Context, o client.Object) []reconcile.Request {
-				volume := o.(*v1alpha1.WorkspaceVolume)
+				volume := o.(*storagev1alpha1.Volume)
 				res := []reconcile.Request{}
 				if volume.Spec.Source != nil && len(volume.Spec.Source.BuildArtifacts) != 0 {
 					for _, artifact := range volume.Spec.Source.BuildArtifacts {
@@ -259,6 +252,6 @@ func (r *WorkspaceResourceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				return res
 			},
 		)).
-		// WatchesRawSource(&source.Channel{Source: r.RequeueCh}, &handler.EnqueueRequestForObject{}).
+		WatchesRawSource(source.Channel(r.RequeueCh, &handler.EnqueueRequestForObject{})).
 		Complete(r)
 }

@@ -1,5 +1,4 @@
-// Package workspaceresource provides controllers for managing WorkspaceResource custom resources
-package workspaceresource
+package stackresource
 
 import (
 	"context"
@@ -18,7 +17,7 @@ import (
 	"stackdome.io/cluster-agent/pkg/registry"
 )
 
-// registryAuthReconciler manages the registry authentication for WorkspaceResource objects
+// registryAuthReconciler manages the registry authentication for StackResource object
 // This reconciler creates and maintains Docker config secrets needed for pulling or pushing images
 type registryAuthReconciler struct {
 	client client.Client
@@ -27,7 +26,7 @@ type registryAuthReconciler struct {
 
 // reconcile is the main reconciliation function for registry authentication
 // It determines which type of reconciliation to perform based on the WorkspaceResource spec
-func (r *registryAuthReconciler) reconcile(ctx context.Context, stackResource *corev1alpha1.WorkspaceResource) (subReconcilerResult, error) {
+func (r *registryAuthReconciler) reconcile(ctx context.Context, stackResource *corev1alpha1.StackResource) (subReconcilerResult, error) {
 	switch {
 	case stackResource.Spec.BuildSpec != nil:
 		// If BuildSpec exists, use registry authentication from the build specification
@@ -46,7 +45,7 @@ func (r *registryAuthReconciler) reconcile(ctx context.Context, stackResource *c
 func (r *registryAuthReconciler) reconcileRegistryAuth(
 	ctx context.Context,
 	registryAuth *corev1alpha1.RegistryAuth,
-	stackResource *corev1alpha1.WorkspaceResource,
+	stackResource *corev1alpha1.StackResource,
 	registryUrl string,
 ) (subReconcilerResult, error) {
 	if registryAuth == nil {
@@ -68,7 +67,7 @@ func (r *registryAuthReconciler) reconcileRegistryAuth(
 func (r *registryAuthReconciler) reconcileDockerConfigAuthSecret(
 	ctx context.Context,
 	registryAuth *corev1alpha1.RegistryAuth,
-	stackResource *corev1alpha1.WorkspaceResource,
+	stackResource *corev1alpha1.StackResource,
 	registryUrl string,
 ) (subReconcilerResult, error) {
 	logger := log.FromContext(ctx)
@@ -76,7 +75,7 @@ func (r *registryAuthReconciler) reconcileDockerConfigAuthSecret(
 	// Validate that Docker config authentication details are provided
 	if registryAuth.DockerConfigAuth == nil {
 		logger.Info("Docker config auth is nil")
-		reportWorkspaceResourceNotReady(stackResource, "DockerConfigAuthDetailsMissign", "Docker config auth is missing")
+		reportStackResourceNotReady(stackResource, "DockerConfigAuthDetailsMissing", "Docker config auth is missing")
 		return resultStop, nil
 	}
 
@@ -91,7 +90,7 @@ func (r *registryAuthReconciler) reconcileDockerConfigAuthSecret(
 		logger.Error(err, "Failed to get docker credentials secret")
 		if errors.IsNotFound(err) {
 			// Update the WorkspaceResource status if the credentials secret doesn't exist
-			reportWorkspaceResourceNotReady(stackResource, "DockerCredentialsSecretNotFound", "Docker credentials secret not found")
+			reportStackResourceNotReady(stackResource, "DockerCredentialsSecretNotFound", "Docker credentials secret not found")
 			return resultStop, nil
 		}
 		return resultNil, fmt.Errorf("failed to get docker credentials secret: %w", err)
@@ -101,7 +100,7 @@ func (r *registryAuthReconciler) reconcileDockerConfigAuthSecret(
 	username, ok := dockerCredentialsSecret.Data[dockerConfigAuth.CredentialsRef.UsernameKey]
 	if !ok {
 		logger.Info("Docker credentials secret username key not found")
-		reportWorkspaceResourceNotReady(stackResource, "DockerCredentialsSecretUsernameKeyNotFound", "Docker credentials secret username key not found")
+		reportStackResourceNotReady(stackResource, "DockerCredentialsSecretUsernameKeyNotFound", "Docker credentials secret username key not found")
 		return resultStop, nil
 	}
 
@@ -109,7 +108,7 @@ func (r *registryAuthReconciler) reconcileDockerConfigAuthSecret(
 	password, ok := dockerCredentialsSecret.Data[dockerConfigAuth.CredentialsRef.PasswordKey]
 	if !ok {
 		logger.Info("Docker credentials secret password key not found")
-		reportWorkspaceResourceNotReady(stackResource, "DockerCredentialsSecretPasswordKeyNotFound", "Docker credentials secret password key not found")
+		reportStackResourceNotReady(stackResource, "DockerCredentialsSecretPasswordKeyNotFound", "Docker credentials secret password key not found")
 		return resultStop, nil
 	}
 

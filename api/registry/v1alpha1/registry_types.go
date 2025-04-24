@@ -59,6 +59,9 @@ type RegistryStatus struct {
 	// +optional
 	InternalURL string `json:"internalUrl,omitempty"`
 
+	// ServiceIP is the cluster IP of the registry svc.
+	ServiceIP string `json:"serviceIp,omitempty"`
+
 	// Phase represents the current state of the registry
 	// +kubebuilder:default=Pending
 	Phase RegistryPhase `json:"phase,omitempty"`

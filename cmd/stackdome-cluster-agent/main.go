@@ -1,19 +1,3 @@
-/*
-Copyright 2024.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package main
 
 import (
@@ -39,25 +23,24 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	projectcontourv1 "github.com/projectcontour/contour/apis/projectcontour/v1"
-
 	buildsv1alpha1 "stackdome.io/cluster-agent/api/builds/v1alpha1"
 	corev1alpha1 "stackdome.io/cluster-agent/api/core/v1alpha1"
 	registryv1alpha1 "stackdome.io/cluster-agent/api/registry/v1alpha1"
+	storagev1alpha1 "stackdome.io/cluster-agent/api/storage/v1alpha1"
 	usersv1alpha1 "stackdome.io/cluster-agent/api/users/v1alpha1"
 	"stackdome.io/cluster-agent/internal/controller/imagebuild"
-	"stackdome.io/cluster-agent/internal/controller/workspace"
-	"stackdome.io/cluster-agent/internal/controller/workspaceresource"
-	"stackdome.io/cluster-agent/internal/controller/workspacestorage"
+	nfsservercontroller "stackdome.io/cluster-agent/internal/controller/nfsserver"
+	"stackdome.io/cluster-agent/internal/controller/stack"
+	"stackdome.io/cluster-agent/internal/controller/stackresource"
+	"stackdome.io/cluster-agent/internal/controller/stackstorage"
+	"stackdome.io/cluster-agent/internal/controller/volume"
 	"stackdome.io/cluster-agent/internal/controller/workspaceuser"
-	"stackdome.io/cluster-agent/internal/controller/workspacevolume"
+	"stackdome.io/cluster-agent/pkg/config"
 	"stackdome.io/cluster-agent/pkg/execute"
 	"stackdome.io/cluster-agent/pkg/registry/zotregistry"
 	"stackdome.io/cluster-agent/pkg/rwmany_provisioner"
 
-	storagev1alpha1 "stackdome.io/cluster-agent/api/storage/v1alpha1"
 	registry "stackdome.io/cluster-agent/internal/controller/registry"
-	storagecontroller "stackdome.io/cluster-agent/internal/controller/storage"
 	//+kubebuilder:scaffold:imports
 )
 
@@ -69,7 +52,6 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(corev1alpha1.AddToScheme(scheme))
-	utilruntime.Must(projectcontourv1.AddToScheme(scheme))
 	utilruntime.Must(registryv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(buildsv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(usersv1alpha1.AddToScheme(scheme))
@@ -121,8 +103,8 @@ func main() {
 	})
 
 	registryBuilder := zotregistry.NewZotRegistry(zotregistry.ZotRegistryOpts{
-		RegistryImage:                 "zot:a558e48ae5ba",
-		RegistryConfigReconcilerImage: "containerd-config-reconciler:3",
+		RegistryImage:                 config.ZotImage,
+		RegistryConfigReconcilerImage: config.RegistryConfigReconcilerImage,
 		GCDelay:                       "1h",
 		GCInterval:                    "24h",
 		EnableGC:                      true,
@@ -168,13 +150,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = (workspacestorage.NewWorkspaceStorageReconciler(mgr.GetClient(), uncachedClient, mgr.GetScheme())).
+	if err = (stackstorage.NewStackStorageReconciler(mgr.GetClient(), uncachedClient, mgr.GetScheme())).
 		SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "WorkspaceState")
 		os.Exit(1)
 	}
-	wrController := workspaceresource.NewWorkspaceResourceReconciler(mgr.GetClient(), mgr.GetScheme())
-	if err = wrController.SetupWithManager(mgr); err != nil {
+
+	stackResourceController := stackresource.NewStackResourceReconciler(mgr.GetClient(), mgr.GetScheme())
+	if err = stackResourceController.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "WorkspaceResource")
 		os.Exit(1)
 	}
@@ -187,13 +170,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = workspace.NewWorkspaceReconciler(mgr.GetClient(), mgr.GetScheme(), wrController.RequeueCh).
+	if err = stack.NewStackReconciler(mgr.GetClient(), mgr.GetScheme(), stackResourceController.RequeueCh).
 		SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Workspace")
 		os.Exit(1)
 	}
 
-	if err = (&workspacevolume.WorkspaceVolumeReconciler{
+	if err = (&volume.VolumeReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
@@ -216,21 +199,19 @@ func main() {
 		os.Exit(1)
 	}
 
-	stackdomeProvisionerName := "stackdome.io/nfs-rwmany"
-
-	storageClassOpts := storagecontroller.StorageClassOpts{
-		Name:            "stackdome-rwmany",
-		ProvisionerName: stackdomeProvisionerName,
+	storageClassOpts := nfsservercontroller.StorageClassOpts{
+		Name:            config.StackdomeRWManyStorageClassName,
+		ProvisionerName: config.StackdomeRWManyProvisionerName,
 		ReclaimPolicy:   ptr.To(clientgocorev1.PersistentVolumeReclaimDelete),
 		MountOptions:    []string{},
 	}
 
-	storageReconciler, err := storagecontroller.NewNFSServerReconciler(
+	storageReconciler, err := nfsservercontroller.NewNFSServerReconciler(
 		uncachedClient,
 		mgr.GetClient(),
 		mgr.GetScheme(),
 		storageClassOpts,
-		getNfsServerImage(),
+		config.NfsServerImage,
 	)
 	if err != nil {
 		setupLog.Error(err, "unable to create storageReconciler", "reconciler", "NFSServer")
@@ -258,7 +239,7 @@ func main() {
 		context.Background(),
 		rwmany_provisioner.StackdomeRWManyProvisionerSpec{
 			ClientSet:       clientset,
-			ProvisionerName: stackdomeProvisionerName,
+			ProvisionerName: config.StackdomeRWManyProvisionerName,
 			PodExecuter:     podExecuter,
 			Logger:          setupLog,
 			Client:          mgr.GetClient(),
@@ -286,8 +267,4 @@ func main() {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
-}
-
-func getNfsServerImage() string {
-	return "adnanhodzic/nfs-server-k8s:1"
 }

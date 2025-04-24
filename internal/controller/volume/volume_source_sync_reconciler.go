@@ -1,4 +1,4 @@
-package workspacevolume
+package volume
 
 import (
 	"context"
@@ -14,6 +14,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	buildsv1alpha1 "stackdome.io/cluster-agent/api/builds/v1alpha1"
 	"stackdome.io/cluster-agent/api/core/v1alpha1"
+	storagev1alpha1 "stackdome.io/cluster-agent/api/storage/v1alpha1"
+
 	"stackdome.io/cluster-agent/pkg/volumesync"
 )
 
@@ -21,12 +23,12 @@ const (
 	ResourceNameLabel = "volumesync.stackdome.io/resourceName"
 )
 
-func (r *WorkspaceVolumeReconciler) reconcileVolumeSource(ctx context.Context, volume *v1alpha1.WorkspaceVolume) (subReconcilerResult, error) {
+func (r *VolumeReconciler) reconcileVolumeSource(ctx context.Context, volume *storagev1alpha1.Volume) (subReconcilerResult, error) {
 	if shouldSkipVolumeSourceReconcile(volume) {
 		return resultNil, nil
 	}
 
-	subReconcilers := []func(context.Context, *v1alpha1.WorkspaceVolume) (subReconcilerResult, error){
+	subReconcilers := []func(context.Context, *storagev1alpha1.Volume) (subReconcilerResult, error){
 		r.reconcileLocalVolumeSource,
 		r.reconcileBuildArtifactsSources,
 	}
@@ -45,11 +47,11 @@ func (r *WorkspaceVolumeReconciler) reconcileVolumeSource(ctx context.Context, v
 }
 
 // NOOP, Syncing local volume source is done from the client side.
-func (r *WorkspaceVolumeReconciler) reconcileLocalVolumeSource(ctx context.Context, volume *v1alpha1.WorkspaceVolume) (subReconcilerResult, error) {
+func (r *VolumeReconciler) reconcileLocalVolumeSource(ctx context.Context, volume *storagev1alpha1.Volume) (subReconcilerResult, error) {
 	return resultNil, nil
 }
 
-func (r *WorkspaceVolumeReconciler) reconcileBuildArtifactsSources(ctx context.Context, volume *v1alpha1.WorkspaceVolume) (subReconcilerResult, error) {
+func (r *VolumeReconciler) reconcileBuildArtifactsSources(ctx context.Context, volume *storagev1alpha1.Volume) (subReconcilerResult, error) {
 	if volume.Spec.Source.BuildArtifacts == nil {
 		return resultNil, nil
 	}
@@ -77,12 +79,12 @@ func (r *WorkspaceVolumeReconciler) reconcileBuildArtifactsSources(ctx context.C
 	return resultNil, nil
 }
 
-func (r *WorkspaceVolumeReconciler) reconcileBuildArtifactsSrcsForResource(
+func (r *VolumeReconciler) reconcileBuildArtifactsSrcsForResource(
 	ctx context.Context,
-	volume *v1alpha1.WorkspaceVolume,
+	volume *storagev1alpha1.Volume,
 	resourceName string,
 	imageBuild *buildsv1alpha1.ImageBuild,
-	buildArtifacts []*v1alpha1.BuildArtifactSource) error {
+	buildArtifacts []*storagev1alpha1.BuildArtifactSource) error {
 	if buildAvailable(imageBuild) {
 		desiredJob := volumesync.CreateBuildArtifactsVolumeSyncJob(volume, buildArtifacts, imageBuild)
 		desiredJob.Labels = map[string]string{
@@ -103,9 +105,9 @@ func (r *WorkspaceVolumeReconciler) reconcileBuildArtifactsSrcsForResource(
 		jobcompletedCond := findJobCompleteCondition(existingJob)
 		if jobcompletedCond != nil && jobcompletedCond.Status == corev1.ConditionTrue {
 			volume.Status.SetBuildArtifactSyncStatus(
-				v1alpha1.StackResourceReference{Name: resourceName},
+				storagev1alpha1.StackResourceReference{Name: resourceName},
 				imageBuild.ShortBuildSrcHashFromStatus(),
-				v1alpha1.BuildArtifactSyncStatusCompleted,
+				storagev1alpha1.BuildArtifactSyncStatusCompleted,
 			)
 			// TODO: Cleanup failed and completed jobs.
 			return nil
@@ -114,10 +116,18 @@ func (r *WorkspaceVolumeReconciler) reconcileBuildArtifactsSrcsForResource(
 
 	failedCond := meta.FindStatusCondition(imageBuild.Status.Conditions, string(buildsv1alpha1.BuildFailed))
 	if failedCond != nil && failedCond.Status == metav1.ConditionTrue {
-		volume.Status.SetBuildArtifactSyncStatus(v1alpha1.StackResourceReference{Name: resourceName}, imageBuild.ShortBuildSrcHashFromSpec(), v1alpha1.BuildArtifactSyncStatusFailed)
+		volume.Status.SetBuildArtifactSyncStatus(
+			storagev1alpha1.StackResourceReference{Name: resourceName},
+			imageBuild.ShortBuildSrcHashFromSpec(),
+			storagev1alpha1.BuildArtifactSyncStatusFailed,
+		)
 		return nil
 	}
-	volume.Status.SetBuildArtifactSyncStatus(v1alpha1.StackResourceReference{Name: resourceName}, imageBuild.ShortBuildSrcHashFromSpec(), v1alpha1.BuildArtifactSyncStatusPending)
+	volume.Status.SetBuildArtifactSyncStatus(
+		storagev1alpha1.StackResourceReference{Name: resourceName},
+		imageBuild.ShortBuildSrcHashFromSpec(),
+		storagev1alpha1.BuildArtifactSyncStatusPending,
+	)
 	return nil
 }
 
@@ -129,22 +139,22 @@ func buildAvailable(imageBuild *buildsv1alpha1.ImageBuild) bool {
 	return false
 }
 
-func buildArtifactSrcsGroupedByResource(volume *v1alpha1.WorkspaceVolume) map[string][]*v1alpha1.BuildArtifactSource {
-	res := make(map[string][]*v1alpha1.BuildArtifactSource)
+func buildArtifactSrcsGroupedByResource(volume *storagev1alpha1.Volume) map[string][]*storagev1alpha1.BuildArtifactSource {
+	res := make(map[string][]*storagev1alpha1.BuildArtifactSource)
 	for _, artifact := range volume.Spec.Source.BuildArtifacts {
 		if _, ok := res[artifact.BuildSource.Name]; !ok {
-			res[artifact.BuildSource.Name] = make([]*v1alpha1.BuildArtifactSource, 0)
+			res[artifact.BuildSource.Name] = make([]*storagev1alpha1.BuildArtifactSource, 0)
 		}
 		res[artifact.BuildSource.Name] = append(res[artifact.BuildSource.Name], &artifact)
 	}
 	return res
 }
 
-func (r *WorkspaceVolumeReconciler) getImageBuildsForResources(ctx context.Context, volume *v1alpha1.WorkspaceVolume) (map[string]*buildsv1alpha1.ImageBuild, error) {
+func (r *VolumeReconciler) getImageBuildsForResources(ctx context.Context, volume *storagev1alpha1.Volume) (map[string]*buildsv1alpha1.ImageBuild, error) {
 	res := make(map[string]*buildsv1alpha1.ImageBuild)
 	for _, artifact := range volume.Spec.Source.BuildArtifacts {
 		stackresourceRef := artifact.BuildSource.Name
-		resource := &v1alpha1.WorkspaceResource{}
+		resource := &v1alpha1.StackResource{}
 		if err := r.Client.Get(ctx, types.NamespacedName{Name: stackresourceRef, Namespace: volume.Namespace}, resource); err != nil {
 			if apierrors.IsNotFound(err) {
 				return nil, err
@@ -173,6 +183,6 @@ func findJobCompleteCondition(job *batchv1.Job) *batchv1.JobCondition {
 	return nil
 }
 
-func shouldSkipVolumeSourceReconcile(volume *v1alpha1.WorkspaceVolume) bool {
+func shouldSkipVolumeSourceReconcile(volume *storagev1alpha1.Volume) bool {
 	return volume.Spec.Source == nil
 }

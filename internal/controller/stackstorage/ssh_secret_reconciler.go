@@ -1,4 +1,4 @@
-package workspacestorage
+package stackstorage
 
 import (
 	"context"
@@ -11,7 +11,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	workspacev1alpha1 "stackdome.io/cluster-agent/api/core/v1alpha1"
+	storagev1alpha1 "stackdome.io/cluster-agent/api/storage/v1alpha1"
+
 	"stackdome.io/cluster-agent/internal/controller"
 )
 
@@ -26,11 +27,11 @@ type userSShKeySecretReconciler struct {
 	Scheme         *runtime.Scheme
 }
 
-func StorageServerSSHSecretName(workspaceStorage *workspacev1alpha1.WorkspaceStorage) string {
+func StorageServerSSHSecretName(workspaceStorage *storagev1alpha1.Storage) string {
 	return fmt.Sprintf("%s-public-ssh-secret", workspaceStorage.Name)
 }
 
-func (r *userSShKeySecretReconciler) reconcile(ctx context.Context, workspaceStorage *workspacev1alpha1.WorkspaceStorage) (subReconcilerResult, error) {
+func (r *userSShKeySecretReconciler) reconcile(ctx context.Context, storage *storagev1alpha1.Storage) (subReconcilerResult, error) {
 	logger := controller.LoggerFromContext(ctx)
 	logger.Info("reconcile user public ssh key secret")
 	// decodedPublicKey, err := base64.StdEncoding.DecodeString(workspaceStorage.Spec.UserPublicSSHKey)
@@ -39,16 +40,16 @@ func (r *userSShKeySecretReconciler) reconcile(ctx context.Context, workspaceSto
 	// }
 	desiredSecret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      StorageServerSSHSecretName(workspaceStorage),
-			Namespace: workspaceStorage.Namespace,
-			Labels:    WorkspaceStorageLabels(workspaceStorage),
+			Name:      StorageServerSSHSecretName(storage),
+			Namespace: storage.Namespace,
+			Labels:    storageLabels(storage),
 		},
 		Data: map[string][]byte{
-			SSH_SECRET_KEY: []byte(workspaceStorage.Spec.UserPublicSSHKey),
+			SSH_SECRET_KEY: []byte(storage.Spec.UserPublicSSHKey),
 		},
 	}
 
-	if err := controllerutil.SetControllerReference(workspaceStorage, desiredSecret, r.Scheme); err != nil {
+	if err := controllerutil.SetControllerReference(storage, desiredSecret, r.Scheme); err != nil {
 		return resultNil, err
 	}
 	existingSecret := &corev1.Secret{}
@@ -59,7 +60,7 @@ func (r *userSShKeySecretReconciler) reconcile(ctx context.Context, workspaceSto
 		return resultNil, err
 	}
 	existingData, found := existingSecret.Data[SSH_SECRET_KEY]
-	if !found || string(existingData) != workspaceStorage.Spec.UserPublicSSHKey {
+	if !found || string(existingData) != storage.Spec.UserPublicSSHKey {
 		logger := controller.LoggerFromContext(ctx)
 		logger.Info("updating secret existing secret")
 		existingSecret.Data = desiredSecret.Data

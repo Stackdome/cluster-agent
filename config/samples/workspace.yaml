@@ -1,35 +1,33 @@
 apiVersion: core.stackdome.io/v1alpha1
-kind: Workspace
+kind: Stack
 metadata:
   name: infisical-app
 spec:
-  userName: developer
-  organisation: infisical
   domain: stackdome.io
-  resources:
+  stackResources:
     - name: nginx
       spec:
         imageSpec:
-          image: "nginx:1"
+          image: "nginx:latest"
         dependsOn:
           - backend
           - frontend
         volumeMounts:
-          - sourceWorkspaceVolume: code
+          - sourceVolume: code
             sourceSubPath: "nginx/default.dev.conf"
             destination: "/etc/nginx/conf.d/default.conf"
         ports:
           - number: 80
             exposeToPublic: true
             isHttp: true
-            subdomain: "nginx"
+            fqdn: "nginx.stackdome.io"
     
     - name: db
       spec:
         imageSpec:
           image: "postgres:14-alpine"
         volumeMounts:
-          - sourceWorkspaceVolume: "postgresdata"
+          - sourceVolume: "postgresdata"
             sourceSubPath: ""
             destination: "/var/lib/postgresql/data"
         environmentVariables:
@@ -43,29 +41,29 @@ spec:
           - number: 5432
             exposeToPublic: false
             isHttp: false
-            subdomain: "db"
+            fqdn: "db.stackdome.io"
         stateFul: true
     - name: redis
       spec:
         imageSpec:
-          image: "redis:1"
+          image: "redis"
         environmentVariables:
           - name: ALLOW_EMPTY_PASSWORD
             value: "yes"
         volumeMounts:
-          - sourceWorkspaceVolume: redisdata
+          - sourceVolume: redisdata
             sourceSubPath: ""
             destination: "/data"
         ports:
           - number: 6379
             exposeToPublic: false
             isHttp: false
-            subdomain: "redis"
+            fqdn: "redis.stackdome.io"
         stateFul: true
     - name: rediscommander
       spec:
         imageSpec:
-          image: "rediscommander:1"
+          image: "rediscommander/redis-commander"
         dependsOn:
           - redis
         environmentVariables:
@@ -75,7 +73,7 @@ spec:
           - number: 8081
             exposeToPublic: false
             isHttp: false
-            subdomain: "rediscommander"
+            fqdn: "rediscommander.stackdome.io"
   
     - name: backend
       spec:
@@ -83,7 +81,7 @@ spec:
           sourceVolumeName: "code"
           buildContext: "/backend"
           dockerFilePath: "/backend/Dockerfile.dev"
-          buildSourceHash: "aeff1eeb0c3f2a4d1e5c7f8a9b6e4d2c"
+          buildSourceHash: "aeff1eeb0c3f2a4d1e5c7f8a9b6rrd2c"
           registry:
             repositoryUrl: "cluster-registry.stackdome-registry.svc.cluster.local/infisical-backend"
             auth:
@@ -104,7 +102,7 @@ spec:
           - number: 4000
             exposeToPublic: true
             isHttp: true
-            subdomain: "backend"
+            fqdn: "backend.stackdome.io"
         environmentVariables:
           - name: NODE_ENV
             value: development
@@ -115,7 +113,7 @@ spec:
           - name: TELEMETRY
             value: "false"
         volumeMounts:
-          - sourceWorkspaceVolume: "code"
+          - sourceVolume: "code"
             sourceSubPath: "backend/src"
             destination: "/app/src"
     
@@ -125,7 +123,7 @@ spec:
           sourceVolumeName: "code"
           buildContext: "/frontend"
           dockerFilePath: "/frontend/Dockerfile.dev"
-          buildSourceHash: "aeff1eeb0c3f2a4d1e5c7f8a9b6e4d2c"
+          buildSourceHash: "aeff1eeb0c3f2a4d1e5c7f8a9b6rrd2c"
           registry:
             repositoryUrl: "cluster-registry.stackdome-registry.svc.cluster.local/infisical-frontend"
             auth:
@@ -144,12 +142,12 @@ spec:
           - number: 3000
             exposeToPublic: true
             isHttp: true
-            subdomain: "frontend"
+            fqdn: "frontend.stackdome.io"
         volumeMounts:
-          - sourceWorkspaceVolume: "code"
+          - sourceVolume: "code"
             sourceSubPath: "frontend/src"
             destination: "/app/src"
-          - sourceWorkspaceVolume: "code"
+          - sourceVolume: "code"
             sourceSubPath: "frontend/public"
             destination: "/app/public"
         environmentVariables:

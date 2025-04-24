@@ -1,19 +1,3 @@
-/*
-Copyright 2024.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package v1alpha1
 
 import (
@@ -28,26 +12,26 @@ import (
 	"k8s.io/apimachinery/pkg/util/rand"
 )
 
-type WorkspaceVolumePhase string
+type VolumePhase string
 
 const (
-	WorkspaceVolumePhasePending WorkspaceVolumePhase = "Pending"
-	WorkspaceVolumePhaseReady   WorkspaceVolumePhase = "Ready"
+	VolumePhasePending VolumePhase = "Pending"
+	VolumePhaseReady   VolumePhase = "Ready"
 )
 
-type WorkspaceVolumeCondition string
+type VolumeCondition string
 
 const (
-	WorkspaceVolumeConditionAvailable  WorkspaceVolumeCondition = "Available"
-	WorkspaceVolumeConditionSyncedOnce WorkspaceVolumeCondition = "SyncedOnce"
+	VolumeConditionAvailable  VolumeCondition = "Available"
+	VolumeConditionSyncedOnce VolumeCondition = "SyncedOnce"
 )
 
 const (
-	LastSyncedAtAnnotation = "workspacevolume.stackdome.io/LastSyncedAt"
+	LastSyncedAtAnnotation = "volume.stackdome.io/LastSyncedAt"
 )
 
 // WorkspaceVolumeSpec defines the desired state of WorkspaceVolume
-type WorkspaceVolumeSpec struct {
+type VolumeSpec struct {
 	// +optional
 	Annotations map[string]string `json:"annotations,omitempty"`
 	// +optional
@@ -82,12 +66,15 @@ type LocalDirSource struct {
 type BuildArtifactSource struct {
 	// BuildSource references the stack resource whose build artifacts should be copied.
 	// This must reference a StackResource with ApplicationBuildSpec defined.
+	// +required
 	BuildSource StackResourceReference `json:"buildSource"`
 
 	// SourcePath is the path within the built image where artifacts are located
+	// +required
 	SourcePath string `json:"sourcePath"`
 
 	// DestinationPath is the path within the volume where artifacts should be synced
+	// +required
 	DestinationPath string `json:"destinationPath"`
 }
 
@@ -96,22 +83,22 @@ type StackResourceReference struct {
 	Name string `json:"name"`
 }
 
-// WorkspaceVolumeStatus defines the observed state of WorkspaceVolume
-type WorkspaceVolumeStatus struct {
+// VolumeStatus defines the observed state of WorkspaceVolume
+type VolumeStatus struct {
 	// The most recent generation observed by the controller.
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 	// Conditions is a list of status conditions ths object is in.
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 	PvcName    string             `json:"pvcName"`
 	// +kubebuilder:default=Pending
-	Phase        WorkspaceVolumePhase `json:"phase,omitempty"`
-	LastSyncedAt *metav1.Time         `json:"LastSyncedAt,omitempty"`
+	Phase        VolumePhase  `json:"phase,omitempty"`
+	LastSyncedAt *metav1.Time `json:"LastSyncedAt,omitempty"`
 	// +optional
 	BuildArtifactSyncs map[string]BuildArtifactSyncInfo `json:"buildArtifactSyncs,omitempty"`
 	StatusHash         string                           `json:"statusHash,omitempty"`
 }
 
-func (w *WorkspaceVolume) StatusHash() string {
+func (w *Volume) StatusHash() string {
 	hasher := fnv.New32a()
 	hasher.Reset()
 	printer := spew.ConfigState{
@@ -142,32 +129,32 @@ const (
 //+kubebuilder:object:root=true
 //+kubebuilder:subresource:status
 
-// WorkspaceVolume is the Schema for the workspacevolumes API
-type WorkspaceVolume struct {
+// Volume is the Schema for the volumes API
+type Volume struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   WorkspaceVolumeSpec   `json:"spec,omitempty"`
-	Status WorkspaceVolumeStatus `json:"status,omitempty"`
+	Spec   VolumeSpec   `json:"spec,omitempty"`
+	Status VolumeStatus `json:"status,omitempty"`
 }
 
 //+kubebuilder:object:root=true
 
-// WorkspaceVolumeList contains a list of WorkspaceVolume
-type WorkspaceVolumeList struct {
+// VolumeList contains a list of Volumes
+type VolumeList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []WorkspaceVolume `json:"items"`
+	Items           []Volume `json:"items"`
 }
 
-func (w *WorkspaceVolume) MarkAsSynced() {
+func (w *Volume) MarkAsSynced() {
 	if w.Annotations == nil {
 		w.Annotations = map[string]string{}
 	}
 	w.Annotations[LastSyncedAtAnnotation] = metav1.NewTime(time.Now().UTC()).String()
 }
 
-func (s *WorkspaceVolumeStatus) SetBuildArtifactSyncStatus(stackResourceRef StackResourceReference, buildID string, status BuildArtifactSyncStatus) {
+func (s *VolumeStatus) SetBuildArtifactSyncStatus(stackResourceRef StackResourceReference, buildID string, status BuildArtifactSyncStatus) {
 	if s.BuildArtifactSyncs == nil {
 		s.BuildArtifactSyncs = map[string]BuildArtifactSyncInfo{}
 	}
@@ -178,5 +165,5 @@ func (s *WorkspaceVolumeStatus) SetBuildArtifactSyncStatus(stackResourceRef Stac
 }
 
 func init() {
-	SchemeBuilder.Register(&WorkspaceVolume{}, &WorkspaceVolumeList{})
+	SchemeBuilder.Register(&Volume{}, &VolumeList{})
 }

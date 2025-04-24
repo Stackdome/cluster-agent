@@ -1,4 +1,4 @@
-package workspaceresource
+package stackresource
 
 import (
 	"context"
@@ -9,6 +9,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"stackdome.io/cluster-agent/api/core/v1alpha1"
+	storagev1alpha1 "stackdome.io/cluster-agent/api/storage/v1alpha1"
+
 	"stackdome.io/cluster-agent/internal/controller"
 )
 
@@ -16,7 +18,7 @@ type workloadDependencyChecker struct {
 	client.Client
 }
 
-func (w *workloadDependencyChecker) DependenciesAvailable(ctx context.Context, resource *v1alpha1.WorkspaceResource) (bool, string, error) {
+func (w *workloadDependencyChecker) DependenciesAvailable(ctx context.Context, resource *v1alpha1.StackResource) (bool, string, error) {
 	if len(resource.Spec.DependsOn) == 0 {
 		return true, "", nil
 	}
@@ -30,14 +32,14 @@ func (w *workloadDependencyChecker) DependenciesAvailable(ctx context.Context, r
 
 	for i := range dependencyList {
 		currentDep := dependencyList[i]
-		if !workspaceAvailable(&currentDep) {
+		if !stackResourceAvailable(&currentDep) {
 			return false, "Some dependency resources are not yet ready", nil
 		}
 	}
 	return true, "", nil
 }
 
-func (w *workloadDependencyChecker) VolumeMountsReadyForUse(ctx context.Context, resource *v1alpha1.WorkspaceResource) (bool, string, error) {
+func (w *workloadDependencyChecker) VolumeMountsReadyForUse(ctx context.Context, resource *v1alpha1.StackResource) (bool, string, error) {
 	if len(resource.Spec.VolumeMounts) == 0 {
 		return true, "", nil
 	}
@@ -57,7 +59,7 @@ func (w *workloadDependencyChecker) VolumeMountsReadyForUse(ctx context.Context,
 	return true, "", nil
 }
 
-func (w *workloadDependencyChecker) isVolumeReady(volume *v1alpha1.WorkspaceVolume, resource *v1alpha1.WorkspaceResource) (bool, string) {
+func (w *workloadDependencyChecker) isVolumeReady(volume *storagev1alpha1.Volume, resource *v1alpha1.StackResource) (bool, string) {
 	switch {
 	case volume.Spec.Source == nil:
 		return true, ""
@@ -78,25 +80,25 @@ func (w *workloadDependencyChecker) isVolumeReady(volume *v1alpha1.WorkspaceVolu
 	return true, ""
 }
 
-func localDirSyncedToVolume(volume *v1alpha1.WorkspaceVolume) bool {
-	syncedOnceStatusCondition := meta.FindStatusCondition(volume.Status.Conditions, string(v1alpha1.WorkspaceVolumeConditionSyncedOnce))
+func localDirSyncedToVolume(volume *storagev1alpha1.Volume) bool {
+	syncedOnceStatusCondition := meta.FindStatusCondition(volume.Status.Conditions, string(storagev1alpha1.VolumeConditionSyncedOnce))
 	return syncedOnceStatusCondition != nil && syncedOnceStatusCondition.Status == metav1.ConditionTrue
 }
 
-func buildSyncCompletedAndUptoDate(buildSyncInfo v1alpha1.BuildArtifactSyncInfo, currentBuildID string) bool {
-	return buildSyncInfo.Status == v1alpha1.BuildArtifactSyncStatusCompleted && buildSyncInfo.BuildID == currentBuildID
+func buildSyncCompletedAndUptoDate(buildSyncInfo storagev1alpha1.BuildArtifactSyncInfo, currentBuildID string) bool {
+	return buildSyncInfo.Status == storagev1alpha1.BuildArtifactSyncStatusCompleted && buildSyncInfo.BuildID == currentBuildID
 }
 
-func (w *workloadDependencyChecker) getWorkspaceVolumes(ctx context.Context, resource *v1alpha1.WorkspaceResource) ([]*v1alpha1.WorkspaceVolume, error) {
+func (w *workloadDependencyChecker) getWorkspaceVolumes(ctx context.Context, resource *v1alpha1.StackResource) ([]*storagev1alpha1.Volume, error) {
 	volumeRefs := make([]string, 0)
 	for _, volumeMount := range resource.Spec.VolumeMounts {
-		volumeRefs = append(volumeRefs, volumeMount.SourceWorkspaceVolume)
+		volumeRefs = append(volumeRefs, volumeMount.SourceVolume)
 	}
-	volumeList := &v1alpha1.WorkspaceVolumeList{}
+	volumeList := &storagev1alpha1.VolumeList{}
 	if err := w.Client.List(ctx, volumeList, client.InNamespace(resource.Namespace)); err != nil {
 		return nil, err
 	}
-	filteredVolumeList := make([]*v1alpha1.WorkspaceVolume, 0)
+	filteredVolumeList := make([]*storagev1alpha1.Volume, 0)
 	for _, volume := range volumeList.Items {
 		if slices.Contains(volumeRefs, volume.Name) {
 			filteredVolumeList = append(filteredVolumeList, &volume)
@@ -105,11 +107,11 @@ func (w *workloadDependencyChecker) getWorkspaceVolumes(ctx context.Context, res
 	return controller.Unique(filteredVolumeList), nil
 }
 
-func (w *workloadDependencyChecker) getDependencies(ctx context.Context, resource *v1alpha1.WorkspaceResource) ([]v1alpha1.WorkspaceResource, error) {
+func (w *workloadDependencyChecker) getDependencies(ctx context.Context, resource *v1alpha1.StackResource) ([]v1alpha1.StackResource, error) {
 	if len(resource.Spec.DependsOn) == 0 {
 		return nil, nil
 	}
-	wrList := &v1alpha1.WorkspaceResourceList{}
+	wrList := &v1alpha1.StackResourceList{}
 	workspaceRef := metav1.GetControllerOf(resource)
 	if workspaceRef == nil {
 		return nil, fmt.Errorf("missing owner ref for workspace resource")
@@ -120,7 +122,7 @@ func (w *workloadDependencyChecker) getDependencies(ctx context.Context, resourc
 		return nil, err
 	}
 
-	res := make([]v1alpha1.WorkspaceResource, 0)
+	res := make([]v1alpha1.StackResource, 0)
 	for _, wr := range wrList.Items {
 		if slices.Contains(resource.Spec.DependsOn, wr.Name) {
 			res = append(res, wr)

@@ -215,6 +215,9 @@ spec:
                 default: Pending
                 description: Phase represents the current state of the registry
                 type: string
+              serviceIp:
+                description: ServiceIP is the cluster IP of the registry svc.
+                type: string
             type: object
         type: object
     served: true

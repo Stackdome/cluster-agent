@@ -1,4 +1,4 @@
-package workspacevolume
+package volume
 
 import (
 	"context"
@@ -21,6 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"stackdome.io/cluster-agent/api/core/v1alpha1"
+	storagev1alpha1 "stackdome.io/cluster-agent/api/storage/v1alpha1"
 	"stackdome.io/cluster-agent/internal/controller"
 )
 
@@ -40,18 +41,18 @@ var (
 	}
 )
 
-// WorkspaceVolumeReconciler reconciles a WorkspaceVolume object
-type WorkspaceVolumeReconciler struct {
+// volumeReconciler reconciles a WorkspaceVolume object
+type VolumeReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 }
 
-func (r *WorkspaceVolumeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *VolumeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
-	logger = logger.WithValues("workspacevolume", req.NamespacedName.String())
-	logger.Info("in workspace volume reconciler", "namespace", req.Namespace, "name", req.Name)
+	logger = logger.WithValues("volume", req.NamespacedName.String())
+	logger.Info("in volume reconciler", "namespace", req.Namespace, "name", req.Name)
 	ctx = controller.ContextWithLogger(ctx, logger)
-	volume := &v1alpha1.WorkspaceVolume{}
+	volume := &storagev1alpha1.Volume{}
 
 	if err := r.Client.Get(ctx, req.NamespacedName, volume); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -66,18 +67,18 @@ func (r *WorkspaceVolumeReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}
 
 	if volume.Annotations != nil {
-		syncedAt, syncedOnce := volume.Annotations[v1alpha1.LastSyncedAtAnnotation]
+		syncedAt, syncedOnce := volume.Annotations[storagev1alpha1.LastSyncedAtAnnotation]
 		if syncedOnce {
-			reportWorkspaceVolumeSyncedOnce(volume, syncedAt)
+			reportVolumeSyncedOnce(volume, syncedAt)
 		}
 	} else {
-		reportWorkspaceVolumeNotSynced(volume)
+		reportVolumeNotSynced(volume)
 	}
 	volume.Status.StatusHash = volume.StatusHash()
 	return res, r.Status().Update(ctx, volume)
 }
 
-func (r *WorkspaceVolumeReconciler) reconcile(ctx context.Context, volume *v1alpha1.WorkspaceVolume) (ctrl.Result, error) {
+func (r *VolumeReconciler) reconcile(ctx context.Context, volume *storagev1alpha1.Volume) (ctrl.Result, error) {
 	if err := r.reconcilePVC(ctx, volume); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -87,7 +88,7 @@ func (r *WorkspaceVolumeReconciler) reconcile(ctx context.Context, volume *v1alp
 	return ctrl.Result{}, nil
 }
 
-func (r *WorkspaceVolumeReconciler) reconcilePVC(ctx context.Context, volume *v1alpha1.WorkspaceVolume) error {
+func (r *VolumeReconciler) reconcilePVC(ctx context.Context, volume *storagev1alpha1.Volume) error {
 	// TODO, change this based on the type.
 	resourceSize, err := k8sresource.ParseQuantity(volume.Spec.Size)
 	if err != nil {
@@ -137,25 +138,25 @@ func (r *WorkspaceVolumeReconciler) reconcilePVC(ctx context.Context, volume *v1
 	// - PVC status to make sure they are ready.
 	// - existingPVC.Status.Conditions to check if its ready, only proceed further object reconcilation
 	// 	 if the pvc/storage is ready.
-	reportWorkspaceVolumeProvisioned(volume)
+	reportVolumeProvisioned(volume)
 	return nil
 }
 
-func reportWorkspaceVolumeProvisioned(volume *v1alpha1.WorkspaceVolume) {
+func reportVolumeProvisioned(volume *storagev1alpha1.Volume) {
 	volume.Status.ObservedGeneration = volume.Generation
-	volume.Status.Phase = v1alpha1.WorkspaceVolumePhaseReady
+	volume.Status.Phase = storagev1alpha1.VolumePhaseReady
 	volume.Status.PvcName = volume.Name
 	meta.SetStatusCondition(&volume.Status.Conditions, metav1.Condition{
-		Type:               string(v1alpha1.WorkspaceVolumeConditionAvailable),
+		Type:               string(storagev1alpha1.VolumeConditionAvailable),
 		Status:             metav1.ConditionTrue,
 		ObservedGeneration: volume.Generation,
-		Reason:             "WorkspaceVolumeProvisioned",
-		Message:            "Workspace Volume is provisioned.",
+		Reason:             "VolumeProvisioned",
+		Message:            "Volume is provisioned.",
 	})
 }
 
-func reportWorkspaceVolumeSyncedOnce(volume *v1alpha1.WorkspaceVolume, lastSyncedAt string) {
-	syncedOnceCond := meta.FindStatusCondition(volume.Status.Conditions, string(v1alpha1.WorkspaceVolumeConditionSyncedOnce))
+func reportVolumeSyncedOnce(volume *storagev1alpha1.Volume, lastSyncedAt string) {
+	syncedOnceCond := meta.FindStatusCondition(volume.Status.Conditions, string(storagev1alpha1.VolumeConditionSyncedOnce))
 	if syncedOnceCond != nil && syncedOnceCond.Status == metav1.ConditionTrue {
 		return
 	}
@@ -166,7 +167,7 @@ func reportWorkspaceVolumeSyncedOnce(volume *v1alpha1.WorkspaceVolume, lastSynce
 	}
 	volume.Status.LastSyncedAt = ptr.To(metav1.NewTime(parsedTime.UTC()))
 	meta.SetStatusCondition(&volume.Status.Conditions, metav1.Condition{
-		Type:               string(v1alpha1.WorkspaceVolumeConditionSyncedOnce),
+		Type:               string(storagev1alpha1.VolumeConditionSyncedOnce),
 		Status:             metav1.ConditionTrue,
 		ObservedGeneration: volume.Generation,
 		Reason:             "WorkspaceVolumeSyncedOnce",
@@ -174,14 +175,14 @@ func reportWorkspaceVolumeSyncedOnce(volume *v1alpha1.WorkspaceVolume, lastSynce
 	})
 }
 
-func reportWorkspaceVolumeNotSynced(volume *v1alpha1.WorkspaceVolume) {
-	syncedOnceCond := meta.FindStatusCondition(volume.Status.Conditions, string(v1alpha1.WorkspaceVolumeConditionSyncedOnce))
+func reportVolumeNotSynced(volume *storagev1alpha1.Volume) {
+	syncedOnceCond := meta.FindStatusCondition(volume.Status.Conditions, string(storagev1alpha1.VolumeConditionSyncedOnce))
 	if syncedOnceCond != nil && syncedOnceCond.Status == metav1.ConditionFalse {
 		return
 	}
 	volume.Status.ObservedGeneration = volume.Generation
 	meta.SetStatusCondition(&volume.Status.Conditions, metav1.Condition{
-		Type:               string(v1alpha1.WorkspaceVolumeConditionSyncedOnce),
+		Type:               string(storagev1alpha1.VolumeConditionSyncedOnce),
 		Status:             metav1.ConditionFalse,
 		ObservedGeneration: volume.Generation,
 		Reason:             "WorkspaceVolumeNotSynced",
@@ -189,11 +190,11 @@ func reportWorkspaceVolumeNotSynced(volume *v1alpha1.WorkspaceVolume) {
 	})
 }
 
-func reportWorkspaceVolumeNotReady(volume *v1alpha1.WorkspaceVolume, reason string, msg string, mgsArgs ...any) {
+func reportVolumeNotReady(volume *storagev1alpha1.Volume, reason string, msg string, mgsArgs ...any) {
 	volume.Status.ObservedGeneration = volume.Generation
-	volume.Status.Phase = v1alpha1.WorkspaceVolumePhasePending
+	volume.Status.Phase = storagev1alpha1.VolumePhasePending
 	meta.SetStatusCondition(&volume.Status.Conditions, metav1.Condition{
-		Type:               string(v1alpha1.WorkspaceVolumeConditionAvailable),
+		Type:               string(storagev1alpha1.VolumeConditionAvailable),
 		Status:             metav1.ConditionFalse,
 		ObservedGeneration: volume.Generation,
 		Reason:             reason,
@@ -202,13 +203,13 @@ func reportWorkspaceVolumeNotReady(volume *v1alpha1.WorkspaceVolume, reason stri
 }
 
 // SetupWithManager sets up the controller with the Manager.
-func (r *WorkspaceVolumeReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *VolumeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&v1alpha1.WorkspaceVolume{}).
+		For(&storagev1alpha1.Volume{}).
 		Owns(&corev1.PersistentVolumeClaim{}).
 		Owns(&batchv1.Job{}).
-		Watches(&v1alpha1.WorkspaceResource{}, handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
-			wr := obj.(*v1alpha1.WorkspaceResource)
+		Watches(&v1alpha1.StackResource{}, handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
+			wr := obj.(*v1alpha1.StackResource)
 			volumeMountSrcs := wr.VolumeMountSources()
 			if len(volumeMountSrcs) == 0 {
 				return []reconcile.Request{}

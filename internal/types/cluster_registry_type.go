@@ -1,7 +1,5 @@
 package types
 
-import "net/url"
-
 // RegistryConfig holds registry mappings to apply to containerd config
 type RegistryConfig struct {
 	Registries []Registry `json:"registries"`
@@ -9,8 +7,8 @@ type RegistryConfig struct {
 
 // Registry defines a registry host and endpoint mapping
 type Registry struct {
-	Host     string `json:"host"`
-	Endpoint string `json:"endpoint"`
+	ServiceIp string `json:"serviceIp"`
+	Endpoint  string `json:"endpoint"`
 }
 
 func NewRegistryConfig() *RegistryConfig {
@@ -19,9 +17,9 @@ func NewRegistryConfig() *RegistryConfig {
 	}
 }
 
-func (r *RegistryConfig) HasHost(host string) bool {
+func (r *RegistryConfig) HasEndpoint(ep string) bool {
 	for _, registry := range r.Registries {
-		if registry.Host == host {
+		if registry.Endpoint == ep {
 			return true
 		}
 	}
@@ -31,11 +29,7 @@ func (r *RegistryConfig) HasHost(host string) bool {
 func (r *RegistryConfig) ValidRegistries() []Registry {
 	var res []Registry
 	for _, registry := range r.Registries {
-		if len(registry.Host) == 0 {
-			continue
-		}
-		_, err := url.Parse(registry.Endpoint)
-		if err != nil {
+		if len(registry.ServiceIp) == 0 || len(registry.Endpoint) == 0 {
 			continue
 		}
 		res = append(res, registry)
@@ -43,25 +37,25 @@ func (r *RegistryConfig) ValidRegistries() []Registry {
 	return res
 }
 
-func (r *RegistryConfig) AddRegistry(host string, endpoint string) bool {
-	if r.HasHost(host) {
+func (r *RegistryConfig) AddRegistry(serviceIP string, endpoint string) bool {
+	if r.HasEndpoint(endpoint) {
 		return false
 	}
 
 	r.Registries = append(r.Registries, Registry{
-		Host:     host,
-		Endpoint: endpoint,
+		ServiceIp: serviceIP,
+		Endpoint:  endpoint,
 	})
 	return true
 }
 
-func (r *RegistryConfig) RemoveRegistryHostEntry(host string) bool {
-	if !r.HasHost(host) {
+func (r *RegistryConfig) RemoveRegistryEndpointEntry(ep string) bool {
+	if !r.HasEndpoint(ep) {
 		return false
 	}
 	var new []Registry
 	for _, reg := range r.Registries {
-		if reg.Host != host {
+		if reg.Endpoint != ep {
 			new = append(new, reg)
 		}
 	}
