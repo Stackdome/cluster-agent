@@ -19,7 +19,6 @@ import (
 	"k8s.io/kubectl/pkg/util/podutils"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	externalprovisioner "sigs.k8s.io/sig-storage-lib-external-provisioner/v11/controller"
-	stackdomecorev1 "stackdome.io/cluster-agent/api/core/v1alpha1"
 	storagev1alpha1 "stackdome.io/cluster-agent/api/storage/v1alpha1"
 )
 
@@ -73,13 +72,13 @@ func (r *stackdomeRWManyProvisioner) Start(ctx context.Context) error {
 }
 
 func (r *stackdomeRWManyProvisioner) Provision(ctx context.Context, options externalprovisioner.ProvisionOptions) (*corev1.PersistentVolume, externalprovisioner.ProvisioningState, error) {
-	val, ok := options.PVC.Labels[stackdomecorev1.WorkspaceStorageLabel]
+	val, ok := options.PVC.Labels[storagev1alpha1.StorageLabel]
 	if !ok {
-		return nil, externalprovisioner.ProvisioningFinished, fmt.Errorf("missing label '%s' in pvc", stackdomecorev1.WorkspaceStorageLabel)
+		return nil, externalprovisioner.ProvisioningFinished, fmt.Errorf("missing label '%s' in pvc", storagev1alpha1.StorageLabel)
 	}
 
 	// Create a requirement for the label
-	req, err := labels.NewRequirement(stackdomecorev1.WorkspaceStorageLabel, selection.Equals, []string{val})
+	req, err := labels.NewRequirement(storagev1alpha1.StorageLabel, selection.Equals, []string{val})
 	if err != nil {
 		return nil, externalprovisioner.ProvisioningFinished, fmt.Errorf("failed to create label requirement: %w", err)
 	}

@@ -1,4 +1,4 @@
-package workspaceresource
+package stackresource
 
 import (
 	"context"
@@ -20,14 +20,16 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	buildsv1alpha1 "stackdome.io/cluster-agent/api/builds/v1alpha1"
+	storagev1alpha1 "stackdome.io/cluster-agent/api/storage/v1alpha1"
+
 	"stackdome.io/cluster-agent/api/core/v1alpha1"
 	"stackdome.io/cluster-agent/internal/controller"
 	"stackdome.io/cluster-agent/pkg/interpolation"
 )
 
 type DependencyChecker interface {
-	DependenciesAvailable(ctx context.Context, resource *v1alpha1.WorkspaceResource) (bool, string, error)
-	VolumeMountsReadyForUse(ctx context.Context, resource *v1alpha1.WorkspaceResource) (bool, string, error)
+	DependenciesAvailable(ctx context.Context, resource *v1alpha1.StackResource) (bool, string, error)
+	VolumeMountsReadyForUse(ctx context.Context, resource *v1alpha1.StackResource) (bool, string, error)
 }
 
 type workloadReconciler struct {
@@ -36,28 +38,17 @@ type workloadReconciler struct {
 	DependencyChecker DependencyChecker
 }
 
-func newWorkloadReconciler(client client.Client, scheme *runtime.Scheme) *workloadReconciler {
-	w := &workloadReconciler{
-		Client: client,
-		Scheme: scheme,
-		DependencyChecker: &workloadDependencyChecker{
-			Client: client,
-		},
-	}
-	return w
-}
-
-func GetDeploymentNameForResource(resource *v1alpha1.WorkspaceResource) string {
+func GetDeploymentNameForResource(resource *v1alpha1.StackResource) string {
 	return resource.Name
 }
 
-func GetDeploymentPodLabelForResource(resource *v1alpha1.WorkspaceResource) map[string]string {
+func GetDeploymentPodLabelForResource(resource *v1alpha1.StackResource) map[string]string {
 	return map[string]string{
 		"resource": GetDeploymentNameForResource(resource),
 	}
 }
 
-func (r *workloadReconciler) getImageBuild(ctx context.Context, resource *v1alpha1.WorkspaceResource) (*buildsv1alpha1.ImageBuild, error) {
+func (r *workloadReconciler) getImageBuild(ctx context.Context, resource *v1alpha1.StackResource) (*buildsv1alpha1.ImageBuild, error) {
 	existingApplicationBuild := &buildsv1alpha1.ImageBuild{}
 	if err := r.Client.Get(ctx,
 		types.NamespacedName{
@@ -71,7 +62,7 @@ func (r *workloadReconciler) getImageBuild(ctx context.Context, resource *v1alph
 	return existingApplicationBuild, nil
 }
 
-func (r *workloadReconciler) getImageForResource(ctx context.Context, resource *v1alpha1.WorkspaceResource) (*string, error) {
+func (r *workloadReconciler) getImageForResource(ctx context.Context, resource *v1alpha1.StackResource) (*string, error) {
 	if resource.Spec.BuildSpec != nil {
 		requiredBuild, err := r.getImageBuild(ctx, resource)
 		if err != nil {
@@ -82,7 +73,7 @@ func (r *workloadReconciler) getImageForResource(ctx context.Context, resource *
 	return ptr.To(resource.Spec.ImageSpec.Image), nil
 }
 
-func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.WorkspaceResource) (subReconcilerResult, error) {
+func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.StackResource) (subReconcilerResult, error) {
 	logger := controller.LoggerFromContext(ctx)
 	logger.Info("in workload reconciler for")
 	logger.Info(resource.Name)
@@ -93,7 +84,7 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.W
 	}
 	if !canRun {
 		// Our dependencies are not yet ready, we will run when our dependencies are available.
-		reportWorkspaceResourceNotReady(resource, "DependenciesNotReady", message)
+		reportStackResourceNotReady(resource, "DependenciesNotReady", message)
 		// We need to requeue this request because we dont get requeued automatically when the other dependencies are
 		// ready/updated.
 		return resultRequeueAfter(DefaultRequeueTime), nil
@@ -105,7 +96,7 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.W
 	}
 	if !volumeMountsReady {
 		logger.Info("volume mounts are not ready for use")
-		reportWorkspaceResourceNotReady(resource, "VolumeMountsNotReady", message)
+		reportStackResourceNotReady(resource, "VolumeMountsNotReady", message)
 		return resultRequeueAfter(DefaultRequeueTime), nil
 	}
 
@@ -116,7 +107,7 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.W
 		}
 
 		if !imageBuildComplete(currentApplicationBuild) {
-			reportWorkspaceResourceNotReady(resource, "ApplicationBuildNotYetReady", "Application build is not yet ready")
+			reportStackResourceNotReady(resource, "ApplicationBuildNotYetReady", "Application build is not yet ready")
 			return resultStop, nil
 		}
 	}
@@ -232,7 +223,7 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.W
 		}
 		existingDeployment.Spec.Template.Annotations[v1alpha1.RestartResourceAnnotation] = v1.Now().UTC().String()
 		resource.Status.LastRestartRequestProcessedAt = ptr.To(v1.NewTime(time.Now().UTC()))
-		reportWorkspaceResourceNotReady(resource, "WorkspaceResouceDeploymentNotReady", "WorkspaceResouceDeploymentNotReady")
+		reportStackResourceNotReady(resource, "WorkspaceResouceDeploymentNotReady", "WorkspaceResouceDeploymentNotReady")
 		return resultStop, r.Client.Update(ctx, existingDeployment)
 	}
 
@@ -240,11 +231,11 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.W
 		return resultNil, nil
 	}
 	logger.Info("deployment not ready")
-	reportWorkspaceResourceNotReady(resource, "WorkspaceResouceDeploymentNotReady", "WorkspaceResouceDeploymentNotReady")
+	reportStackResourceNotReady(resource, "WorkspaceResouceDeploymentNotReady", "WorkspaceResouceDeploymentNotReady")
 	return resultStop, nil
 }
 
-func (r *workloadReconciler) setImagePullSecret(ctx context.Context, resource *v1alpha1.WorkspaceResource, deployment *appsv1.Deployment) error {
+func (r *workloadReconciler) setImagePullSecret(ctx context.Context, resource *v1alpha1.StackResource, deployment *appsv1.Deployment) error {
 	if resource.NeedsPullSecret() {
 		authUrl, err := resource.RegistryAuthUrl()
 		if err != nil {
@@ -275,7 +266,7 @@ func (r *workloadReconciler) setImagePullSecret(ctx context.Context, resource *v
 	return nil
 }
 
-func (r *workloadReconciler) requiresRestart(resource *v1alpha1.WorkspaceResource) bool {
+func (r *workloadReconciler) requiresRestart(resource *v1alpha1.StackResource) bool {
 	lastRestartProcessedAt := resource.Status.LastRestartRequestProcessedAt
 	currentRestartRequest := resource.Spec.RestartRequest
 	switch {
@@ -288,7 +279,7 @@ func (r *workloadReconciler) requiresRestart(resource *v1alpha1.WorkspaceResourc
 	}
 }
 
-func InterpolatedEnvVars(logger logr.Logger, resource *v1alpha1.WorkspaceResource, infoMap map[string]*v1alpha1.WorkspaceResource) []corev1.EnvVar {
+func InterpolatedEnvVars(logger logr.Logger, resource *v1alpha1.StackResource, infoMap map[string]*v1alpha1.StackResource) []corev1.EnvVar {
 	interpolationFn := func(resourceKey string, port string) string {
 		resource := infoMap[resourceKey]
 		if resource == nil {
@@ -328,7 +319,7 @@ func InterpolatedEnvVars(logger logr.Logger, resource *v1alpha1.WorkspaceResourc
 	return res
 }
 
-func InterpolatedContainerPorts(resource *v1alpha1.WorkspaceResource) []corev1.ContainerPort {
+func InterpolatedContainerPorts(resource *v1alpha1.StackResource) []corev1.ContainerPort {
 	res := make([]corev1.ContainerPort, 0)
 	for _, port := range resource.Spec.Ports {
 		res = append(res, corev1.ContainerPort{
@@ -344,10 +335,10 @@ func splitEnvVarValue(value string) (string, string) {
 	return part1, parts[1]
 }
 
-func InterpolatedVolumeMountList(resource *v1alpha1.WorkspaceResource) []corev1.VolumeMount {
+func InterpolatedVolumeMountList(resource *v1alpha1.StackResource) []corev1.VolumeMount {
 	res := make([]corev1.VolumeMount, 0)
 	for _, mount := range resource.Spec.VolumeMounts {
-		sourceVolumeName := mount.SourceWorkspaceVolume
+		sourceVolumeName := mount.SourceVolume
 		subPath := mount.SourceSubPath
 		if len(subPath) == 0 {
 			res = append(res, corev1.VolumeMount{
@@ -365,11 +356,11 @@ func InterpolatedVolumeMountList(resource *v1alpha1.WorkspaceResource) []corev1.
 	return res
 }
 
-func InterpolatedVolumesList(resource *v1alpha1.WorkspaceResource, volumeInfo map[string]*v1alpha1.WorkspaceVolume) []corev1.Volume {
+func InterpolatedVolumesList(resource *v1alpha1.StackResource, volumeInfo map[string]*storagev1alpha1.Volume) []corev1.Volume {
 	res := make([]corev1.Volume, 0)
 	addedVolumes := make(map[string]struct{})
 	for _, mount := range resource.Spec.VolumeMounts {
-		sourceVolumeName := mount.SourceWorkspaceVolume
+		sourceVolumeName := mount.SourceVolume
 		_, added := addedVolumes[sourceVolumeName]
 		if !added {
 			res = append(res, corev1.Volume{
@@ -386,11 +377,11 @@ func InterpolatedVolumesList(resource *v1alpha1.WorkspaceResource, volumeInfo ma
 	return res
 }
 
-func (r *workloadReconciler) getVolumeMountInfoMap(ctx context.Context, resource *v1alpha1.WorkspaceResource) (map[string]*v1alpha1.WorkspaceVolume, error) {
-	res := make(map[string]*v1alpha1.WorkspaceVolume)
+func (r *workloadReconciler) getVolumeMountInfoMap(ctx context.Context, resource *v1alpha1.StackResource) (map[string]*storagev1alpha1.Volume, error) {
+	res := make(map[string]*storagev1alpha1.Volume)
 	for _, mount := range resource.Spec.VolumeMounts {
-		sourceVolumeName := mount.SourceWorkspaceVolume
-		referencedVolume := &v1alpha1.WorkspaceVolume{}
+		sourceVolumeName := mount.SourceVolume
+		referencedVolume := &storagev1alpha1.Volume{}
 		if err := r.Client.Get(ctx, types.NamespacedName{Name: sourceVolumeName, Namespace: resource.Namespace}, referencedVolume); err != nil {
 			return nil, fmt.Errorf("failed to get the referenced volume '%s' in resource '%s': %w", sourceVolumeName, resource.Name, err)
 		}
@@ -399,8 +390,8 @@ func (r *workloadReconciler) getVolumeMountInfoMap(ctx context.Context, resource
 	return res, nil
 }
 
-func (r *workloadReconciler) makeSiblingsMap(ctx context.Context, currResource *v1alpha1.WorkspaceResource) (map[string]*v1alpha1.WorkspaceResource, error) {
-	res := make(map[string]*v1alpha1.WorkspaceResource)
+func (r *workloadReconciler) makeSiblingsMap(ctx context.Context, currResource *v1alpha1.StackResource) (map[string]*v1alpha1.StackResource, error) {
+	res := make(map[string]*v1alpha1.StackResource)
 	siblings, err := r.GetSiblings(ctx, currResource)
 	if err != nil {
 		return nil, err
@@ -417,8 +408,8 @@ func workspaceResourceName(workspaceName, resourceName string) string {
 	return fmt.Sprintf("%s-%s", workspaceName, resourceName)
 }
 
-func (r *workloadReconciler) GetSiblings(ctx context.Context, resource *v1alpha1.WorkspaceResource) ([]v1alpha1.WorkspaceResource, error) {
-	wrList := &v1alpha1.WorkspaceResourceList{}
+func (r *workloadReconciler) GetSiblings(ctx context.Context, resource *v1alpha1.StackResource) ([]v1alpha1.StackResource, error) {
+	wrList := &v1alpha1.StackResourceList{}
 	workspaceRef := metav1.GetControllerOf(resource)
 	if workspaceRef == nil {
 		return nil, fmt.Errorf("missing owner ref for workspace resource")

@@ -1,7 +1,7 @@
 apiVersion: registry.stackdome.io/v1alpha1
 kind: ClusterRegistry
 metadata:
-  name: cluster-registry
+  name: cluster-registry-1
 spec:
   owner:
     type: Organization
@@ -20,3 +20,8 @@ spec:
     tagsPerRepo: 10
     deleteUntagged: true
   port: 5000
+---
+ kubectl create secret generic registry-creds \
+  --from-literal=username='ashish' \
+  --from-literal=password='welcome' \
+  --namespace stackdome-registry

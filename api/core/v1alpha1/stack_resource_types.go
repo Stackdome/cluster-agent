@@ -1,19 +1,3 @@
-/*
-Copyright 2024.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package v1alpha1
 
 import (
@@ -35,30 +19,30 @@ const (
 	RegistryAuthTypeInClusterZotRegistry RegistryAuthType = "InClusterZotRegistry"
 )
 
-type WorkspaceResourcePhase string
+type StackResourcePhase string
 
 const (
-	WorkspaceResourcePhasePending WorkspaceResourcePhase = "Pending"
-	WorkspaceResourcePhaseReady   WorkspaceResourcePhase = "Ready"
-	WorkspaceResourcePhaseFailed  WorkspaceResourcePhase = "Failed"
+	StackResourcePhasePending StackResourcePhase = "Pending"
+	StackResourcePhaseReady   StackResourcePhase = "Ready"
+	StackResourcePhaseFailed  StackResourcePhase = "Failed"
 )
 
-type WorkspaceResourceStatusCondition string
+type StackResourceStatusCondition string
 
 const (
-	WorkspaceResourceStatusAvailable WorkspaceResourceStatusCondition = "Available"
+	StackResourceStatusAvailable StackResourceStatusCondition = "Available"
 )
 
 const (
 	RestartResourceAnnotation = "kubectl.kubernetes.io/restartedAt"
 )
 
-// WorkspaceResourceSpec defines the desired state of WorkspaceResource
-type WorkspaceResourceSpec struct {
+// StackResourceSpec defines the desired state of a StackResource
+type StackResourceSpec struct {
 	// Only one of the following fields should be specified
 	// +union
-	BuildSpec *ResourceBuildSpec `json:"buildSpec,omitempty"`
-	ImageSpec *ImageSpec         `json:"imageSpec,omitempty"`
+	BuildSpec *StackResourceBuildSpec `json:"buildSpec,omitempty"`
+	ImageSpec *ImageSpec              `json:"imageSpec,omitempty"`
 	// +optional
 	Init *InitSpec `json:"init,omitempty"`
 	// +optional
@@ -81,17 +65,21 @@ type WorkspaceResourceSpec struct {
 }
 
 type InitSpec struct {
-	// +required
+	// +optional
 	Command []string `json:"command"`
 	// +optional
 	Args []string `json:"args"`
+	// If the init step should run a different image.
+	// +optional
+	ImageSpec *ImageSpec `json:"imageSpec"`
 }
 
-type WorkspaceStorageRef struct {
-	WorkspaceStorageName string `json:"workspaceStorageName"`
-}
+// type WorkspaceStorageRef struct {
+// 	WorkspaceStorageName string `json:"workspaceStorageName"`
+// }
 
 type Port struct {
+	// +required
 	Number int32 `json:"number"`
 	// +optional
 	// +kubebuilder:default=false
@@ -100,21 +88,26 @@ type Port struct {
 	// +kubebuilder:default=true
 	IsHttp bool `json:"isHttp"`
 	// +required
-	Subdomain string `json:"subdomain"`
+	FQDN string `json:"fqdn"`
 }
 
 type EnvironmentVariables struct {
-	Name  string `json:"name"`
+	// +required
+	Name string `json:"name"`
+	// +required
 	Value string `json:"value"`
 }
 
 type VolumeMount struct {
-	SourceWorkspaceVolume string `json:"sourceWorkspaceVolume"`
-	SourceSubPath         string `json:"sourceSubPath"`
-	Destination           string `json:"destination"`
+	// +required
+	SourceVolume string `json:"sourceVolume"`
+	// +optional
+	SourceSubPath string `json:"sourceSubPath"`
+	// +required
+	Destination string `json:"destination"`
 }
 
-type ResourceBuildSpec struct {
+type StackResourceBuildSpec struct {
 	// Source volume where the build context is present.
 	// +required
 	SourceVolumeName string `json:"sourceVolumeName"`
@@ -194,43 +187,40 @@ type BuildStatus struct {
 	Phase      string `json:"phase,omitempty"`
 }
 
-// WorkspaceResourceStatus defines the observed state of WorkspaceResource
-type WorkspaceResourceStatus struct {
+// StackResourceStatus defines the observed state of StackResource
+type StackResourceStatus struct {
 	// The most recent generation observed by the controller.
 	ObservedGeneration                      int64 `json:"observedGeneration,omitempty"`
 	ObservedStackdomeServerObjectGeneration int64 `json:"observedStackdomeServerObjectGeneration,omitempty"`
 	// Conditions is a list of status conditions ths object is in.
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
-	// DEPRECATED: This field is not part of any API contract
-	// it will go away as soon as kubectl can print conditions!
-	// Human readable status - please use .Conditions from code
 	// +kubebuilder:default=Pending
-	Phase           WorkspaceResourcePhase `json:"phase,omitempty"`
-	ImageSourceHash string                 `json:"imageSourceHash,omitempty"`
-	ExternalAddress []ExternalAddress      `json:"externalAddress,omitempty"`
+	Phase           StackResourcePhase `json:"phase,omitempty"`
+	ImageSourceHash string             `json:"imageSourceHash,omitempty"`
+	ExternalAddress []ExternalAddress  `json:"externalAddress,omitempty"`
 	// Internal address is always the cluster wide resolvable internal domain name.
 	InternalAddress               *string      `json:"internalAddress,omitempty"`
 	LastRestartRequestProcessedAt *metav1.Time `json:"lastRestartRequestProcessedAt,omitempty"`
 	// Current build that this resource uses.
-	// Applicable only to resources which have ApplicationBuildSpec defined.
+	// Applicable only to resources which have BuildSpec defined.
 	CurrentBuild *BuildStatus `json:"currentBuild,omitempty"`
 	StatusHash   string       `json:"statusHash,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:shortName=wr
+// +kubebuilder:resource:shortName=sr
 // +kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase"
-// WorkspaceResource is the Schema for the workspaceresources API
-type WorkspaceResource struct {
+// StackResource is the Schema for the StackResources API
+type StackResource struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   WorkspaceResourceSpec   `json:"spec,omitempty"`
-	Status WorkspaceResourceStatus `json:"status,omitempty"`
+	Spec   StackResourceSpec   `json:"spec,omitempty"`
+	Status StackResourceStatus `json:"status,omitempty"`
 }
 
-func (w *WorkspaceResource) NeedsPullSecret() bool {
+func (w *StackResource) NeedsPullSecret() bool {
 	if w.Spec.ImageSpec != nil && w.Spec.ImageSpec.PullAuth != nil {
 		return true
 	}
@@ -240,7 +230,7 @@ func (w *WorkspaceResource) NeedsPullSecret() bool {
 	return false
 }
 
-func (w *WorkspaceResource) RegistryAuthUrl() (string, error) {
+func (w *StackResource) RegistryAuthUrl() (string, error) {
 	var registryHost string
 	var err error
 	if w.Spec.ImageSpec != nil {
@@ -264,7 +254,7 @@ func (w *WorkspaceResource) RegistryAuthUrl() (string, error) {
 	return "", fmt.Errorf("missing registry auth url")
 }
 
-func (w *WorkspaceResource) RegistryAuthType() RegistryAuthType {
+func (w *StackResource) RegistryAuthType() RegistryAuthType {
 	if w.Spec.ImageSpec != nil && w.Spec.ImageSpec.PullAuth != nil {
 		return w.Spec.ImageSpec.PullAuth.Type
 	}
@@ -288,7 +278,7 @@ func getHostFromURL(urlString string) (string, error) {
 	return parsedURL.Host, nil
 }
 
-func (w *WorkspaceResource) StatusHash() string {
+func (w *StackResource) StatusHash() string {
 	hasher := fnv.New32a()
 	hasher.Reset()
 	printer := spew.ConfigState{
@@ -303,14 +293,14 @@ func (w *WorkspaceResource) StatusHash() string {
 }
 
 // +kubebuilder:object:root=true
-// WorkspaceResourceList contains a list of WorkspaceResource
-type WorkspaceResourceList struct {
+// StackResourceList contains a list of StackResource
+type StackResourceList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []WorkspaceResource `json:"items"`
+	Items           []StackResource `json:"items"`
 }
 
-func (w *WorkspaceResourceSpec) HasExposedPort() bool {
+func (w *StackResourceSpec) HasExposedPort() bool {
 	for _, port := range w.Ports {
 		if port.ExposeToPublic {
 			return true
@@ -319,7 +309,7 @@ func (w *WorkspaceResourceSpec) HasExposedPort() bool {
 	return false
 }
 
-func (w *WorkspaceResource) SplitPortsByInternalAndExternal() ([]Port, []Port) {
+func (w *StackResource) SplitPortsByInternalAndExternal() ([]Port, []Port) {
 	internalPorts := make([]Port, 0)
 	externalPorts := make([]Port, 0)
 	for _, port := range w.Spec.Ports {
@@ -332,14 +322,14 @@ func (w *WorkspaceResource) SplitPortsByInternalAndExternal() ([]Port, []Port) {
 	return internalPorts, externalPorts
 }
 
-func (w *WorkspaceResource) VolumeMountSources() []string {
+func (w *StackResource) VolumeMountSources() []string {
 	res := make([]string, 0)
 	for _, volumeMount := range w.Spec.VolumeMounts {
-		res = append(res, volumeMount.SourceWorkspaceVolume)
+		res = append(res, volumeMount.SourceVolume)
 	}
 	return res
 }
 
 func init() {
-	SchemeBuilder.Register(&WorkspaceResource{}, &WorkspaceResourceList{})
+	SchemeBuilder.Register(&StackResource{}, &StackResourceList{})
 }

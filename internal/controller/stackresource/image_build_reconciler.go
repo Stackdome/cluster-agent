@@ -1,4 +1,4 @@
-package workspaceresource
+package stackresource
 
 import (
 	"context"
@@ -14,14 +14,14 @@ import (
 	"stackdome.io/cluster-agent/api/core/v1alpha1"
 )
 
-// ImageBuildReconciler handles the reconciliation of ImageBuild resources
+// ImageBuildReconciler handles the creation of imagebuild resource for a stack resource.
 type imageBuildReconciler struct {
 	client.Client
 	scheme *runtime.Scheme
 }
 
-// Reconcile processes WorkspaceResource objects that need image builds
-func (r *imageBuildReconciler) reconcile(ctx context.Context, resource *v1alpha1.WorkspaceResource) (subReconcilerResult, error) {
+// Reconcile processes StackResource objects that need image builds
+func (r *imageBuildReconciler) reconcile(ctx context.Context, resource *v1alpha1.StackResource) (subReconcilerResult, error) {
 	// Skip if no build spec is defined
 	if resource.Spec.BuildSpec == nil {
 		return resultNil, nil
@@ -52,12 +52,12 @@ func (r *imageBuildReconciler) reconcile(ctx context.Context, resource *v1alpha1
 	}
 
 	// Build is still in progress
-	reportWorkspaceResourceNotReady(resource, "ImageBuildInProgress", "Image build is still in progress")
+	reportStackResourceNotReady(resource, "ImageBuildInProgress", "Image build is still in progress")
 	return resultStop, nil
 }
 
 // createImageBuild creates a new ImageBuild resource for a WorkspaceResource
-func (r *imageBuildReconciler) createImageBuild(ctx context.Context, resource *v1alpha1.WorkspaceResource) (subReconcilerResult, error) {
+func (r *imageBuildReconciler) createImageBuild(ctx context.Context, resource *v1alpha1.StackResource) (subReconcilerResult, error) {
 	buildSpec := resource.Spec.BuildSpec
 	imageBuild := &buildsv1alpha1.ImageBuild{
 		ObjectMeta: metav1.ObjectMeta{
@@ -99,7 +99,7 @@ func (r *imageBuildReconciler) createImageBuild(ctx context.Context, resource *v
 }
 
 // configureRegistryAuth sets up authentication for the registry
-func (r *imageBuildReconciler) configureRegistryAuth(resource *v1alpha1.WorkspaceResource, imageBuild *buildsv1alpha1.ImageBuild) error {
+func (r *imageBuildReconciler) configureRegistryAuth(resource *v1alpha1.StackResource, imageBuild *buildsv1alpha1.ImageBuild) error {
 	buildSpec := resource.Spec.BuildSpec
 	if buildSpec.Registry.Auth == nil {
 		return nil
@@ -128,12 +128,12 @@ func (r *imageBuildReconciler) configureRegistryAuth(resource *v1alpha1.Workspac
 }
 
 // generateImageBuildName creates a unique name for the ImageBuild resource
-func generateImageBuildName(resource *v1alpha1.WorkspaceResource) string {
+func generateImageBuildName(resource *v1alpha1.StackResource) string {
 	return buildsv1alpha1.ImageBuildName(resource.Name, resource.Spec.BuildSpec.BuildSourceHash)
 }
 
 // createImageBuildLabels creates labels for the ImageBuild resource
-func createImageBuildLabels(resource *v1alpha1.WorkspaceResource) map[string]string {
+func createImageBuildLabels(resource *v1alpha1.StackResource) map[string]string {
 	labels := make(map[string]string)
 	if resource.Labels != nil {
 		for k, v := range resource.Labels {
@@ -148,7 +148,7 @@ func createImageBuildLabels(resource *v1alpha1.WorkspaceResource) map[string]str
 }
 
 // createImageBuildAnnotations creates annotations for the ImageBuild resource
-func createImageBuildAnnotations(resource *v1alpha1.WorkspaceResource) map[string]string {
+func createImageBuildAnnotations(resource *v1alpha1.StackResource) map[string]string {
 	annotations := make(map[string]string)
 	if resource.Annotations != nil {
 		for k, v := range resource.Annotations {

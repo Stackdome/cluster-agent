@@ -18,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	buildsv1alpha1 "stackdome.io/cluster-agent/api/builds/v1alpha1"
 	stackv1alpha1 "stackdome.io/cluster-agent/api/core/v1alpha1"
+	storagev1alpha1 "stackdome.io/cluster-agent/api/storage/v1alpha1"
 
 	"stackdome.io/cluster-agent/internal/controller"
 	"stackdome.io/cluster-agent/pkg/imagebuilder"
@@ -50,7 +51,7 @@ func (r *ImageBuildReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 func (r *ImageBuildReconciler) reconcile(ctx context.Context, buildConfig *buildsv1alpha1.ImageBuild) (ctrl.Result, error) {
 	logger := controller.LoggerFromContext(ctx)
 	logger.Info("reconciling image build")
-	volumeRef := &stackv1alpha1.WorkspaceVolume{}
+	volumeRef := &storagev1alpha1.Volume{}
 
 	if err := r.Client.Get(ctx, types.NamespacedName{
 		Name:      buildConfig.Spec.ContextRef.VolumeName,
@@ -195,16 +196,16 @@ func findJobCondition(job *batchv1.Job, jobCondition batchv1.JobConditionType) *
 	return nil
 }
 
-func volumeAvailable(volume *stackv1alpha1.WorkspaceVolume) bool {
-	cond := meta.FindStatusCondition(volume.Status.Conditions, string(stackv1alpha1.WorkspaceVolumeConditionAvailable))
+func volumeAvailable(volume *storagev1alpha1.Volume) bool {
+	cond := meta.FindStatusCondition(volume.Status.Conditions, string(storagev1alpha1.VolumeConditionAvailable))
 	if cond == nil || cond.Status == metav1.ConditionFalse {
 		return false
 	}
 	return true
 }
 
-func volumeReadyForBuild(volume *stackv1alpha1.WorkspaceVolume) bool {
-	cond := meta.FindStatusCondition(volume.Status.Conditions, string(stackv1alpha1.WorkspaceVolumeConditionSyncedOnce))
+func volumeReadyForBuild(volume *storagev1alpha1.Volume) bool {
+	cond := meta.FindStatusCondition(volume.Status.Conditions, string(storagev1alpha1.VolumeConditionSyncedOnce))
 	if cond == nil || cond.Status == metav1.ConditionFalse {
 		return false
 	}

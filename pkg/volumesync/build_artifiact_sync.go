@@ -10,11 +10,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	buildsv1alpha1 "stackdome.io/cluster-agent/api/builds/v1alpha1"
-	"stackdome.io/cluster-agent/api/core/v1alpha1"
+	storagev1alpha1 "stackdome.io/cluster-agent/api/storage/v1alpha1"
+	"stackdome.io/cluster-agent/pkg/config"
 )
 
 const (
-	SyncToolsImage    = "stackdome/sync-tools:latest"
 	ToolsMountPath    = "/tools"
 	BusyboxBinary     = "busybox"
 	RsyncBinary       = "rsync"
@@ -27,7 +27,7 @@ const (
 )
 
 func CreateBuildArtifactsVolumeSyncJob(
-	volume *v1alpha1.WorkspaceVolume, copySrcs []*v1alpha1.BuildArtifactSource,
+	volume *storagev1alpha1.Volume, copySrcs []*storagev1alpha1.BuildArtifactSource,
 	imageBuild *buildsv1alpha1.ImageBuild) *batchv1.Job {
 	volumeMounts := []corev1.VolumeMount{
 		{
@@ -48,7 +48,7 @@ func CreateBuildArtifactsVolumeSyncJob(
 					InitContainers: []corev1.Container{
 						{
 							Name:    "sync-tools-setup",
-							Image:   SyncToolsImage, // Custom minimal image with rsync and busybox
+							Image:   config.StackdomeToolsImage, // Custom minimal image with rsync and busybox
 							Command: []string{"/bin/sh", "-c"},
 							Args: []string{
 								fmt.Sprintf(
@@ -104,7 +104,7 @@ func CreateBuildArtifactsVolumeSyncJob(
 	return &job
 }
 
-func generateCopyCommands(volume *v1alpha1.WorkspaceVolume, copySrcs []*v1alpha1.BuildArtifactSource) []string {
+func generateCopyCommands(volume *storagev1alpha1.Volume, copySrcs []*storagev1alpha1.BuildArtifactSource) []string {
 	var commands []string
 	for _, spec := range copySrcs {
 		commands = append(commands, generateRsyncCommand(

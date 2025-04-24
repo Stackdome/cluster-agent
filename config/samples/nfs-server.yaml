@@ -4,6 +4,6 @@ metadata:
   name: ashish-nfs-server
   namespace: ashish-test
   labels:
-    workspace.stackdome.io/workspacestorageName: "infisical-storage"
+    storage.stackdome.io/storagename: "infisical-storage"
 spec:
   capacity: "10Gi"

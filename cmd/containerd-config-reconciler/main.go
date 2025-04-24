@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -249,7 +250,7 @@ func (c *ContainerdConfigReconciler) updateContainerdConfig(registries []Registr
 	}
 
 	// Update hosts config
-	if err := c.updateHostsConfig(hostsConfigDir, registries); err != nil {
+	if err := c.reconcileHostsConfig(hostsConfigDir, registries); err != nil {
 		return false, err
 	}
 
@@ -287,7 +288,7 @@ func (c *ContainerdConfigReconciler) createBootstrapConfig(registries []Registry
 		},
 	}
 
-	if err := c.updateHostsConfig(hostConfigDir, registries); err != nil {
+	if err := c.reconcileHostsConfig(hostConfigDir, registries); err != nil {
 		return false, err
 	}
 
@@ -332,35 +333,37 @@ func (c *ContainerdConfigReconciler) ensureMapExists(parent map[string]interface
 }
 
 // updateHostsConfig updates the containerd hosts configuration
-func (c *ContainerdConfigReconciler) updateHostsConfig(hostsConfigDir string, registries []Registry) error {
-	defaultHostDir := filepath.Join(hostsConfigDir, "_default")
-	if err := os.MkdirAll(defaultHostDir, 0755); err != nil {
-		return fmt.Errorf("failed to create hosts config directory: %w", err)
+func (c *ContainerdConfigReconciler) reconcileHostsConfig(hostsConfigDir string, registries []Registry) error {
+	for _, registry := range registries {
+		u, err := url.Parse(registry.Endpoint)
+		if err != nil {
+			return err
+		}
+		currentHostDir := filepath.Join(hostsConfigDir, u.Hostname())
+		if err := os.MkdirAll(currentHostDir, 0755); err != nil {
+			return fmt.Errorf("failed to create hosts config directory: %w", err)
+		}
+		currentHostsFilePath := filepath.Join(currentHostDir, "hosts.toml")
+
+		if err := c.createHostsConfig(currentHostsFilePath, registry); err != nil {
+			return err
+		}
 	}
-
-	hostsFilePath := filepath.Join(defaultHostDir, "hosts.toml")
-
-	// Create new config if file doesn't exist
-	if _, err := os.Stat(hostsFilePath); os.IsNotExist(err) {
-		return c.createHostsConfig(hostsFilePath, registries)
-	}
-
-	// Update existing config
-	return c.updateExistingHostsConfig(hostsFilePath, registries)
+	return nil
 }
 
 // createHostsConfig creates a new hosts config file
-func (c *ContainerdConfigReconciler) createHostsConfig(path string, registries []Registry) error {
+func (c *ContainerdConfigReconciler) createHostsConfig(path string, registry Registry) error {
 	hostsConfig := make(map[string]interface{})
 
-	for _, registry := range registries {
-		hostsConfig[registry.Endpoint] = map[string]interface{}{
-			"capabilities": []string{"pull", "resolve"},
-		}
+	hostsConfig[fmt.Sprintf("http://%s", registry.ServiceIp)] = map[string]interface{}{
+		"capabilities": []string{"pull", "resolve"},
+		"skip_verify":  true,
 	}
 
 	config := map[string]interface{}{
-		"host": hostsConfig,
+		"server": registry.Endpoint,
+		"host":   hostsConfig,
 	}
 
 	return c.writeConfigTOML(path, config)

@@ -1,4 +1,4 @@
-package workspacestorage
+package stackstorage
 
 import (
 	"context"
@@ -15,40 +15,45 @@ import (
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	workspacev1alpha1 "stackdome.io/cluster-agent/api/core/v1alpha1"
+	storagev1alpha1 "stackdome.io/cluster-agent/api/storage/v1alpha1"
+	"stackdome.io/cluster-agent/pkg/config"
+
 	"stackdome.io/cluster-agent/internal/controller"
 )
 
 const (
-	WorkspaceStorageLabel = "storage.stackdome.io/workspace"
+	storageLabel = "storage.stackdome.io/ProvisionedFor"
 )
 
-type storageServerReconciler struct {
+type sshServerReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 }
 
-func WorkspaceStorageLabels(workspaceStorage *workspacev1alpha1.WorkspaceStorage) map[string]string {
-	return map[string]string{WorkspaceStorageLabel: workspaceStorage.Spec.WorkspaceName}
+func storageLabels(storage *storagev1alpha1.Storage) map[string]string {
+	return map[string]string{
+		storageLabel:                          storage.Spec.ProvisionedFor,
+		"storage.stackdome.io/ssh-server-for": storage.Name,
+	}
 }
 
-func (r *storageServerReconciler) reconcile(ctx context.Context, workspaceStorage *workspacev1alpha1.WorkspaceStorage) (subReconcilerResult, error) {
+func (r *sshServerReconciler) reconcile(ctx context.Context, storage *storagev1alpha1.Storage) (subReconcilerResult, error) {
 	logger := controller.LoggerFromContext(ctx)
 	logger.Info("reconciling storage server")
-	return r.ensureStorageServerDeployment(ctx, workspaceStorage)
+	return r.ensureStorageServerDeployment(ctx, storage)
 }
 
-func (r *storageServerReconciler) ensureStorageServerDeployment(
+func (r *sshServerReconciler) ensureStorageServerDeployment(
 	ctx context.Context,
-	workspaceStorage *workspacev1alpha1.WorkspaceStorage) (subReconcilerResult, error) {
-	volumes := make([]corev1.Volume, 0)
-	wsVolumes, err := r.getWSVolumes(ctx, workspaceStorage)
+	storage *storagev1alpha1.Storage) (subReconcilerResult, error) {
+	definedVolumes, err := r.getVolumesDefined(ctx, storage)
 	if err != nil {
 		return resultNil, err
 	}
 	volumeMountsOnPod := make([]corev1.VolumeMount, 0)
-	for _, volume := range wsVolumes {
-		volumes = append(volumes,
+	volumesToBeMounted := make([]corev1.Volume, 0)
+	for _, volume := range definedVolumes {
+		volumesToBeMounted = append(volumesToBeMounted,
 			corev1.Volume{
 				Name: volume.Name,
 				VolumeSource: corev1.VolumeSource{
@@ -62,16 +67,16 @@ func (r *storageServerReconciler) ensureStorageServerDeployment(
 			volumeMountsOnPod,
 			corev1.VolumeMount{
 				Name:      volume.Name,
-				MountPath: workspaceStorage.MountPathForVolume(volume.Name),
+				MountPath: storage.MountPathForVolume(volume.Name),
 			},
 		)
 	}
 	// Mount user's ssh public key to the storage pod.
-	volumes = append(volumes, corev1.Volume{
+	volumesToBeMounted = append(volumesToBeMounted, corev1.Volume{
 		Name: "user-ssh-public-key",
 		VolumeSource: corev1.VolumeSource{
 			Secret: &corev1.SecretVolumeSource{
-				SecretName: StorageServerSSHSecretName(workspaceStorage),
+				SecretName: StorageServerSSHSecretName(storage),
 			},
 		},
 	})
@@ -84,26 +89,26 @@ func (r *storageServerReconciler) ensureStorageServerDeployment(
 
 	desiredDeployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      workspaceStorage.Name,
-			Namespace: workspaceStorage.Namespace,
-			Labels:    WorkspaceStorageLabels(workspaceStorage),
+			Name:      storage.Name,
+			Namespace: storage.Namespace,
+			Labels:    storageLabels(storage),
 		},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: ptr.To(int32(1)),
 			Selector: &metav1.LabelSelector{
-				MatchLabels: WorkspaceStorageLabels(workspaceStorage),
+				MatchLabels: storageLabels(storage),
 			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
-					Labels: WorkspaceStorageLabels(workspaceStorage),
+					Labels: storageLabels(storage),
 				},
 				Spec: corev1.PodSpec{
-					Volumes: volumes,
+					Volumes: volumesToBeMounted,
 					Containers: []corev1.Container{
 						{
-							Name: fmt.Sprintf("%s-storage-server", workspaceStorage.Name),
+							Name: fmt.Sprintf("%s-storage-server", storage.Name),
 							// TODO: Change
-							Image:           "docker.io/ashishmax31327/storage-server:1",
+							Image:           config.StackdomeSSHServerImage,
 							ImagePullPolicy: corev1.PullIfNotPresent,
 							Ports: []corev1.ContainerPort{
 								{
@@ -113,7 +118,6 @@ func (r *storageServerReconciler) ensureStorageServerDeployment(
 							VolumeMounts: volumeMountsOnPod,
 							Resources: corev1.ResourceRequirements{
 								Limits: corev1.ResourceList{
-									corev1.ResourceCPU:    resource.MustParse("1000m"),
 									corev1.ResourceMemory: resource.MustParse("1000Mi"),
 								},
 							},
@@ -125,7 +129,7 @@ func (r *storageServerReconciler) ensureStorageServerDeployment(
 	}
 	desiredDeployment.SetGroupVersionKind(appsv1.SchemeGroupVersion.WithKind("Deployment"))
 
-	if err := controllerutil.SetControllerReference(workspaceStorage, desiredDeployment, r.Scheme); err != nil {
+	if err := controllerutil.SetControllerReference(storage, desiredDeployment, r.Scheme); err != nil {
 		return resultNil, err
 	}
 
@@ -134,7 +138,7 @@ func (r *storageServerReconciler) ensureStorageServerDeployment(
 	err = r.Client.Get(ctx, types.NamespacedName{Namespace: desiredDeployment.Namespace, Name: desiredDeployment.Name}, existingDeployment)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			reportWorkspaceStorageUnAvailable(workspaceStorage, "StorageServerNotReady", "Storage Server is being created")
+			reportStorageUnAvailable(storage, "StorageServerNotReady", "Storage Server is being created")
 			return resultRequeue, r.Client.Create(ctx, desiredDeployment)
 		}
 		return resultNil, err
@@ -144,7 +148,7 @@ func (r *storageServerReconciler) ensureStorageServerDeployment(
 	// Server side apply the deployment.
 	if err := r.Client.Patch(ctx, desiredDeployment, client.Apply, &client.PatchOptions{
 		Force:        ptr.To(true),
-		FieldManager: WorkspaceStorageControllerName,
+		FieldManager: StorageControllerName,
 	}); err != nil {
 		logger.Error(err, "failed to patch deployment", "error", err)
 		return resultNil, err
@@ -156,20 +160,20 @@ func (r *storageServerReconciler) ensureStorageServerDeployment(
 		return resultNil, nil
 	}
 
-	reportWorkspaceStorageUnAvailable(workspaceStorage, "StorageServerNotReady", "Storage Server unavailable")
+	reportStorageUnAvailable(storage, "StorageServerNotReady", "Storage Server unavailable")
 	return resultStop, nil
 }
 
-func (r *storageServerReconciler) getWSVolumes(ctx context.Context, ws *workspacev1alpha1.WorkspaceStorage) ([]workspacev1alpha1.WorkspaceVolume, error) {
-	WSVolumeList := &workspacev1alpha1.WorkspaceVolumeList{}
-	if err := r.Client.List(ctx, WSVolumeList, client.InNamespace(ws.Namespace), client.MatchingFields{
-		ownerKey: ws.Name,
+func (r *sshServerReconciler) getVolumesDefined(ctx context.Context, storage *storagev1alpha1.Storage) ([]storagev1alpha1.Volume, error) {
+	volumeList := &storagev1alpha1.VolumeList{}
+	if err := r.Client.List(ctx, volumeList, client.InNamespace(storage.Namespace), client.MatchingFields{
+		ownerKey: storage.Name,
 	}); err != nil {
 		return nil, err
 	}
-	res := []workspacev1alpha1.WorkspaceVolume{}
-	for _, volume := range WSVolumeList.Items {
-		if ws.ContainsVolume(volume.Name) {
+	res := []storagev1alpha1.Volume{}
+	for _, volume := range volumeList.Items {
+		if storage.ContainsVolume(volume.Name) {
 			res = append(res, volume)
 		}
 	}

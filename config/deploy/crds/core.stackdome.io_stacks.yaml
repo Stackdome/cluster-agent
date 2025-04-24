@@ -4,14 +4,14 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.3
-  name: workspaces.core.stackdome.io
+  name: stacks.core.stackdome.io
 spec:
   group: core.stackdome.io
   names:
-    kind: Workspace
-    listKind: WorkspaceList
-    plural: workspaces
-    singular: workspace
+    kind: Stack
+    listKind: StackList
+    plural: stacks
+    singular: stack
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
@@ -41,23 +41,23 @@ spec:
           metadata:
             type: object
           spec:
-            description: WorkspaceSpec defines the desired state of Workspace
+            description: StackSpec defines the desired state of a Stack
             properties:
               domain:
                 description: |-
+                  Username       string                  `json:"username"`
+                  Organisation   string                  `json:"organisation"`
                   SLD+TLD. Example: example.io
                   Should not be empty and is a valid domain.
                 type: string
-              organisation:
-                type: string
-              resources:
+              stackResources:
                 items:
                   properties:
                     name:
                       type: string
                     spec:
-                      description: WorkspaceResourceSpec defines the desired state
-                        of WorkspaceResource
+                      description: StackResourceSpec defines the desired state of
+                        a StackResource
                       properties:
                         args:
                           items:
@@ -209,8 +209,51 @@ spec:
                               items:
                                 type: string
                               type: array
-                          required:
-                          - command
+                            imageSpec:
+                              description: If the init step should run a different
+                                image.
+                              properties:
+                                image:
+                                  description: Image reference (e.g., docker.io/myorg/myimage:tag)
+                                  type: string
+                                pullAuth:
+                                  description: Registry authentication for pulling
+                                    the image
+                                  properties:
+                                    dockerConfigAuth:
+                                      properties:
+                                        credentialsRef:
+                                          description: CredentialSecretKeyPair selects
+                                            username and password keys from a Secret
+                                          properties:
+                                            passwordKey:
+                                              description: PasswordKey is the key
+                                                in the secret for the password
+                                              type: string
+                                            secretName:
+                                              description: Secret is the name of the
+                                                secret
+                                              type: string
+                                            secretNamespace:
+                                              type: string
+                                            usernameKey:
+                                              description: UsernameKey is the key
+                                                in the secret for the username
+                                              type: string
+                                          required:
+                                          - passwordKey
+                                          - secretName
+                                          - usernameKey
+                                          type: object
+                                      type: object
+                                    type:
+                                      type: string
+                                  required:
+                                  - type
+                                  type: object
+                              required:
+                              - image
+                              type: object
                           type: object
                         ports:
                           items:
@@ -218,17 +261,17 @@ spec:
                               exposeToPublic:
                                 default: false
                                 type: boolean
+                              fqdn:
+                                type: string
                               isHttp:
                                 default: true
                                 type: boolean
                               number:
                                 format: int32
                                 type: integer
-                              subdomain:
-                                type: string
                             required:
+                            - fqdn
                             - number
-                            - subdomain
                             type: object
                           type: array
                         restartRequest:
@@ -243,12 +286,11 @@ spec:
                                 type: string
                               sourceSubPath:
                                 type: string
-                              sourceWorkspaceVolume:
+                              sourceVolume:
                                 type: string
                             required:
                             - destination
-                            - sourceSubPath
-                            - sourceWorkspaceVolume
+                            - sourceVolume
                             type: object
                           type: array
                       type: object
@@ -257,16 +299,12 @@ spec:
                   - spec
                   type: object
                 type: array
-              userName:
-                type: string
             required:
             - domain
-            - organisation
-            - resources
-            - userName
+            - stackResources
             type: object
           status:
-            description: WorkspaceStatus defines the observed state of Workspace
+            description: StackStatus defines the observed state of Stack
             properties:
               conditions:
                 description: Conditions is a list of status conditions ths object

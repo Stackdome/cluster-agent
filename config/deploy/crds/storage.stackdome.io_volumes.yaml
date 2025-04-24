@@ -4,20 +4,20 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.3
-  name: workspacevolumes.core.stackdome.io
+  name: volumes.storage.stackdome.io
 spec:
-  group: core.stackdome.io
+  group: storage.stackdome.io
   names:
-    kind: WorkspaceVolume
-    listKind: WorkspaceVolumeList
-    plural: workspacevolumes
-    singular: workspacevolume
+    kind: Volume
+    listKind: VolumeList
+    plural: volumes
+    singular: volume
   scope: Namespaced
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: WorkspaceVolume is the Schema for the workspacevolumes API
+        description: Volume is the Schema for the volumes API
         properties:
           apiVersion:
             description: |-
@@ -105,7 +105,7 @@ spec:
             - size
             type: object
           status:
-            description: WorkspaceVolumeStatus defines the observed state of WorkspaceVolume
+            description: VolumeStatus defines the observed state of WorkspaceVolume
             properties:
               LastSyncedAt:
                 format: date-time

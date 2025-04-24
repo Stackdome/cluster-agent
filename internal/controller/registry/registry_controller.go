@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/url"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -148,18 +147,13 @@ func (r *RegistryReconciler) reconcileNodeRegistryAccessConfigMap(ctx context.Co
 		return resultNil, fmt.Errorf("failed to get ConfigMap: %w", err)
 	}
 
-	u, err := url.Parse(registry.Status.InternalURL)
-	if err != nil {
-		return resultNil, fmt.Errorf("failed to parse registry URL: %w", err)
-	}
-	registryHost := u.Hostname()
 	// Update existing ConfigMap by adding/updating this registry's configuration
 	existingRegistryConfig, err := unmarshalRegistryConfig(existingConfigMap.Data["registries.json"])
 	if err != nil {
 		return resultNil, err
 	}
 
-	if existingRegistryConfig.AddRegistry(registryHost, registry.Status.InternalURL) {
+	if existingRegistryConfig.AddRegistry(registry.Status.ServiceIP, registry.Status.InternalURL) {
 		existingRegistryConfigJson, err := marshalRegistryConfig(existingRegistryConfig)
 		if err != nil {
 			return resultNil, err
@@ -179,14 +173,8 @@ func unmarshalRegistryConfig(registryInfoJson string) (*internaltypes.RegistryCo
 }
 
 func (r *RegistryReconciler) createRegistryConfigCM(ctx context.Context, registry *registryv1alpha1.ClusterRegistry) (subReconcilerResult, error) {
-	u, err := url.Parse(registry.Status.InternalURL)
-	if err != nil {
-		return resultNil, fmt.Errorf("failed to parse registry URL: %w", err)
-	}
-	registryHost := u.Hostname()
-
 	registryConfig := internaltypes.NewRegistryConfig()
-	registryConfig.AddRegistry(registryHost, registry.Status.InternalURL)
+	registryConfig.AddRegistry(registry.Status.ServiceIP, registry.Status.InternalURL)
 
 	registryConfigJson, err := marshalRegistryConfig(registryConfig)
 	if err != nil {
@@ -202,6 +190,7 @@ func (r *RegistryReconciler) createRegistryConfigCM(ctx context.Context, registr
 			"registries.json": registryConfigJson,
 		},
 	}
+	// We dont add owner refs as the CM is shared accross all cluster registry objects.
 
 	return resultNil, r.Create(ctx, desiredCM)
 }
@@ -224,6 +213,12 @@ func (r *RegistryReconciler) reconcileSharedRegistryConfigDaemonSet(ctx context.
 			return resultRequeue, r.Client.Create(ctx, desiredDaemonSet)
 		}
 		return resultNil, err
+	}
+
+	if existingDaemonSet.Spec.Template.Spec.Containers[0].Image != desiredDaemonSet.Spec.Template.Spec.Containers[0].Image {
+		updatedObj := existingDaemonSet.DeepCopy()
+		updatedObj.Spec.Template.Spec.Containers[0].Image = desiredDaemonSet.Spec.Template.Spec.Containers[0].Image
+		return resultRequeue, r.Client.Update(ctx, updatedObj)
 	}
 
 	if existingDaemonSet.Status.DesiredNumberScheduled == existingDaemonSet.Status.NumberAvailable &&
@@ -373,6 +368,7 @@ func (r *RegistryReconciler) reconcileRegistryService(ctx context.Context, regis
 		return resultNil, err
 	}
 	registry.Status.InternalURL = registryURL
+	registry.Status.ServiceIP = existingService.Spec.ClusterIP
 	return resultNil, nil
 }
 

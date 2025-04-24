@@ -1,4 +1,4 @@
-package workspacestorage
+package stackstorage
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	workspacev1alpha1 "stackdome.io/cluster-agent/api/core/v1alpha1"
+	storagev1alpha1 "stackdome.io/cluster-agent/api/storage/v1alpha1"
 	"stackdome.io/cluster-agent/internal/controller"
 )
 
@@ -22,28 +22,21 @@ type serviceReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-func StorageServerServiceName(workspaceStorage *workspacev1alpha1.WorkspaceStorage) string {
-	return fmt.Sprintf("%s-ws-svc", workspaceStorage.Name)
+func storageServerServiceName(storage *storagev1alpha1.Storage) string {
+	return fmt.Sprintf("%s-storage-svc", storage.Name)
 }
 
-func StorageServiceNamespacedName(workspaceStorage *workspacev1alpha1.WorkspaceStorage) types.NamespacedName {
-	return types.NamespacedName{
-		Name:      StorageServerServiceName(workspaceStorage),
-		Namespace: workspaceStorage.Namespace,
-	}
-}
-
-func (r *serviceReconciler) reconcile(ctx context.Context, workspaceStorage *workspacev1alpha1.WorkspaceStorage) (subReconcilerResult, error) {
+func (r *serviceReconciler) reconcile(ctx context.Context, storage *storagev1alpha1.Storage) (subReconcilerResult, error) {
 	logger := controller.LoggerFromContext(ctx)
 	logger.Info("reconcile svc")
 	desiredSvc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      StorageServerServiceName(workspaceStorage),
-			Namespace: workspaceStorage.Namespace,
-			Labels:    WorkspaceStorageLabels(workspaceStorage),
+			Name:      storageServerServiceName(storage),
+			Namespace: storage.Namespace,
+			Labels:    storageLabels(storage),
 		},
 		Spec: corev1.ServiceSpec{
-			Selector: WorkspaceStorageLabels(workspaceStorage),
+			Selector: storageLabels(storage),
 			Ports: []corev1.ServicePort{
 				{
 					Name:       "ssh",
@@ -54,7 +47,7 @@ func (r *serviceReconciler) reconcile(ctx context.Context, workspaceStorage *wor
 		},
 	}
 
-	if err := controllerutil.SetControllerReference(workspaceStorage, desiredSvc, r.Scheme); err != nil {
+	if err := controllerutil.SetControllerReference(storage, desiredSvc, r.Scheme); err != nil {
 		return resultNil, err
 	}
 	existingSvc := &corev1.Service{}
@@ -73,6 +66,6 @@ func (r *serviceReconciler) reconcile(ctx context.Context, workspaceStorage *wor
 		return resultNil, r.Client.Update(ctx, existingSvc)
 	}
 
-	reportWorkspaceStorageAvailable(workspaceStorage, existingSvc)
+	reportStorageAvailable(storage, existingSvc)
 	return resultNil, nil
 }
