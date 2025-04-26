@@ -4,8 +4,13 @@ GOOS ?= $(shell go env GOOS)
 version:=$(shell date +%s)
 # Tag for the image:
 image_tag:=$(version)
-image_repository:=stackdome-registry/stackdome-controller
-external_image_registry:=us-west4-docker.pkg.dev/stackdome
+image_repository:=quay.io/stackdome
+tools_version:=v0.0.1
+ssh_server_version:=v0.0.1
+# Output binary name
+RECONCILER_BIN = containerd-config-reconciler
+# Docker image details
+RECONCILER_TAG = v0.0.4
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
@@ -106,6 +111,22 @@ docker-push: ## Push docker image with the manager.
 ifndef ignore-not-found
   ignore-not-found = false
 endif
+
+
+
+.PHONY: docker-build-containerd-reconciler
+docker-build-containerd-reconciler:
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-w -s" -o $(RECONCILER_BIN) cmd/containerd-config-reconciler/main.go
+	docker build -t $(image_repository)/registry-config-reconciler:$(RECONCILER_TAG) -f tools/containerd-config-reconciler/Dockerfile .
+
+.PHONY: docker-build-sync-tools
+docker-build-sync-tools:
+	docker build -t $(image_repository)/tools:$(tools_version) -f tools/sync-tools/Dockerfile .
+
+
+.PHONY: docker-build-ssh-server
+docker-build-ssh-server:
+	docker build -t $(image_repository)/ssh-server:$(ssh_server_version) -f tools/ssh-server/Dockerfile .
 
 
 .PHONY: uninstall

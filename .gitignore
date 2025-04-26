@@ -6,6 +6,8 @@
 *.dylib
 bin/*
 Dockerfile.cross
+.cache
+.deps
 
 # Test binary, built with `go test -c`
 *.test

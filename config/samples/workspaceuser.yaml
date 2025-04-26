@@ -1,5 +1,5 @@
 apiVersion: users.stackdome.io/v1alpha1
-kind: WorkspaceUser
+kind: User
 metadata:
   name: admin-user
   labels:
@@ -11,10 +11,6 @@ spec:
   namespaces:
     - "ashish-test"
   accessRules:
-    # Full cluster admin access
-    - apiGroups: ["*"]
-      resources: ["*"]
-      verbs: ["*"]
     # Access to view logs
     - apiGroups: [""]
       resources: ["pods", "pods/log"]

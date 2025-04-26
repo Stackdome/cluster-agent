@@ -10,19 +10,19 @@ import (
 	"k8s.io/apimachinery/pkg/util/rand"
 )
 
-type WorkspaceUserPhase string
+type UserPhase string
 
 const (
-	WorkspaceUserPhasePhasePending WorkspaceUserPhase = "Pending"
-	WorkspaceUserPhasePhaseReady   WorkspaceUserPhase = "Ready"
+	UserPhasePhasePending UserPhase = "Pending"
+	UserPhasePhaseReady   UserPhase = "Ready"
 )
 
 const (
-	WorkspaceUserAvailable = "Available"
+	UserAvailable = "Available"
 )
 
-// WorkspaceUserSpec defines the desired state of WorkspaceUser
-type WorkspaceUserSpec struct {
+// UserSpec defines the desired state of User
+type UserSpec struct {
 	// +kubebuilder:validation:MinItems=1
 	Namespaces  []string            `json:"namespaces"`
 	Username    string              `json:"username"`
@@ -31,8 +31,8 @@ type WorkspaceUserSpec struct {
 	BaseDomain string `json:"baseDomain"`
 }
 
-// WorkspaceUserStatus defines the observed state of WorkspaceUser
-type WorkspaceUserStatus struct {
+// UserStatus defines the observed state of User
+type UserStatus struct {
 	ObservedStackdomeServerObjectGeneration int64 `json:"observedStackdomeServerObjectGeneration,omitempty"`
 	// Conditions is a list of status conditions this object is in.
 	Conditions          []metav1.Condition `json:"conditions,omitempty"`
@@ -40,24 +40,24 @@ type WorkspaceUserStatus struct {
 	ServiceAccountName  string             `json:"serviceAccountName,omitempty"`
 	ServiceAccountToken string             `json:"serviceAccountToken,omitempty"`
 	// +kubebuilder:default=Pending
-	Phase      WorkspaceUserPhase `json:"phase,omitempty"`
-	StatusHash string             `json:"statusHash,omitempty"`
+	Phase      UserPhase `json:"phase,omitempty"`
+	StatusHash string    `json:"statusHash,omitempty"`
 }
 
 //+kubebuilder:object:root=true
 //+kubebuilder:subresource:status
 //+kubebuilder:resource:scope=Cluster
 
-// WorkspaceUser is the Schema for the workspaceusers API
-type WorkspaceUser struct {
+// User is the Schema for the user API
+type User struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   WorkspaceUserSpec   `json:"spec,omitempty"`
-	Status WorkspaceUserStatus `json:"status,omitempty"`
+	Spec   UserSpec   `json:"spec,omitempty"`
+	Status UserStatus `json:"status,omitempty"`
 }
 
-func (user *WorkspaceUser) StatusHash() string {
+func (user *User) StatusHash() string {
 	hasher := fnv.New32a()
 	hasher.Reset()
 	printer := spew.ConfigState{
@@ -73,13 +73,13 @@ func (user *WorkspaceUser) StatusHash() string {
 
 //+kubebuilder:object:root=true
 
-// WorkspaceUserList contains a list of WorkspaceUser
-type WorkspaceUserList struct {
+// UserList contains a list of WorkspaceUser
+type UserList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []WorkspaceUser `json:"items"`
+	Items           []User `json:"items"`
 }
 
 func init() {
-	SchemeBuilder.Register(&WorkspaceUser{}, &WorkspaceUserList{})
+	SchemeBuilder.Register(&User{}, &UserList{})
 }
