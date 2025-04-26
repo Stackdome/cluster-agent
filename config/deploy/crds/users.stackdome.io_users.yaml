@@ -4,20 +4,20 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.3
-  name: workspaceusers.users.stackdome.io
+  name: users.users.stackdome.io
 spec:
   group: users.stackdome.io
   names:
-    kind: WorkspaceUser
-    listKind: WorkspaceUserList
-    plural: workspaceusers
-    singular: workspaceuser
+    kind: User
+    listKind: UserList
+    plural: users
+    singular: user
   scope: Cluster
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: WorkspaceUser is the Schema for the workspaceusers API
+        description: User is the Schema for the user API
         properties:
           apiVersion:
             description: |-
@@ -37,7 +37,7 @@ spec:
           metadata:
             type: object
           spec:
-            description: WorkspaceUserSpec defines the desired state of WorkspaceUser
+            description: UserSpec defines the desired state of User
             properties:
               accessRules:
                 items:
@@ -103,7 +103,7 @@ spec:
             - username
             type: object
           status:
-            description: WorkspaceUserStatus defines the observed state of WorkspaceUser
+            description: UserStatus defines the observed state of User
             properties:
               conditions:
                 description: Conditions is a list of status conditions this object

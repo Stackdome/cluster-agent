@@ -48,20 +48,72 @@ metadata:
   name: stackdome-operator
 rules:
 - apiGroups:
-  - workspace.soradev.io
+  - core.stackdome.io
   resources:
-  - workspaceapplicationbuilds
-  - workspaceapplicationbuilds/status
-  - workspaceconfigurations
-  - workspaceconfigurations/status
-  - workspaceresources
-  - workspaceresources/status
-  - workspaces
-  - workspaces/status
-  - workspacestorages
-  - workspacestorages/status
-  - workspacevolumes
-  - workspacevolumes/status
+  - stacks
+  - stacks/status
+  - stackresources
+  - stackresources/status
+  # TODO Add finalizers
+  verbs:
+  - get
+  - list
+  - watch
+  - update
+  - patch
+  - delete
+  - create
+- apiGroups:
+  - builds.stackdome.io
+  resources:
+  - imagebuilds
+  - imagebuilds/status
+  # TODO Add finalizers
+  verbs:
+  - get
+  - list
+  - watch
+  - update
+  - patch
+  - delete
+  - create
+- apiGroups:
+  - registry.stackdome.io
+  resources:
+  - clusterregistries
+  - clusterregistries/status
+  # TODO Add finalizers
+  verbs:
+  - get
+  - list
+  - watch
+  - update
+  - patch
+  - delete
+  - create
+- apiGroups:
+  - storage.stackdome.io
+  resources:
+  - nfsservers
+  - nfsservers/status
+  - storages
+  - storages/status
+  - volumes
+  - volumes/status
+  # TODO Add finalizers
+  verbs:
+  - get
+  - list
+  - watch
+  - update
+  - patch
+  - delete
+  - create
+- apiGroups:
+  - users.stackdome.io
+  resources:
+  - users
+  - users/status
   # TODO Add finalizers
   verbs:
   - get
@@ -97,6 +149,18 @@ rules:
   - apps
   resources:
   - deployments
+  - daemonsets
+  verbs:
+  - get
+  - watch
+  - update
+  - list
+  - patch
+  - create
+- apiGroups:
+  - storage.k8s.io
+  resources:
+  - storageclasses
   verbs:
   - get
   - watch
@@ -107,10 +171,12 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - pods
   - namespaces
   - secrets
   - services
   - persistentvolumeclaims
+  - persistentvolumes
   verbs:
   - create
   - get
@@ -119,6 +185,16 @@ rules:
   - update
   - patch
   - delete
+- apiGroups:
+  - ""
+  resources:
+  - pods/exec
+  - pods/log
+  verbs:
+  - create
+  - get
+  - list
+  - watch
 - apiGroups:
   - ""
   resources:
@@ -135,6 +211,7 @@ rules:
   resources:
   - roles
   - rolebindings
+  - clusterroles
   verbs:
   - get
   - create
@@ -147,8 +224,28 @@ rules:
   resources:
   - configmaps
   verbs:
+  - watch
+  - list
   - get
   - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - ""
+  resources:
+  - nodes
+  verbs:
+  - watch
+  - list
+  - get
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
   - update
 - apiGroups:
   - networking.k8s.io
@@ -162,12 +259,12 @@ rules:
   - get
   - list
   - patch
-- apiGroups:
-  - "*"
-  resources:
-  - "*"
-  verbs:
-  - "*"
+# - apiGroups:
+#   - "*"
+#   resources:
+#   - "*"
+#   verbs:
+#   - "*"
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

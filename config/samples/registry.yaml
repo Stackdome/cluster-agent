@@ -1,7 +1,7 @@
 apiVersion: registry.stackdome.io/v1alpha1
 kind: ClusterRegistry
 metadata:
-  name: cluster-registry-1
+  name: cluster-registry
 spec:
   owner:
     type: Organization
