@@ -49,10 +49,10 @@ func (r *VolumeReconciler) reconcileVolumeSource(ctx context.Context, volume *st
 
 // NOOP, Syncing local volume source is done from the client side.
 func (r *VolumeReconciler) reconcileLocalVolumeSource(ctx context.Context, volume *storagev1alpha1.Volume) (subReconcilerResult, error) {
-	if volume.Spec.Source.LocalDir == nil {
+	if volume.Spec.Source.RemoteDir == nil {
 		return resultNil, nil
 	}
-	localDirSrc := volume.Spec.Source.LocalDir
+	localDirSrc := volume.Spec.Source.RemoteDir
 
 	if len(localDirSrc.CurrentDirectoryHash) != 0 {
 		meta.SetStatusCondition(&volume.Status.Conditions, metav1.Condition{
