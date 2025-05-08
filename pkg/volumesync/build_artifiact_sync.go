@@ -38,7 +38,7 @@ func CreateBuildArtifactsVolumeSyncJob(
 	copyCommands := generateCopyCommands(volume, copySrcs)
 	job := batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s-volume-sync-%s", volume.Name, imageBuild.ShortBuildSrcHashFromStatus()),
+			Name:      fmt.Sprintf("%s-volume-sync-%s", volume.Name, imageBuild.ShortBuildSrcRevisionFromStatus()),
 			Namespace: imageBuild.Namespace,
 		},
 		Spec: batchv1.JobSpec{

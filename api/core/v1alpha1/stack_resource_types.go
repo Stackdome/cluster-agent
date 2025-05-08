@@ -9,6 +9,7 @@ import (
 	"github.com/davecgh/go-spew/spew"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/rand"
+	"stackdome.io/cluster-agent/api"
 	common "stackdome.io/cluster-agent/api"
 )
 
@@ -108,20 +109,111 @@ type VolumeMount struct {
 }
 
 type StackResourceBuildSpec struct {
-	// Source volume where the build context is present.
+	// Source context where the build context is present.
 	// +required
-	SourceVolumeName string `json:"sourceVolumeName"`
-	// Build Context within the source volume.
+	SourceContext BuildContextSource `json:"sourceContext"`
+	// Build Context within the context source.
 	// +required
 	BuildContext string `json:"buildContext"`
 	// Path to the docker file within the source volume.
 	// +required
 	DockerFilePath string `json:"dockerFilePath"`
+	// Current source revision for the build context.
 	// +required
-	BuildSourceHash string `json:"buildSourceHash"`
-	// Registry specification for pushing the built image
+	SourceRevision SourceRevisionSpec `json:"sourceRevision"`
+	// Registry specification for pushing the built image.
 	// +required
 	Registry RegistrySpec `json:"registry"`
+}
+
+// Current source revision for the build context.
+// Can be :
+// - git commit hash
+// - git branch name + sha of the branch head
+// - git tag name
+// - sha of the source directory (if using a synced volume)
+type SourceRevisionSpec struct {
+	// +optional
+	Volume *VolumeRevision `json:"volume,omitempty"`
+	// +optional
+	GitRepo *GitRepoRevision `json:"gitRepo,omitempty"`
+}
+
+func (s *SourceRevisionSpec) GetSourceRevisionString() string {
+	switch {
+	case s.Volume != nil:
+		return s.Volume.CurrentVolumeHash
+	case s.GitRepo != nil:
+		return s.GitRepo.GetGitRevisionString()
+	}
+	return ""
+}
+
+type VolumeRevision struct {
+	// Hash of the contents of the volume.
+	// +required
+	CurrentVolumeHash string `json:"currentVolumeHash"`
+}
+
+// Can be one of the following:
+// - git commit hash
+// - git branch name
+// - git tag name
+type GitRepoRevision struct {
+	// +optional
+	Branch *GitBranch `json:"branch"`
+	// +optional
+	Tag string `json:"tag"`
+	// +optional
+	Commit string `json:"commit"`
+}
+
+func (s *GitRepoRevision) GetGitRevisionString() string {
+	if s.Commit != "" {
+		return s.Commit
+	}
+	if s.Tag != "" {
+		return s.Tag
+	}
+	if s.Branch != nil {
+		return fmt.Sprintf("%s-%s", strings.ToLower(s.Branch.Name), strings.ToLower(s.Branch.HeadSha))
+	}
+	return ""
+}
+
+type BuildContextSource struct {
+	// +optional
+	Volume *VolumeSource `json:"volume"`
+	// +optional
+	Git *GitRepoSource `json:"git"`
+}
+
+type VolumeSource struct {
+	// +required
+	Name string `json:"name"`
+}
+
+type GitRepoSource struct {
+	// +required
+	RepoUrl string `json:"repoUrl"`
+	// +optional
+	Auth *GitAuth `json:"auth"`
+}
+
+type GitBranch struct {
+	// Name of the branch
+	// +required
+	Name string `json:"name"`
+	// Current commit hash of the branch head.
+	// default is head
+	// +kubebuilder:default=HEAD
+	// +required
+	HeadSha string `json:"HeadSha"`
+}
+
+type GitAuth struct {
+	UsernamePasswordAuthRef *api.CredentialSecretKeyPair `json:"usernamePasswordAuthRef,omitempty"`
+	PersonalAccessTokenRef  *api.CredentialSecretKeyPair `json:"personalAccessTokenRef,omitempty"`
 }
 
 type RegistrySpec struct {
@@ -178,13 +270,12 @@ type ExternalAddress struct {
 }
 
 type BuildStatus struct {
-	Name       string `json:"name,omitempty"`
-	SourceHash string `json:"sourceHash,omitempty"`
-	ShortHash  string `json:"shortHash,omitempty"`
-	Available  bool   `json:"available,omitempty"`
-	Reason     string `json:"reason,omitempty"`
-	Message    string `json:"message,omitempty"`
-	Phase      string `json:"phase,omitempty"`
+	Name           string `json:"name,omitempty"`
+	SourceRevision string `json:"sourceRevision,omitempty"`
+	Available      bool   `json:"available,omitempty"`
+	Reason         string `json:"reason,omitempty"`
+	Message        string `json:"message,omitempty"`
+	Phase          string `json:"phase,omitempty"`
 }
 
 // StackResourceStatus defines the observed state of StackResource
@@ -195,9 +286,9 @@ type StackResourceStatus struct {
 	// Conditions is a list of status conditions ths object is in.
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 	// +kubebuilder:default=Pending
-	Phase           StackResourcePhase `json:"phase,omitempty"`
-	ImageSourceHash string             `json:"imageSourceHash,omitempty"`
-	ExternalAddress []ExternalAddress  `json:"externalAddress,omitempty"`
+	Phase               StackResourcePhase `json:"phase,omitempty"`
+	ImageSourceRevision string             `json:"imageSourceRevision,omitempty"`
+	ExternalAddress     []ExternalAddress  `json:"externalAddress,omitempty"`
 	// Internal address is always the cluster wide resolvable internal domain name.
 	InternalAddress               *string      `json:"internalAddress,omitempty"`
 	LastRestartRequestProcessedAt *metav1.Time `json:"lastRestartRequestProcessedAt,omitempty"`

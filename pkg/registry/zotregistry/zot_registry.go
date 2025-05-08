@@ -104,11 +104,6 @@ func (z *zotRegistry) BuildConfigurationConfigMap(ctx context.Context, registry 
 			Compat:  []string{"docker2s2"},
 			Address: "0.0.0.0",
 			Port:    fmt.Sprintf("%d", registry.Spec.Port),
-			Auth: AuthConfig{
-				Htpasswd: HtpasswdConfig{
-					Path: z.opts.Auth.Htpasswd.Path,
-				},
-			},
 		},
 		Storage: StorageConfig{
 			RootDirectory: z.opts.StorageDirectory,
@@ -119,6 +114,14 @@ func (z *zotRegistry) BuildConfigurationConfigMap(ctx context.Context, registry 
 		Log: LogConfig{
 			Level: z.registryLogLevel,
 		},
+	}
+
+	if registry.Spec.Auth != nil && registry.Spec.Auth.HtPasswordCredentials != nil {
+		config.HTTP.Auth = AuthConfig{
+			Htpasswd: HtpasswdConfig{
+				Path: z.opts.Auth.Htpasswd.Path,
+			},
+		}
 	}
 
 	if registry.Spec.RetentionPolicy != nil {
@@ -229,7 +232,7 @@ func (z *zotRegistry) BuildDeployment(ctx context.Context, registry *registryv1a
 		},
 	}
 	deployment.SetGroupVersionKind(appsv1.SchemeGroupVersion.WithKind("Deployment"))
-	if registry.Spec.Auth.HtPasswordCredentials != nil {
+	if registry.Spec.Auth != nil && registry.Spec.Auth.HtPasswordCredentials != nil {
 		htpasswdSecret := &corev1.Secret{}
 		if err := z.opts.Client.Get(
 			ctx, client.ObjectKey{Name: registry.RegistryAuthSecretName(), Namespace: z.opts.Namespace}, htpasswdSecret,

@@ -120,7 +120,7 @@ func reportStackResourceNotReady(resource *v1alpha1.StackResource, reason, msg s
 func reportStackResourceReady(resource *v1alpha1.StackResource) {
 	resource.Status.ObservedGeneration = resource.Generation
 	if resource.Spec.BuildSpec != nil {
-		resource.Status.ImageSourceHash = resource.Spec.BuildSpec.BuildSourceHash
+		resource.Status.ImageSourceRevision = resource.Spec.BuildSpec.SourceRevision.GetSourceRevisionString()
 	}
 	resource.Status.Phase = v1alpha1.StackResourcePhaseReady
 	meta.SetStatusCondition(&resource.Status.Conditions, metav1.Condition{
@@ -141,7 +141,7 @@ func (r *StackResourceReconciler) getImageBuildStatus(ctx context.Context, resou
 	existingImageBuild := &buildsv1alpha1.ImageBuild{}
 	if err := r.Client.Get(ctx,
 		types.NamespacedName{
-			Name:      buildsv1alpha1.ImageBuildName(resource.Name, resource.Spec.BuildSpec.BuildSourceHash),
+			Name:      buildsv1alpha1.ImageBuildName(resource.Name, resource.Spec.BuildSpec.SourceRevision.GetSourceRevisionString()),
 			Namespace: resource.Namespace,
 		},
 		existingImageBuild,
@@ -153,10 +153,9 @@ func (r *StackResourceReconciler) getImageBuildStatus(ctx context.Context, resou
 	}
 
 	res := &v1alpha1.BuildStatus{
-		Name:       existingImageBuild.Name,
-		SourceHash: existingImageBuild.Spec.SourceHash,
-		ShortHash:  existingImageBuild.Spec.SourceHash[:7],
-		Phase:      string(existingImageBuild.Status.Phase),
+		Name:           existingImageBuild.Name,
+		SourceRevision: existingImageBuild.Status.BuildSourceRevision,
+		Phase:          string(existingImageBuild.Status.Phase),
 	}
 
 	availableCond := meta.FindStatusCondition(existingImageBuild.Status.Conditions, string(buildsv1alpha1.BuildAvailable))
@@ -226,6 +225,9 @@ func (r *StackResourceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &v1alpha1.StackResource{}, ownerKey, func(rawObj client.Object) []string {
 		sr := rawObj.(*v1alpha1.StackResource)
 		owner := metav1.GetControllerOf(sr)
+		if owner == nil {
+			return nil
+		}
 		return []string{owner.Name}
 	}); err != nil {
 		return err

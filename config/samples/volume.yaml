@@ -1,0 +1,14 @@
+apiVersion: storage.stackdome.io/v1alpha1
+kind: Volume
+metadata:
+  name: infisical-source
+spec:
+  size: "1Gi"
+  accessMode: ReadWriteOnce
+  needsSyncBeforeUse: true
+  source:
+    gitRepo:
+      repoUrl: "https://github.com/Infisical/infisical.git"
+      revision:
+        branch:
+          name: main

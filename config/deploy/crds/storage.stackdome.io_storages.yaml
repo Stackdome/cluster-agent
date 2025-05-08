@@ -99,14 +99,102 @@ spec:
                             - sourcePath
                             type: object
                           type: array
+                        gitRepo:
+                          properties:
+                            auth:
+                              properties:
+                                personalAccessTokenRef:
+                                  description: CredentialSecretKeyPair selects username
+                                    and password keys from a Secret
+                                  properties:
+                                    passwordKey:
+                                      description: PasswordKey is the key in the secret
+                                        for the password
+                                      type: string
+                                    secretName:
+                                      description: Secret is the name of the secret
+                                      type: string
+                                    secretNamespace:
+                                      type: string
+                                    usernameKey:
+                                      description: UsernameKey is the key in the secret
+                                        for the username
+                                      type: string
+                                  required:
+                                  - passwordKey
+                                  - secretName
+                                  - secretNamespace
+                                  - usernameKey
+                                  type: object
+                                usernamePasswordAuthRef:
+                                  description: CredentialSecretKeyPair selects username
+                                    and password keys from a Secret
+                                  properties:
+                                    passwordKey:
+                                      description: PasswordKey is the key in the secret
+                                        for the password
+                                      type: string
+                                    secretName:
+                                      description: Secret is the name of the secret
+                                      type: string
+                                    secretNamespace:
+                                      type: string
+                                    usernameKey:
+                                      description: UsernameKey is the key in the secret
+                                        for the username
+                                      type: string
+                                  required:
+                                  - passwordKey
+                                  - secretName
+                                  - secretNamespace
+                                  - usernameKey
+                                  type: object
+                              type: object
+                            repoUrl:
+                              type: string
+                            revision:
+                              description: |-
+                                Can be one of the following:
+                                - git commit hash
+                                - git branch name
+                                - git tag name
+                              properties:
+                                branch:
+                                  properties:
+                                    HeadSha:
+                                      default: HEAD
+                                      description: |-
+                                        Current commit hash of the branch head.
+                                        default is head
+                                      type: string
+                                    name:
+                                      description: Name of the branch
+                                      type: string
+                                  required:
+                                  - HeadSha
+                                  - name
+                                  type: object
+                                commit:
+                                  type: string
+                                tag:
+                                  type: string
+                              type: object
+                          required:
+                          - repoUrl
+                          type: object
                         localDir:
                           properties:
-                            continousSync:
-                              type: boolean
+                            currentDirectoryHash:
+                              description: We use this to track the current state
+                                of the directory
+                              minLength: 1
+                              type: string
                             path:
+                              description: Path within the client where the directory
+                                to be synced is located.
                               type: string
                           required:
-                          - continousSync
+                          - currentDirectoryHash
                           - path
                           type: object
                       type: object

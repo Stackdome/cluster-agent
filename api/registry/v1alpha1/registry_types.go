@@ -86,8 +86,8 @@ type ClusterRegistrySpec struct {
 	Storage RegistryStorageSpec `json:"storage"`
 
 	// Authentication configuration
-	// +kubebuilder:validation:Required
-	Auth RegistryAuthSpec `json:"auth"`
+	// +optional
+	Auth *RegistryAuthSpec `json:"auth"`
 
 	// Retention policies for the registry
 	// +optional

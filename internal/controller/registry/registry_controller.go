@@ -421,6 +421,9 @@ func (r *RegistryReconciler) reconcileRegistryStorage(ctx context.Context, regis
 
 // Reconcile authentications for the registry
 func (r *RegistryReconciler) reconcileRegistryAuth(ctx context.Context, registry *registryv1alpha1.ClusterRegistry) (subReconcilerResult, error) {
+	if registry.Spec.Auth == nil {
+		return resultNil, nil
+	}
 	if registry.Spec.Auth.HtPasswordCredentials != nil {
 		return r.reconcileHtPasswordAuthSecret(ctx, registry)
 	}

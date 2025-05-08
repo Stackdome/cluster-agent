@@ -78,6 +78,7 @@ spec:
                         required:
                         - passwordKey
                         - secretName
+                        - secretNamespace
                         - usernameKey
                         type: object
                     required:
@@ -140,7 +141,6 @@ spec:
                 - size
                 type: object
             required:
-            - auth
             - owner
             - port
             - storage

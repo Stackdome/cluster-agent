@@ -59,6 +59,7 @@ func (r *imageBuildReconciler) reconcile(ctx context.Context, resource *v1alpha1
 // createImageBuild creates a new ImageBuild resource for a WorkspaceResource
 func (r *imageBuildReconciler) createImageBuild(ctx context.Context, resource *v1alpha1.StackResource) (subReconcilerResult, error) {
 	buildSpec := resource.Spec.BuildSpec
+
 	imageBuild := &buildsv1alpha1.ImageBuild{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        generateImageBuildName(resource),
@@ -67,12 +68,12 @@ func (r *imageBuildReconciler) createImageBuild(ctx context.Context, resource *v
 			Annotations: createImageBuildAnnotations(resource),
 		},
 		Spec: buildsv1alpha1.ImageBuildSpec{
-			ResourceName: resource.Name,
-			SourceHash:   buildSpec.BuildSourceHash,
-			ContextRef: buildsv1alpha1.ContextRef{
-				VolumeName:     buildSpec.SourceVolumeName,
+			ResourceName:   resource.Name,
+			SourceRevision: buildSpec.SourceRevision,
+			BuildContext: buildsv1alpha1.BuildContextSpec{
 				DockerfilePath: buildSpec.DockerFilePath,
-				Context:        buildSpec.BuildContext,
+				ContextPath:    buildSpec.BuildContext,
+				ContextSource:  buildSpec.SourceContext.DeepCopy(),
 			},
 			RegistryURL:      buildSpec.Registry.RepositoryURL,
 			InsecureRegistry: buildSpec.Registry.Insecure,
@@ -129,7 +130,7 @@ func (r *imageBuildReconciler) configureRegistryAuth(resource *v1alpha1.StackRes
 
 // generateImageBuildName creates a unique name for the ImageBuild resource
 func generateImageBuildName(resource *v1alpha1.StackResource) string {
-	return buildsv1alpha1.ImageBuildName(resource.Name, resource.Spec.BuildSpec.BuildSourceHash)
+	return buildsv1alpha1.ImageBuildName(resource.Name, resource.Spec.BuildSpec.SourceRevision.GetSourceRevisionString())
 }
 
 // createImageBuildLabels creates labels for the ImageBuild resource

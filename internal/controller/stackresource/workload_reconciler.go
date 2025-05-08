@@ -52,7 +52,7 @@ func (r *workloadReconciler) getImageBuild(ctx context.Context, resource *v1alph
 	existingApplicationBuild := &buildsv1alpha1.ImageBuild{}
 	if err := r.Client.Get(ctx,
 		types.NamespacedName{
-			Name:      buildsv1alpha1.ImageBuildName(resource.Name, resource.Spec.BuildSpec.BuildSourceHash),
+			Name:      buildsv1alpha1.ImageBuildName(resource.Name, resource.Spec.BuildSpec.SourceRevision.GetSourceRevisionString()),
 			Namespace: resource.Namespace,
 		},
 		existingApplicationBuild,
@@ -412,7 +412,7 @@ func (r *workloadReconciler) GetSiblings(ctx context.Context, resource *v1alpha1
 	wrList := &v1alpha1.StackResourceList{}
 	workspaceRef := metav1.GetControllerOf(resource)
 	if workspaceRef == nil {
-		return nil, fmt.Errorf("missing owner ref for workspace resource")
+		return nil, nil
 	}
 	if err := r.Client.List(ctx, wrList, client.InNamespace(resource.Namespace), client.MatchingFields{
 		ownerKey: workspaceRef.Name,
