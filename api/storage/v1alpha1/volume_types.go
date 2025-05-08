@@ -53,7 +53,7 @@ type VolumeSpec struct {
 
 type VolumeSource struct {
 	// +optional
-	LocalDir *LocalDirSource `json:"localDir,omitempty"`
+	RemoteDir *RemoteDirSource `json:"remoteDir,omitempty"`
 	// +optional
 	BuildArtifacts []BuildArtifactSource `json:"buildArtifacts,omitempty"`
 	// +optional
@@ -65,6 +65,10 @@ type GitRepoSource struct {
 	RepoUrl string `json:"repoUrl"`
 	// +optional
 	Revision corev1alpha1.GitRepoRevision `json:"revision,omitempty"`
+	// Destination within the volume where the git repo should be synced
+	// +required
+	// +kubebuilder:default=repo
+	DestinationWithinVolume string `json:"destinationWithinVolume"`
 	// +optional
 	Auth *GitAuth `json:"auth"`
 }
@@ -79,7 +83,7 @@ type GitBranch struct {
 	Name string `json:"name"`
 }
 
-type LocalDirSource struct {
+type RemoteDirSource struct {
 	// Path within the client where the directory to be synced is located.
 	// +required
 	Path string `json:"path"`
@@ -190,8 +194,8 @@ type VolumeList struct {
 }
 
 func (w *Volume) MarkAsSynced(clientDirectoryHash string) {
-	if w.Spec.Source != nil && w.Spec.Source.LocalDir != nil {
-		w.Spec.Source.LocalDir.CurrentDirectoryHash = clientDirectoryHash
+	if w.Spec.Source != nil && w.Spec.Source.RemoteDir != nil {
+		w.Spec.Source.RemoteDir.CurrentDirectoryHash = clientDirectoryHash
 	}
 }
 

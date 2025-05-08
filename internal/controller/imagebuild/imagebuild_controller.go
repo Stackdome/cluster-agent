@@ -306,13 +306,13 @@ func volumeReadyForBuild(volume *storagev1alpha1.Volume, imageBuild *buildsv1alp
 		return false
 	}
 
-	if volumeSource.LocalDir != nil {
+	if volumeSource.RemoteDir != nil {
 		cond := meta.FindStatusCondition(volume.Status.Conditions, string(storagev1alpha1.VolumeConditionSyncedFromRemote))
 		if cond == nil || cond.Status == metav1.ConditionFalse || cond.ObservedGeneration != volume.Generation {
 			return false
 		}
 		// Check if the local directory hash matches the image build source revision
-		return volumeSource.LocalDir.CurrentDirectoryHash == imageBuild.Spec.SourceRevision.GetSourceRevisionString()
+		return volumeSource.RemoteDir.CurrentDirectoryHash == imageBuild.Spec.SourceRevision.GetSourceRevisionString()
 	} else if volumeSource.GitRepo != nil {
 		cond := meta.FindStatusCondition(volume.Status.Conditions, string(storagev1alpha1.VolumeConditionSyncedFromGitSource))
 		if cond == nil || cond.Status == metav1.ConditionFalse || cond.ObservedGeneration != volume.Generation {

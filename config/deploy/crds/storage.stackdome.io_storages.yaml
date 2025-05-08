@@ -150,6 +150,11 @@ spec:
                                   - usernameKey
                                   type: object
                               type: object
+                            destinationWithinVolume:
+                              default: repo
+                              description: Destination within the volume where the
+                                git repo should be synced
+                              type: string
                             repoUrl:
                               type: string
                             revision:
@@ -180,9 +185,10 @@ spec:
                                   type: string
                               type: object
                           required:
+                          - destinationWithinVolume
                           - repoUrl
                           type: object
-                        localDir:
+                        remoteDir:
                           properties:
                             currentDirectoryHash:
                               description: We use this to track the current state

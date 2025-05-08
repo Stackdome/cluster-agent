@@ -63,7 +63,7 @@ func (w *workloadDependencyChecker) isVolumeReady(volume *storagev1alpha1.Volume
 	switch {
 	case volume.Spec.Source == nil:
 		return true, ""
-	case volume.Spec.Source.LocalDir != nil:
+	case volume.Spec.Source.RemoteDir != nil:
 		if !localDirSyncedToVolume(volume) {
 			return false, "Local directory not yet synced to volume"
 		}
@@ -90,7 +90,7 @@ func localDirSyncedToVolume(volume *storagev1alpha1.Volume) bool {
 		syncedStatusCondition.Status == metav1.ConditionTrue &&
 		volume.Status.ObservedGeneration == volume.Generation
 
-	syncedHashesMatch := volume.Status.LastRemoteSyncHash == volume.Spec.Source.LocalDir.CurrentDirectoryHash
+	syncedHashesMatch := volume.Status.LastRemoteSyncHash == volume.Spec.Source.RemoteDir.CurrentDirectoryHash
 	return conditionSatisfied && syncedHashesMatch
 }
 
