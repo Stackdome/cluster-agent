@@ -51,10 +51,27 @@ func (r *ImageBuildReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 func (r *ImageBuildReconciler) reconcile(ctx context.Context, buildConfig *buildsv1alpha1.ImageBuild) (ctrl.Result, error) {
 	logger := controller.LoggerFromContext(ctx)
 	logger.Info("reconciling image build")
-	volumeRef := &storagev1alpha1.Volume{}
+	switch {
+	case buildConfig.Spec.BuildContext.ContextSource.Git != nil:
+		return r.reconcileImageBuildWithGitSource(ctx, buildConfig)
+	case buildConfig.Spec.BuildContext.ContextSource.Volume != nil:
+		return r.reconcileImageBuildWithVolumeSource(ctx, buildConfig)
+	default:
+		logger.Info("no context source specified for image build")
+		return ctrl.Result{}, fmt.Errorf("no context source specified for image build")
+	}
+}
 
+func (r *ImageBuildReconciler) reconcileImageBuildWithVolumeSource(ctx context.Context, buildConfig *buildsv1alpha1.ImageBuild) (ctrl.Result, error) {
+	if buildConfig.Spec.BuildContext.ContextSource.Volume == nil {
+		return ctrl.Result{}, fmt.Errorf("no volume source specified for image build")
+	}
+	logger := controller.LoggerFromContext(ctx)
+	logger.Info("reconciling image build with volume source")
+
+	volumeRef := &storagev1alpha1.Volume{}
 	if err := r.Client.Get(ctx, types.NamespacedName{
-		Name:      buildConfig.Spec.ContextRef.VolumeName,
+		Name:      buildConfig.Spec.BuildContext.ContextSource.Volume.Name,
 		Namespace: buildConfig.Namespace,
 	}, volumeRef); err != nil {
 		return ctrl.Result{}, err
@@ -65,12 +82,12 @@ func (r *ImageBuildReconciler) reconcile(ctx context.Context, buildConfig *build
 			buildConfig,
 			buildsv1alpha1.BuildAvailable,
 			metav1.ConditionFalse,
-			"WorkspaceStorageNotReady",
+			"VolumeNotReady",
 		)
 		return ctrl.Result{Requeue: true}, nil
 	}
 
-	if !volumeReadyForBuild(volumeRef) {
+	if !volumeReadyForBuild(volumeRef, buildConfig) {
 		reportImageBuildStatus(
 			buildConfig,
 			buildsv1alpha1.BuildAvailable,
@@ -80,33 +97,41 @@ func (r *ImageBuildReconciler) reconcile(ctx context.Context, buildConfig *build
 		return ctrl.Result{Requeue: true}, nil
 	}
 
-	jobConfig := imagebuilder.BuildParams{
-		JobName:        fmt.Sprintf("%s-build", buildConfig.Name),
-		Namespace:      buildConfig.Namespace,
-		PVCName:        volumeRef.Status.PvcName,
-		Context:        buildConfig.Spec.ContextRef.Context,
-		DockerfilePath: buildConfig.Spec.ContextRef.DockerfilePath,
-		RegistryURL:    buildConfig.Spec.RegistryURL,
-		ImageName:      buildConfig.Spec.ResourceName,
-		Tag:            buildConfig.Spec.SourceHash,
-		Insecure:       buildConfig.Spec.InsecureRegistry,
-	}
-
-	if err := r.configureAuth(ctx, buildConfig, &jobConfig); err != nil {
+	dockerSecret, dockerSecretKey, err := r.getRegistryAuthSecrets(ctx, buildConfig, nil)
+	if err != nil {
 		return ctrl.Result{}, err
 	}
 
-	desiredImageBuilderJob, err := imagebuilder.GenerateImageBuildJob(jobConfig)
+	jobName := fmt.Sprintf("%s-build", buildConfig.Name)
+	buildSource := &imagebuilder.Source{
+		Volume: &imagebuilder.VolumeSource{
+			PvcName: volumeRef.Status.PvcName,
+			// If the volume is synced from a git repo, we need to set the git repo path.
+			// For non git synced volumes, this will be empty.
+			GitRepoPath: volumeRef.Status.GitRepoSyncedPathWithinVolume,
+		},
+	}
+
+	imageBuilderParams := imagebuilder.
+		NewBuildParamsBuilder().
+		WithJobName(jobName).
+		WithNamespace(buildConfig.Namespace).
+		WithRegistryURL(buildConfig.Spec.RegistryURL).
+		WithImageName(buildConfig.Spec.ResourceName).
+		WithTag(buildConfig.Spec.SourceRevision.GetSourceRevisionString()).
+		WithInsecureRegistry(buildConfig.Spec.InsecureRegistry).
+		WithDockerfilePath(buildConfig.Spec.BuildContext.DockerfilePath).
+		WithContextPath(buildConfig.Spec.BuildContext.ContextPath).
+		WithSource(buildSource).
+		WithDockerAuth(dockerSecret, dockerSecretKey).
+		Build()
+
+	desiredImageBuilderJob, err := imagebuilder.GenerateImageBuildJob(imageBuilderParams)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 	if err := controllerutil.SetControllerReference(buildConfig, desiredImageBuilderJob, r.Scheme); err != nil {
 		return ctrl.Result{}, err
-	}
-
-	buildCompletedCondition := meta.FindStatusCondition(buildConfig.Status.Conditions, string(buildsv1alpha1.BuildAvailable))
-	if buildCompletedCondition != nil && buildCompletedCondition.Status == metav1.ConditionTrue {
-		return ctrl.Result{}, nil
 	}
 
 	existingJob := &batchv1.Job{}
@@ -123,14 +148,14 @@ func (r *ImageBuildReconciler) reconcile(ctx context.Context, buildConfig *build
 		}
 		return ctrl.Result{}, err
 	}
-	JobCompletedCondition := findJobCondition(existingJob, batchv1.JobComplete)
-	JobFailedCondition := findJobCondition(existingJob, batchv1.JobFailed)
-	if JobCompletedCondition != nil && JobCompletedCondition.Status == v1.ConditionStatus(metav1.ConditionTrue) {
-		buildConfig.Status.ImageUrl = jobConfig.ImageUrl()
+	jobCompletedCondition := findJobCondition(existingJob, batchv1.JobComplete)
+	jobFailedCondition := findJobCondition(existingJob, batchv1.JobFailed)
+	if jobCompletedCondition != nil && jobCompletedCondition.Status == v1.ConditionStatus(metav1.ConditionTrue) {
+		buildConfig.Status.ImageUrl = imageBuilderParams.ImageUrl()
 		reportImageBuildComplete(buildConfig)
-		return ctrl.Result{}, nil
 	}
-	if JobFailedCondition != nil && JobFailedCondition.Status == v1.ConditionStatus(metav1.ConditionTrue) {
+
+	if jobFailedCondition != nil && jobFailedCondition.Status == v1.ConditionStatus(metav1.ConditionTrue) {
 		reportImageBuildStatus(buildConfig, buildsv1alpha1.BuildFailed, metav1.ConditionTrue, "BuildJobFailed")
 		return ctrl.Result{}, nil
 	}
@@ -139,9 +164,82 @@ func (r *ImageBuildReconciler) reconcile(ctx context.Context, buildConfig *build
 	return ctrl.Result{}, nil
 }
 
-func (r *ImageBuildReconciler) configureAuth(ctx context.Context, buildConfig *buildsv1alpha1.ImageBuild, jobConfig *imagebuilder.BuildParams) error {
+func (r *ImageBuildReconciler) reconcileImageBuildWithGitSource(ctx context.Context, buildConfig *buildsv1alpha1.ImageBuild) (ctrl.Result, error) {
+	if buildConfig.Spec.BuildContext.ContextSource.Git == nil {
+		return ctrl.Result{}, fmt.Errorf("no git source specified for image build")
+	}
+	logger := controller.LoggerFromContext(ctx)
+	logger.Info("reconciling image build with git source")
+
+	dockerSecret, dockerSecretKey, err := r.getRegistryAuthSecrets(ctx, buildConfig, nil)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	jobName := fmt.Sprintf("%s-build", buildConfig.Name)
+	buildSource := &imagebuilder.Source{
+		GitRepo: &imagebuilder.GitRepoBuildSource{
+			Repo:     buildConfig.Spec.BuildContext.ContextSource.Git.DeepCopy(),
+			Revision: buildConfig.Spec.SourceRevision.GitRepo.DeepCopy(),
+		},
+	}
+
+	imageBuilderParams := imagebuilder.
+		NewBuildParamsBuilder().
+		WithJobName(jobName).
+		WithNamespace(buildConfig.Namespace).
+		WithRegistryURL(buildConfig.Spec.RegistryURL).
+		WithImageName(buildConfig.Spec.ResourceName).
+		WithTag(buildConfig.Spec.SourceRevision.GetSourceRevisionString()).
+		WithInsecureRegistry(buildConfig.Spec.InsecureRegistry).
+		WithDockerfilePath(buildConfig.Spec.BuildContext.DockerfilePath).
+		WithContextPath(buildConfig.Spec.BuildContext.ContextPath).
+		WithSource(buildSource).
+		WithDockerAuth(dockerSecret, dockerSecretKey).
+		Build()
+
+	desiredImageBuilderJob, err := imagebuilder.GenerateImageBuildJob(imageBuilderParams)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := controllerutil.SetControllerReference(buildConfig, desiredImageBuilderJob, r.Scheme); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	existingJob := &batchv1.Job{}
+	if err := r.Client.Get(
+		ctx,
+		types.NamespacedName{
+			Name:      desiredImageBuilderJob.Name,
+			Namespace: desiredImageBuilderJob.Namespace,
+		},
+		existingJob,
+	); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ctrl.Result{}, r.handleBuildJobCreation(ctx, desiredImageBuilderJob, buildConfig)
+		}
+		return ctrl.Result{}, err
+	}
+	jobCompletedCondition := findJobCondition(existingJob, batchv1.JobComplete)
+	jobFailedCondition := findJobCondition(existingJob, batchv1.JobFailed)
+	if jobCompletedCondition != nil && jobCompletedCondition.Status == v1.ConditionStatus(metav1.ConditionTrue) {
+		buildConfig.Status.ImageUrl = imageBuilderParams.ImageUrl()
+		reportImageBuildComplete(buildConfig)
+		return ctrl.Result{}, nil
+	}
+
+	if jobFailedCondition != nil && jobFailedCondition.Status == v1.ConditionStatus(metav1.ConditionTrue) {
+		reportImageBuildStatus(buildConfig, buildsv1alpha1.BuildFailed, metav1.ConditionTrue, "BuildJobFailed")
+		return ctrl.Result{}, nil
+	}
+
+	reportImageBuildStatus(buildConfig, buildsv1alpha1.BuildAvailable, metav1.ConditionFalse, "BuildJobNotYetComplete")
+	return ctrl.Result{}, nil
+}
+
+func (r *ImageBuildReconciler) getRegistryAuthSecrets(ctx context.Context, buildConfig *buildsv1alpha1.ImageBuild, jobConfig *imagebuilder.BuildParams) (*v1.Secret, string, error) {
 	if buildConfig.Spec.Auth == nil {
-		return nil
+		return nil, "", nil
 	}
 
 	auth := buildConfig.Spec.Auth
@@ -149,13 +247,11 @@ func (r *ImageBuildReconciler) configureAuth(ctx context.Context, buildConfig *b
 	case stackv1alpha1.RegistryAuthTypeDockerHub, stackv1alpha1.RegistryAuthTypeInClusterZotRegistry:
 		dockerConfigSecret, err := r.getDockerConfigSecret(ctx, auth.DockerAuthSecretRef)
 		if err != nil {
-			return err
+			return nil, "", err
 		}
-		jobConfig.DockerConfigSecret = dockerConfigSecret
-		jobConfig.DockerConfigSecretKey = auth.DockerAuthSecretRef.AuthKey
-		return nil
+		return dockerConfigSecret, auth.DockerAuthSecretRef.AuthKey, nil
 	default:
-		return fmt.Errorf("unsupported registry auth type: %s", auth.Type)
+		return nil, "", fmt.Errorf("unsupported registry auth type: %s", auth.Type)
 	}
 }
 
@@ -177,7 +273,7 @@ func (r *ImageBuildReconciler) handleBuildJobCreation(ctx context.Context, desir
 	if err := r.Client.Create(ctx, desiredJob); err != nil {
 		return err
 	}
-	buildConfig.Status.BuildSourceHash = buildConfig.Spec.SourceHash
+	buildConfig.Status.BuildSourceRevision = buildConfig.Spec.SourceRevision.GetSourceRevisionString()
 	meta.SetStatusCondition(&buildConfig.Status.Conditions, metav1.Condition{
 		Type:    string(buildsv1alpha1.BuildJobCreated),
 		Status:  metav1.ConditionTrue,
@@ -204,12 +300,28 @@ func volumeAvailable(volume *storagev1alpha1.Volume) bool {
 	return true
 }
 
-func volumeReadyForBuild(volume *storagev1alpha1.Volume) bool {
-	cond := meta.FindStatusCondition(volume.Status.Conditions, string(storagev1alpha1.VolumeConditionSyncedOnce))
-	if cond == nil || cond.Status == metav1.ConditionFalse {
+func volumeReadyForBuild(volume *storagev1alpha1.Volume, imageBuild *buildsv1alpha1.ImageBuild) bool {
+	volumeSource := volume.Spec.Source
+	if volumeSource == nil {
 		return false
 	}
-	return true
+
+	if volumeSource.LocalDir != nil {
+		cond := meta.FindStatusCondition(volume.Status.Conditions, string(storagev1alpha1.VolumeConditionSyncedFromRemote))
+		if cond == nil || cond.Status == metav1.ConditionFalse || cond.ObservedGeneration != volume.Generation {
+			return false
+		}
+		// Check if the local directory hash matches the image build source revision
+		return volumeSource.LocalDir.CurrentDirectoryHash == imageBuild.Spec.SourceRevision.GetSourceRevisionString()
+	} else if volumeSource.GitRepo != nil {
+		cond := meta.FindStatusCondition(volume.Status.Conditions, string(storagev1alpha1.VolumeConditionSyncedFromGitSource))
+		if cond == nil || cond.Status == metav1.ConditionFalse || cond.ObservedGeneration != volume.Generation {
+			return false
+		}
+		// Check if the git reference matches the image build source revision
+		return volumeSource.GitRepo.Revision.GetGitRevisionString() == imageBuild.Spec.SourceRevision.GetSourceRevisionString()
+	}
+	return false
 }
 
 func reportImageBuildStatus(
@@ -219,7 +331,7 @@ func reportImageBuildStatus(
 	reason string,
 ) {
 	buildConfig.Status.ObservedGeneration = buildConfig.Generation
-	buildConfig.Status.BuildSourceHash = buildConfig.Spec.SourceHash
+	buildConfig.Status.BuildSourceRevision = buildConfig.Spec.SourceRevision.GetSourceRevisionString()
 	meta.SetStatusCondition(&buildConfig.Status.Conditions, metav1.Condition{
 		Type:               string(condition),
 		Status:             value,
@@ -232,7 +344,7 @@ func reportImageBuildStatus(
 
 func reportImageBuildComplete(buildConfig *buildsv1alpha1.ImageBuild) {
 	buildConfig.Status.Phase = buildsv1alpha1.BuildPhaseSuccess
-	buildConfig.Status.BuildSourceHash = buildConfig.Spec.SourceHash
+	buildConfig.Status.BuildSourceRevision = buildConfig.Spec.SourceRevision.GetSourceRevisionString()
 	meta.SetStatusCondition(&buildConfig.Status.Conditions, metav1.Condition{
 		Type:               string(buildsv1alpha1.BuildAvailable),
 		Status:             metav1.ConditionTrue,

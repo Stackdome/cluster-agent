@@ -3,9 +3,10 @@ package v1alpha1
 import (
 	"fmt"
 	"hash/fnv"
-	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"stackdome.io/cluster-agent/api"
+	corev1alpha1 "stackdome.io/cluster-agent/api/core/v1alpha1"
 
 	"github.com/davecgh/go-spew/spew"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -22,8 +23,9 @@ const (
 type VolumeCondition string
 
 const (
-	VolumeConditionAvailable  VolumeCondition = "Available"
-	VolumeConditionSyncedOnce VolumeCondition = "SyncedOnce"
+	VolumeConditionAvailable           VolumeCondition = "Available"
+	VolumeConditionSyncedFromRemote    VolumeCondition = "SyncedFromRemote"
+	VolumeConditionSyncedFromGitSource VolumeCondition = "VolumeSyncedFromGitSource"
 )
 
 const (
@@ -52,14 +54,39 @@ type VolumeSpec struct {
 type VolumeSource struct {
 	// +optional
 	LocalDir *LocalDirSource `json:"localDir,omitempty"`
-
 	// +optional
 	BuildArtifacts []BuildArtifactSource `json:"buildArtifacts,omitempty"`
+	// +optional
+	GitRepo *GitRepoSource `json:"gitRepo,omitempty"`
+}
+
+type GitRepoSource struct {
+	// +required
+	RepoUrl string `json:"repoUrl"`
+	// +optional
+	Revision corev1alpha1.GitRepoRevision `json:"revision,omitempty"`
+	// +optional
+	Auth *GitAuth `json:"auth"`
+}
+
+type GitAuth struct {
+	UsernamePasswordAuthRef *api.CredentialSecretKeyPair `json:"usernamePasswordAuthRef,omitempty"`
+	PersonalAccessTokenRef  *api.CredentialSecretKeyPair `json:"personalAccessTokenRef,omitempty"`
+}
+
+type GitBranch struct {
+	// +required
+	Name string `json:"name"`
 }
 
 type LocalDirSource struct {
-	Path          string `json:"path"`
-	ContinousSync bool   `json:"continousSync"`
+	// Path within the client where the directory to be synced is located.
+	// +required
+	Path string `json:"path"`
+	// We use this to track the current state of the directory
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	CurrentDirectoryHash string `json:"currentDirectoryHash,omitempty"`
 }
 
 // BuildArtifactSource defines how to copy artifacts from a application built to a volume
@@ -91,11 +118,26 @@ type VolumeStatus struct {
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 	PvcName    string             `json:"pvcName"`
 	// +kubebuilder:default=Pending
-	Phase        VolumePhase  `json:"phase,omitempty"`
-	LastSyncedAt *metav1.Time `json:"LastSyncedAt,omitempty"`
-	// +optional
+	Phase VolumePhase `json:"phase,omitempty"`
+	// +optional      //map(resourceRef => BuildArtifactSyncInfo)
 	BuildArtifactSyncs map[string]BuildArtifactSyncInfo `json:"buildArtifactSyncs,omitempty"`
-	StatusHash         string                           `json:"statusHash,omitempty"`
+	// Used to track the status of the volume. This is a hash of the entire status block.
+	// This is used by the stackdome api server to determine if the status has changed since
+	// it last observed it.
+	StatusHash string `json:"statusHash,omitempty"`
+	// Can be
+	// - a commit hash
+	// - a branch name
+	// - a tag name
+	// +optional
+	LastSyncedGitReference string `json:"lastSyncedGitReference,omitempty"`
+	// Tracks the last time the volume was synced from a remote g.
+	// +optional
+	LastRemoteSyncHash string `json:"lastRemoteSyncHash,omitempty"`
+
+	// +optional
+	// The path within the volume where the git repo was synced to.
+	GitRepoSyncedPathWithinVolume string `json:"gitRepoSyncedPathWithinVolume,omitempty"`
 }
 
 func (w *Volume) StatusHash() string {
@@ -147,14 +189,23 @@ type VolumeList struct {
 	Items           []Volume `json:"items"`
 }
 
-func (w *Volume) MarkAsSynced() {
-	if w.Annotations == nil {
-		w.Annotations = map[string]string{}
+func (w *Volume) MarkAsSynced(clientDirectoryHash string) {
+	if w.Spec.Source != nil && w.Spec.Source.LocalDir != nil {
+		w.Spec.Source.LocalDir.CurrentDirectoryHash = clientDirectoryHash
 	}
-	w.Annotations[LastSyncedAtAnnotation] = metav1.NewTime(time.Now().UTC()).String()
 }
 
 func (s *VolumeStatus) SetBuildArtifactSyncStatus(stackResourceRef StackResourceReference, buildID string, status BuildArtifactSyncStatus) {
+	if s.BuildArtifactSyncs == nil {
+		s.BuildArtifactSyncs = map[string]BuildArtifactSyncInfo{}
+	}
+	s.BuildArtifactSyncs[stackResourceRef.Name] = BuildArtifactSyncInfo{
+		BuildID: buildID,
+		Status:  status,
+	}
+}
+
+func (s *VolumeStatus) SetGitSourceSyncStatus(stackResourceRef StackResourceReference, buildID string, status BuildArtifactSyncStatus) {
 	if s.BuildArtifactSyncs == nil {
 		s.BuildArtifactSyncs = map[string]BuildArtifactSyncInfo{}
 	}

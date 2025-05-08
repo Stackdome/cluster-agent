@@ -76,19 +76,89 @@ spec:
                 required:
                 - type
                 type: object
-              contextRef:
+              buildContext:
                 description: Build context.
                 properties:
-                  context:
+                  contextPath:
+                    default: /
+                    description: |-
+                      Build Context path within the context source
+                      Defaults to /
                     type: string
+                  contextSource:
+                    properties:
+                      git:
+                        properties:
+                          auth:
+                            properties:
+                              personalAccessTokenRef:
+                                description: CredentialSecretKeyPair selects username
+                                  and password keys from a Secret
+                                properties:
+                                  passwordKey:
+                                    description: PasswordKey is the key in the secret
+                                      for the password
+                                    type: string
+                                  secretName:
+                                    description: Secret is the name of the secret
+                                    type: string
+                                  secretNamespace:
+                                    type: string
+                                  usernameKey:
+                                    description: UsernameKey is the key in the secret
+                                      for the username
+                                    type: string
+                                required:
+                                - passwordKey
+                                - secretName
+                                - secretNamespace
+                                - usernameKey
+                                type: object
+                              usernamePasswordAuthRef:
+                                description: CredentialSecretKeyPair selects username
+                                  and password keys from a Secret
+                                properties:
+                                  passwordKey:
+                                    description: PasswordKey is the key in the secret
+                                      for the password
+                                    type: string
+                                  secretName:
+                                    description: Secret is the name of the secret
+                                    type: string
+                                  secretNamespace:
+                                    type: string
+                                  usernameKey:
+                                    description: UsernameKey is the key in the secret
+                                      for the username
+                                    type: string
+                                required:
+                                - passwordKey
+                                - secretName
+                                - secretNamespace
+                                - usernameKey
+                                type: object
+                            type: object
+                          repoUrl:
+                            type: string
+                        required:
+                        - repoUrl
+                        type: object
+                      volume:
+                        properties:
+                          name:
+                            type: string
+                        required:
+                        - name
+                        type: object
+                    type: object
                   dockerfilePath:
-                    type: string
-                  volumeName:
+                    default: Dockerfile
+                    description: |-
+                      Dockerfile path within the context source
+                      Defaults to Dockerfile
                     type: string
                 required:
-                - context
-                - dockerfilePath
-                - volumeName
+                - contextSource
                 type: object
               insecureRegistry:
                 description: Is registry insecure
@@ -99,20 +169,62 @@ spec:
               resourceName:
                 description: Resource for which the image is being build.
                 type: string
-              sourceHash:
-                description: Current source hash for the build context.
-                type: string
+              sourceRevision:
+                description: |-
+                  Current source revision for the build context.
+                  Can be :
+                  - git commit hash
+                  - git branch name + sha of the branch head
+                  - git tag name
+                  - sha of the source directory (if using a synced volume)
+                properties:
+                  gitRepo:
+                    description: |-
+                      Can be one of the following:
+                      - git commit hash
+                      - git branch name
+                      - git tag name
+                    properties:
+                      branch:
+                        properties:
+                          HeadSha:
+                            default: HEAD
+                            description: |-
+                              Current commit hash of the branch head.
+                              default is head
+                            type: string
+                          name:
+                            description: Name of the branch
+                            type: string
+                        required:
+                        - HeadSha
+                        - name
+                        type: object
+                      commit:
+                        type: string
+                      tag:
+                        type: string
+                    type: object
+                  volume:
+                    properties:
+                      currentVolumeHash:
+                        description: Hash of the contents of the volume.
+                        type: string
+                    required:
+                    - currentVolumeHash
+                    type: object
+                type: object
             required:
-            - contextRef
+            - buildContext
             - insecureRegistry
             - registryUrl
             - resourceName
-            - sourceHash
+            - sourceRevision
             type: object
           status:
             description: ImageBuildStatus defines the observed state of ImageBuild
             properties:
-              buildSourceHash:
+              buildSourceRevision:
                 type: string
               conditions:
                 description: Conditions is a list of status conditions ths object

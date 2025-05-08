@@ -7,4 +7,5 @@ const (
 	KanikoExecutorImage           = "gcr.io/kaniko-project/executor:v1.23.2"
 	StackdomeToolsImage           = "quay.io/stackdome/tools:v0.0.1"
 	StackdomeSSHServerImage       = "quay.io/stackdome/ssh-server:v.0.0.1"
+	GitSyncImage                  = "k8s.gcr.io/git-sync/git-sync:v3.6.2"
 )

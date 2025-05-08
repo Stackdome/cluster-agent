@@ -1,0 +1,19 @@
+apiVersion: builds.stackdome.io/v1alpha1
+kind: ImageBuild
+metadata:
+  name: test-image-build
+spec:
+  resourceName: todo-app
+  sourceRevision:
+    gitRepo:
+      branch:
+        name: main
+  buildContext:
+    dockerfilePath: Dockerfile
+    contextPath: /
+    contextSource:
+      git:
+        repoUrl: https://github.com/dockersamples/todo-list-app.git
+  registryUrl: cluster-registry.stackdome-registry.svc.cluster.local
+  insecureRegistry: true
+

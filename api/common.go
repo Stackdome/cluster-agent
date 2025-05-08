@@ -6,7 +6,7 @@ type CredentialSecretKeyPair struct {
 	// +required
 	SecretName string `json:"secretName"`
 
-	// +optional
+	// +required
 	SecretNamespace string `json:"secretNamespace"`
 
 	// UsernameKey is the key in the secret for the username

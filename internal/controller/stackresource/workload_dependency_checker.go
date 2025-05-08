@@ -67,11 +67,15 @@ func (w *workloadDependencyChecker) isVolumeReady(volume *storagev1alpha1.Volume
 		if !localDirSyncedToVolume(volume) {
 			return false, "Local directory not yet synced to volume"
 		}
+	case volume.Spec.Source.GitRepo != nil:
+		if !gitRepoSyncedToVolume(volume) {
+			return false, "Git repository not yet synced to volume"
+		}
 	case volume.Spec.Source.BuildArtifacts != nil:
 		if resource.Status.CurrentBuild == nil || !resource.Status.CurrentBuild.Available {
 			return false, "Current build not yet available"
 		}
-		currentBuildID := resource.Status.CurrentBuild.ShortHash
+		currentBuildID := resource.Status.CurrentBuild.SourceRevision
 		buildSyncStatus, found := volume.Status.BuildArtifactSyncs[resource.Name]
 		if !found || !buildSyncCompletedAndUptoDate(buildSyncStatus, currentBuildID) {
 			return false, "Volume sync from build not yet complete"
@@ -81,8 +85,22 @@ func (w *workloadDependencyChecker) isVolumeReady(volume *storagev1alpha1.Volume
 }
 
 func localDirSyncedToVolume(volume *storagev1alpha1.Volume) bool {
-	syncedOnceStatusCondition := meta.FindStatusCondition(volume.Status.Conditions, string(storagev1alpha1.VolumeConditionSyncedOnce))
-	return syncedOnceStatusCondition != nil && syncedOnceStatusCondition.Status == metav1.ConditionTrue
+	syncedStatusCondition := meta.FindStatusCondition(volume.Status.Conditions, string(storagev1alpha1.VolumeConditionSyncedFromRemote))
+	conditionSatisfied := syncedStatusCondition != nil &&
+		syncedStatusCondition.Status == metav1.ConditionTrue &&
+		volume.Status.ObservedGeneration == volume.Generation
+
+	syncedHashesMatch := volume.Status.LastRemoteSyncHash == volume.Spec.Source.LocalDir.CurrentDirectoryHash
+	return conditionSatisfied && syncedHashesMatch
+}
+
+func gitRepoSyncedToVolume(volume *storagev1alpha1.Volume) bool {
+	gitRepoSyncedCondition := meta.FindStatusCondition(volume.Status.Conditions, string(storagev1alpha1.VolumeConditionSyncedFromGitSource))
+	conditionSatisfied := gitRepoSyncedCondition != nil &&
+		gitRepoSyncedCondition.Status == metav1.ConditionTrue &&
+		volume.Status.ObservedGeneration == volume.Generation
+	gitRepoHashMatches := volume.Status.LastSyncedGitReference == volume.Spec.Source.GitRepo.Revision.GetGitRevisionString()
+	return conditionSatisfied && gitRepoHashMatches
 }
 
 func buildSyncCompletedAndUptoDate(buildSyncInfo storagev1alpha1.BuildArtifactSyncInfo, currentBuildID string) bool {

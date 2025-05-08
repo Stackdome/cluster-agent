@@ -13,7 +13,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -64,15 +63,6 @@ func (r *VolumeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	res, err := r.reconcile(ctx, volume)
 	if err != nil {
 		return ctrl.Result{}, err
-	}
-
-	if volume.Annotations != nil {
-		syncedAt, syncedOnce := volume.Annotations[storagev1alpha1.LastSyncedAtAnnotation]
-		if syncedOnce {
-			reportVolumeSyncedOnce(volume, syncedAt)
-		}
-	} else {
-		reportVolumeNotSynced(volume)
 	}
 	volume.Status.StatusHash = volume.StatusHash()
 	return res, r.Status().Update(ctx, volume)
@@ -152,41 +142,6 @@ func reportVolumeProvisioned(volume *storagev1alpha1.Volume) {
 		ObservedGeneration: volume.Generation,
 		Reason:             "VolumeProvisioned",
 		Message:            "Volume is provisioned.",
-	})
-}
-
-func reportVolumeSyncedOnce(volume *storagev1alpha1.Volume, lastSyncedAt string) {
-	syncedOnceCond := meta.FindStatusCondition(volume.Status.Conditions, string(storagev1alpha1.VolumeConditionSyncedOnce))
-	if syncedOnceCond != nil && syncedOnceCond.Status == metav1.ConditionTrue {
-		return
-	}
-	volume.Status.ObservedGeneration = volume.Generation
-	parsedTime, err := time.Parse(time.RFC3339, lastSyncedAt)
-	if err != nil {
-		parsedTime = time.Now().UTC()
-	}
-	volume.Status.LastSyncedAt = ptr.To(metav1.NewTime(parsedTime.UTC()))
-	meta.SetStatusCondition(&volume.Status.Conditions, metav1.Condition{
-		Type:               string(storagev1alpha1.VolumeConditionSyncedOnce),
-		Status:             metav1.ConditionTrue,
-		ObservedGeneration: volume.Generation,
-		Reason:             "WorkspaceVolumeSyncedOnce",
-		Message:            "Workspace Volume has been synced atleast once.",
-	})
-}
-
-func reportVolumeNotSynced(volume *storagev1alpha1.Volume) {
-	syncedOnceCond := meta.FindStatusCondition(volume.Status.Conditions, string(storagev1alpha1.VolumeConditionSyncedOnce))
-	if syncedOnceCond != nil && syncedOnceCond.Status == metav1.ConditionFalse {
-		return
-	}
-	volume.Status.ObservedGeneration = volume.Generation
-	meta.SetStatusCondition(&volume.Status.Conditions, metav1.Condition{
-		Type:               string(storagev1alpha1.VolumeConditionSyncedOnce),
-		Status:             metav1.ConditionFalse,
-		ObservedGeneration: volume.Generation,
-		Reason:             "WorkspaceVolumeNotSynced",
-		Message:            "Workspace Volume has not been synced.",
 	})
 }
 

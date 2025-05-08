@@ -53,15 +53,13 @@ spec:
                 description: Only one of the following fields should be specified
                 properties:
                   buildContext:
-                    description: Build Context within the source volume.
-                    type: string
-                  buildSourceHash:
+                    description: Build Context within the context source.
                     type: string
                   dockerFilePath:
                     description: Path to the docker file within the source volume.
                     type: string
                   registry:
-                    description: Registry specification for pushing the built image
+                    description: Registry specification for pushing the built image.
                     properties:
                       auth:
                         properties:
@@ -87,6 +85,7 @@ spec:
                                 required:
                                 - passwordKey
                                 - secretName
+                                - secretNamespace
                                 - usernameKey
                                 type: object
                             type: object
@@ -106,15 +105,118 @@ spec:
                     required:
                     - repositoryUrl
                     type: object
-                  sourceVolumeName:
-                    description: Source volume where the build context is present.
-                    type: string
+                  sourceContext:
+                    description: Source context where the build context is present.
+                    properties:
+                      git:
+                        properties:
+                          auth:
+                            properties:
+                              personalAccessTokenRef:
+                                description: CredentialSecretKeyPair selects username
+                                  and password keys from a Secret
+                                properties:
+                                  passwordKey:
+                                    description: PasswordKey is the key in the secret
+                                      for the password
+                                    type: string
+                                  secretName:
+                                    description: Secret is the name of the secret
+                                    type: string
+                                  secretNamespace:
+                                    type: string
+                                  usernameKey:
+                                    description: UsernameKey is the key in the secret
+                                      for the username
+                                    type: string
+                                required:
+                                - passwordKey
+                                - secretName
+                                - secretNamespace
+                                - usernameKey
+                                type: object
+                              usernamePasswordAuthRef:
+                                description: CredentialSecretKeyPair selects username
+                                  and password keys from a Secret
+                                properties:
+                                  passwordKey:
+                                    description: PasswordKey is the key in the secret
+                                      for the password
+                                    type: string
+                                  secretName:
+                                    description: Secret is the name of the secret
+                                    type: string
+                                  secretNamespace:
+                                    type: string
+                                  usernameKey:
+                                    description: UsernameKey is the key in the secret
+                                      for the username
+                                    type: string
+                                required:
+                                - passwordKey
+                                - secretName
+                                - secretNamespace
+                                - usernameKey
+                                type: object
+                            type: object
+                          repoUrl:
+                            type: string
+                        required:
+                        - repoUrl
+                        type: object
+                      volume:
+                        properties:
+                          name:
+                            type: string
+                        required:
+                        - name
+                        type: object
+                    type: object
+                  sourceRevision:
+                    description: Current source revision for the build context.
+                    properties:
+                      gitRepo:
+                        description: |-
+                          Can be one of the following:
+                          - git commit hash
+                          - git branch name
+                          - git tag name
+                        properties:
+                          branch:
+                            properties:
+                              HeadSha:
+                                default: HEAD
+                                description: |-
+                                  Current commit hash of the branch head.
+                                  default is head
+                                type: string
+                              name:
+                                description: Name of the branch
+                                type: string
+                            required:
+                            - HeadSha
+                            - name
+                            type: object
+                          commit:
+                            type: string
+                          tag:
+                            type: string
+                        type: object
+                      volume:
+                        properties:
+                          currentVolumeHash:
+                            description: Hash of the contents of the volume.
+                            type: string
+                        required:
+                        - currentVolumeHash
+                        type: object
+                    type: object
                 required:
                 - buildContext
-                - buildSourceHash
                 - dockerFilePath
                 - registry
-                - sourceVolumeName
+                - sourceContext
+                - sourceRevision
                 type: object
               command:
                 items:
@@ -167,6 +269,7 @@ spec:
                             required:
                             - passwordKey
                             - secretName
+                            - secretNamespace
                             - usernameKey
                             type: object
                         type: object
@@ -219,6 +322,7 @@ spec:
                                 required:
                                 - passwordKey
                                 - secretName
+                                - secretNamespace
                                 - usernameKey
                                 type: object
                             type: object
@@ -346,9 +450,7 @@ spec:
                     type: string
                   reason:
                     type: string
-                  shortHash:
-                    type: string
-                  sourceHash:
+                  sourceRevision:
                     type: string
                 type: object
               externalAddress:
@@ -364,7 +466,7 @@ spec:
                   - targetPort
                   type: object
                 type: array
-              imageSourceHash:
+              imageSourceRevision:
                 type: string
               internalAddress:
                 description: Internal address is always the cluster wide resolvable

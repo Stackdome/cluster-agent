@@ -19,8 +19,6 @@ package v1alpha1
 import (
 	"fmt"
 	"hash/fnv"
-	"net/url"
-	"strings"
 
 	"github.com/davecgh/go-spew/spew"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -49,14 +47,16 @@ type ImageBuildSpec struct {
 	// Resource for which the image is being build.
 	// +required
 	ResourceName string `json:"resourceName"`
-	// Current source hash for the build context.
-	SourceHash string `json:"sourceHash"`
+	// +required
+	SourceRevision corev1alpha1.SourceRevisionSpec `json:"sourceRevision"`
 	// Build context.
-	ContextRef ContextRef `json:"contextRef"`
+	// +required
+	BuildContext BuildContextSpec `json:"buildContext"`
 	// Registry details for pushing the built image
 	// +required
 	RegistryURL string `json:"registryUrl"`
 	// Is registry insecure
+	// +required
 	InsecureRegistry bool `json:"insecureRegistry"`
 	// This is populated by the WorkspaceResource controller before creating the build job.
 	// +optional
@@ -89,10 +89,19 @@ type DockerAuthSecretRef struct {
 	AuthKey string `json:"authKey"`
 }
 
-type ContextRef struct {
+type BuildContextSpec struct {
+	// Dockerfile path within the context source
+	// Defaults to Dockerfile
+	// +kubebuilder:default=Dockerfile
+	// +optional
 	DockerfilePath string `json:"dockerfilePath"`
-	VolumeName     string `json:"volumeName"`
-	Context        string `json:"context"`
+	// Build Context path within the context source
+	// Defaults to /
+	// +kubebuilder:default=/
+	// +optional
+	ContextPath string `json:"contextPath"`
+	// +required
+	ContextSource *corev1alpha1.BuildContextSource `json:"contextSource"`
 }
 
 // ImageBuildStatus defines the observed state of ImageBuild
@@ -105,10 +114,10 @@ type ImageBuildStatus struct {
 	// it will go away as soon as kubectl can print conditions!
 	// Human readable status - please use .Conditions from code
 	// +kubebuilder:default=Pending
-	Phase           BuildPhase `json:"phase,omitempty"`
-	BuildSourceHash string     `json:"buildSourceHash,omitempty"`
-	ImageUrl        string     `json:"imageUrl"`
-	StatusHash      string     `json:"statusHash,omitempty"`
+	Phase               BuildPhase `json:"phase,omitempty"`
+	BuildSourceRevision string     `json:"buildSourceRevision,omitempty"`
+	ImageUrl            string     `json:"imageUrl"`
+	StatusHash          string     `json:"statusHash,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -147,30 +156,16 @@ type ImageBuildList struct {
 	Items           []ImageBuild `json:"items"`
 }
 
-func ImageBuildName(resourceName string, srcHash string) string {
-	return fmt.Sprintf("%s-%s", resourceName, srcHash[:7])
+func ImageBuildName(resourceName string, srcRevision string) string {
+	return fmt.Sprintf("%s-%s", resourceName, srcRevision[:7])
 }
 
-func (w *ImageBuild) ShortBuildSrcHashFromStatus() string {
-	return w.Status.BuildSourceHash[:7]
+func (w *ImageBuild) ShortBuildSrcRevisionFromStatus() string {
+	return w.Status.BuildSourceRevision[:7]
 }
 
-func (w *ImageBuild) ShortBuildSrcHashFromSpec() string {
-	return w.Spec.SourceHash[:7]
-}
-
-func getHostFromURL(urlString string) (string, error) {
-	// Handle URLs that might not have a scheme
-	if !strings.HasPrefix(urlString, "http://") && !strings.HasPrefix(urlString, "https://") {
-		urlString = "http://" + urlString
-	}
-
-	parsedURL, err := url.Parse(urlString)
-	if err != nil {
-		return "", err
-	}
-
-	return parsedURL.Host, nil
+func (w *ImageBuild) ShortBuildSrcRevisionFromSpec() string {
+	return w.Spec.SourceRevision.GetSourceRevisionString()[:7]
 }
 
 func init() {

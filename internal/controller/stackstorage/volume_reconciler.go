@@ -153,10 +153,9 @@ func setVolumeStatus(storage *storagev1alpha1.Storage, existingVolumes map[strin
 	res := make([]storagev1alpha1.VolumeInfo, 0)
 	for volumeName, volume := range existingVolumes {
 		currentVolumeStatus := storagev1alpha1.VolumeInfo{
-			VolumeName:   volumeName,
-			Subpath:      storage.MountPathForVolume(volumeName),
-			Available:    volumeAvailable(volume),
-			LastSyncedAt: volume.Status.LastSyncedAt,
+			VolumeName: volumeName,
+			Subpath:    storage.MountPathForVolume(volumeName),
+			Available:  volumeAvailable(volume),
 		}
 		res = append(res, currentVolumeStatus)
 	}

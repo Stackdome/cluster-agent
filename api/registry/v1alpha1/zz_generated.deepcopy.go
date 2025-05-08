@@ -90,7 +90,11 @@ func (in *ClusterRegistrySpec) DeepCopyInto(out *ClusterRegistrySpec) {
 	*out = *in
 	out.Owner = in.Owner
 	in.Storage.DeepCopyInto(&out.Storage)
-	in.Auth.DeepCopyInto(&out.Auth)
+	if in.Auth != nil {
+		in, out := &in.Auth, &out.Auth
+		*out = new(RegistryAuthSpec)
+		(*in).DeepCopyInto(*out)
+	}
 	if in.RetentionPolicy != nil {
 		in, out := &in.RetentionPolicy, &out.RetentionPolicy
 		*out = new(RetentionPolicySpec)

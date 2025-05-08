@@ -32,7 +32,6 @@ import (
 	nfsservercontroller "stackdome.io/cluster-agent/internal/controller/nfsserver"
 	"stackdome.io/cluster-agent/internal/controller/stack"
 	"stackdome.io/cluster-agent/internal/controller/stackresource"
-	"stackdome.io/cluster-agent/internal/controller/stackstorage"
 	"stackdome.io/cluster-agent/internal/controller/volume"
 	"stackdome.io/cluster-agent/internal/controller/workspaceuser"
 	"stackdome.io/cluster-agent/pkg/config"
@@ -150,11 +149,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = (stackstorage.NewStackStorageReconciler(mgr.GetClient(), uncachedClient, mgr.GetScheme())).
-		SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "WorkspaceState")
-		os.Exit(1)
-	}
+	// if err = (stackstorage.NewStackStorageReconciler(mgr.GetClient(), uncachedClient, mgr.GetScheme())).
+	// 	SetupWithManager(mgr); err != nil {
+	// 	setupLog.Error(err, "unable to create controller", "controller", "WorkspaceState")
+	// 	os.Exit(1)
+	// }
 
 	stackResourceController := stackresource.NewStackResourceReconciler(mgr.GetClient(), mgr.GetScheme())
 	if err = stackResourceController.SetupWithManager(mgr); err != nil {

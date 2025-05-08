@@ -31,6 +31,7 @@ func (r *VolumeReconciler) reconcileVolumeSource(ctx context.Context, volume *st
 	subReconcilers := []func(context.Context, *storagev1alpha1.Volume) (subReconcilerResult, error){
 		r.reconcileLocalVolumeSource,
 		r.reconcileBuildArtifactsSources,
+		r.reconcileGitSource,
 	}
 
 	for _, subReconciler := range subReconcilers {
@@ -48,6 +49,22 @@ func (r *VolumeReconciler) reconcileVolumeSource(ctx context.Context, volume *st
 
 // NOOP, Syncing local volume source is done from the client side.
 func (r *VolumeReconciler) reconcileLocalVolumeSource(ctx context.Context, volume *storagev1alpha1.Volume) (subReconcilerResult, error) {
+	if volume.Spec.Source.LocalDir == nil {
+		return resultNil, nil
+	}
+	localDirSrc := volume.Spec.Source.LocalDir
+
+	if len(localDirSrc.CurrentDirectoryHash) != 0 {
+		meta.SetStatusCondition(&volume.Status.Conditions, metav1.Condition{
+			Type:               string(storagev1alpha1.VolumeConditionSyncedFromRemote),
+			Status:             metav1.ConditionTrue,
+			ObservedGeneration: volume.Generation,
+			Message:            fmt.Sprintf("Directory with hash '%s' synced", localDirSrc.CurrentDirectoryHash),
+			Reason:             "RemoteDataSynced",
+		})
+		volume.Status.LastRemoteSyncHash = localDirSrc.CurrentDirectoryHash
+	}
+
 	return resultNil, nil
 }
 
@@ -106,7 +123,7 @@ func (r *VolumeReconciler) reconcileBuildArtifactsSrcsForResource(
 		if jobcompletedCond != nil && jobcompletedCond.Status == corev1.ConditionTrue {
 			volume.Status.SetBuildArtifactSyncStatus(
 				storagev1alpha1.StackResourceReference{Name: resourceName},
-				imageBuild.ShortBuildSrcHashFromStatus(),
+				imageBuild.ShortBuildSrcRevisionFromStatus(),
 				storagev1alpha1.BuildArtifactSyncStatusCompleted,
 			)
 			// TODO: Cleanup failed and completed jobs.
@@ -118,14 +135,14 @@ func (r *VolumeReconciler) reconcileBuildArtifactsSrcsForResource(
 	if failedCond != nil && failedCond.Status == metav1.ConditionTrue {
 		volume.Status.SetBuildArtifactSyncStatus(
 			storagev1alpha1.StackResourceReference{Name: resourceName},
-			imageBuild.ShortBuildSrcHashFromSpec(),
+			imageBuild.ShortBuildSrcRevisionFromSpec(),
 			storagev1alpha1.BuildArtifactSyncStatusFailed,
 		)
 		return nil
 	}
 	volume.Status.SetBuildArtifactSyncStatus(
 		storagev1alpha1.StackResourceReference{Name: resourceName},
-		imageBuild.ShortBuildSrcHashFromSpec(),
+		imageBuild.ShortBuildSrcRevisionFromSpec(),
 		storagev1alpha1.BuildArtifactSyncStatusPending,
 	)
 	return nil
@@ -161,7 +178,7 @@ func (r *VolumeReconciler) getImageBuildsForResources(ctx context.Context, volum
 			}
 			return nil, fmt.Errorf("failed to get the resource '%s' in volume '%s': %w", stackresourceRef, volume.Name, err)
 		}
-		imageBuildName := buildsv1alpha1.ImageBuildName(resource.Name, resource.Spec.BuildSpec.BuildSourceHash)
+		imageBuildName := buildsv1alpha1.ImageBuildName(resource.Name, resource.Spec.BuildSpec.SourceRevision.GetSourceRevisionString())
 		imageBuild := &buildsv1alpha1.ImageBuild{}
 		if err := r.Client.Get(ctx, types.NamespacedName{Name: imageBuildName, Namespace: volume.Namespace}, imageBuild); err != nil {
 			if apierrors.IsNotFound(err) {
