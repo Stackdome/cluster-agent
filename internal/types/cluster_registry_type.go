@@ -25,6 +25,14 @@ func (r *RegistryConfig) HasEndpoint(ep string) bool {
 	}
 	return false
 }
+func (r *RegistryConfig) HasEndpointWithServiceIP(ep string, serviceIP string) bool {
+	for _, registry := range r.Registries {
+		if registry.Endpoint == ep && registry.ServiceIp == serviceIP {
+			return true
+		}
+	}
+	return false
+}
 
 func (r *RegistryConfig) ValidRegistries() []Registry {
 	var res []Registry
@@ -38,9 +46,11 @@ func (r *RegistryConfig) ValidRegistries() []Registry {
 }
 
 func (r *RegistryConfig) AddRegistry(serviceIP string, endpoint string) bool {
-	if r.HasEndpoint(endpoint) {
+	if r.HasEndpointWithServiceIP(endpoint, serviceIP) {
 		return false
 	}
+
+	r.RemoveRegistryEndpointEntry(endpoint)
 
 	r.Registries = append(r.Registries, Registry{
 		ServiceIp: serviceIP,

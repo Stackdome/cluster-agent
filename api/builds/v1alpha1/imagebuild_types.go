@@ -157,7 +157,11 @@ type ImageBuildList struct {
 }
 
 func ImageBuildName(resourceName string, srcRevision string) string {
-	return fmt.Sprintf("%s-%s", resourceName, srcRevision[:7])
+	res := fmt.Sprintf("%s-%s", resourceName, srcRevision)
+	if len(res) > 100 {
+		return res[:100]
+	}
+	return res
 }
 
 func (w *ImageBuild) ShortBuildSrcRevisionFromStatus() string {
