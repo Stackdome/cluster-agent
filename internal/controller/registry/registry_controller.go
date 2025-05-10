@@ -131,7 +131,7 @@ func (r *RegistryReconciler) reconcileNodeRegistryAccessConfigMap(ctx context.Co
 	logger := log.FromContext(ctx)
 	logger.Info("reconciling node registry access configuration")
 
-	if len(registry.Status.InternalURL) == 0 {
+	if len(registry.Status.InternalURL) == 0 || registry.Status.ServiceIP == "" {
 		return resultNil, nil
 	}
 
