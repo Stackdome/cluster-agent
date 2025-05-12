@@ -3,16 +3,13 @@ package stackresource
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
-	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -117,7 +114,7 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.S
 		return resultNil, err
 	}
 
-	siblingsMap, err := r.makeSiblingsMap(ctx, resource)
+	siblings, err := r.GetSiblings(ctx, resource)
 	if err != nil {
 		return resultNil, err
 	}
@@ -125,6 +122,11 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.S
 	image, err := r.getImageForResource(ctx, resource)
 	if err != nil {
 		return resultNil, err
+	}
+
+	interpolatedEnvVars, err := r.interpolateEnvVars(resource, siblings)
+	if err != nil {
+		return resultNil, fmt.Errorf("failed to interpolate env vars: %w", err)
 	}
 
 	desiredDeploymentForResource := &appsv1.Deployment{
@@ -137,25 +139,13 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.S
 				MatchLabels: GetDeploymentPodLabelForResource(resource),
 			},
 			Strategy: appsv1.DeploymentStrategy{
-				Type: appsv1.RecreateDeploymentStrategyType,
+				Type: appsv1.RollingUpdateDeploymentStrategyType,
 			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: v1.ObjectMeta{
 					Labels: GetDeploymentPodLabelForResource(resource),
 				},
 				Spec: corev1.PodSpec{
-					// Affinity: &corev1.Affinity{
-					// 	PodAffinity: &corev1.PodAffinity{
-					// 		RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{
-					// 			{
-					// 				LabelSelector: &metav1.LabelSelector{
-					// 					MatchLabels: map[string]string{workspacestorage.WorkspaceStorageLabel: metav1.GetControllerOf(resource).Name},
-					// 				},
-					// 				TopologyKey: "kubernetes.io/hostname",
-					// 			},
-					// 		},
-					// 	},
-					// },
 					Volumes: InterpolatedVolumesList(resource, volumeMountInfo),
 					Containers: []corev1.Container{
 						{
@@ -165,11 +155,10 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.S
 							Command:         resource.Spec.Command,
 							Args:            resource.Spec.Args,
 							Ports:           InterpolatedContainerPorts(resource),
-							Env:             InterpolatedEnvVars(logger, resource, siblingsMap),
+							Env:             interpolatedEnvVars,
 							VolumeMounts:    InterpolatedVolumeMountList(resource),
 						},
 					},
-					// TODO:
 				},
 			},
 		},
@@ -187,7 +176,7 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.S
 				Image:           *image,
 				Command:         resource.Spec.Init.Command,
 				Args:            resource.Spec.Init.Args,
-				Env:             InterpolatedEnvVars(logger, resource, siblingsMap),
+				Env:             interpolatedEnvVars,
 				VolumeMounts:    InterpolatedVolumeMountList(resource),
 			},
 		}
@@ -279,44 +268,27 @@ func (r *workloadReconciler) requiresRestart(resource *v1alpha1.StackResource) b
 	}
 }
 
-func InterpolatedEnvVars(logger logr.Logger, resource *v1alpha1.StackResource, infoMap map[string]*v1alpha1.StackResource) []corev1.EnvVar {
-	interpolationFn := func(resourceKey string, port string) string {
-		resource := infoMap[resourceKey]
-		if resource == nil {
-			logger.Info("resource not found", "resourceKey", resourceKey)
-			return ""
-		}
-		intPort, err := strconv.Atoi(port)
-		if err != nil {
-			logger.Error(err, "failed to convert port to int", "port", port)
-			return ""
-		}
-		for _, addr := range resource.Status.ExternalAddress {
-			if addr.TargetPort == int32(intPort) {
-				return addr.Address
-			}
-		}
-		logger.Info("port not found", "port", port)
-		return ""
+func (r *workloadReconciler) interpolateEnvVars(resource *v1alpha1.StackResource, siblings []*v1alpha1.StackResource) ([]corev1.EnvVar, error) {
+	interpolationCtx, err := interpolation.NewInterpolationContext(siblings)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create interpolation context: %w", err)
 	}
-	res := make([]corev1.EnvVar, 0)
-	for _, envVar := range resource.Spec.EnvironmentVariables {
-		if interpolation.HasInterpolation(envVar.Value) {
-			interpolatedValue := interpolation.InterpolateString(envVar.Value, interpolationFn)
-			// TODO: Assert attribute is Address
-			res = append(res, corev1.EnvVar{
-				Name:  envVar.Name,
-				Value: interpolatedValue,
-			})
-		} else {
-			res = append(res, corev1.EnvVar{
-				Name:  envVar.Name,
-				Value: envVar.Value,
-			})
-		}
 
+	interpolator := interpolation.NewInterpolator(interpolationCtx)
+
+	res := make([]corev1.EnvVar, 0)
+	for _, env := range resource.Spec.EnvironmentVariables {
+		interpolatedValue, err := interpolator.InterpolateString(env.Value)
+		if err != nil {
+			return nil, fmt.Errorf("failed to interpolate env var '%s': %w", env.Name, err)
+		}
+		res = append(res, corev1.EnvVar{
+			Name:  env.Name,
+			Value: interpolatedValue,
+		})
 	}
-	return res
+
+	return res, nil
 }
 
 func InterpolatedContainerPorts(resource *v1alpha1.StackResource) []corev1.ContainerPort {
@@ -390,34 +362,26 @@ func (r *workloadReconciler) getVolumeMountInfoMap(ctx context.Context, resource
 	return res, nil
 }
 
-func (r *workloadReconciler) makeSiblingsMap(ctx context.Context, currResource *v1alpha1.StackResource) (map[string]*v1alpha1.StackResource, error) {
-	res := make(map[string]*v1alpha1.StackResource)
-	siblings, err := r.GetSiblings(ctx, currResource)
-	if err != nil {
-		return nil, err
-	}
-	for _, resource := range siblings {
-		res[resource.Name] = &resource
-	}
-	// Add iteself to the map.
-	res[currResource.Name] = currResource
-	return res, nil
-}
-
 func workspaceResourceName(workspaceName, resourceName string) string {
 	return fmt.Sprintf("%s-%s", workspaceName, resourceName)
 }
 
-func (r *workloadReconciler) GetSiblings(ctx context.Context, resource *v1alpha1.StackResource) ([]v1alpha1.StackResource, error) {
-	wrList := &v1alpha1.StackResourceList{}
-	workspaceRef := metav1.GetControllerOf(resource)
-	if workspaceRef == nil {
-		return nil, nil
-	}
-	if err := r.Client.List(ctx, wrList, client.InNamespace(resource.Namespace), client.MatchingFields{
-		ownerKey: workspaceRef.Name,
-	}); err != nil {
+func (r *workloadReconciler) GetSiblings(ctx context.Context, resource *v1alpha1.StackResource) ([]*v1alpha1.StackResource, error) {
+	srList := &v1alpha1.StackResourceList{}
+	if err := r.Client.List(ctx, srList, client.InNamespace(resource.Namespace)); err != nil {
 		return nil, err
 	}
-	return wrList.Items, nil
+
+	// Set current resource's internal service name
+	for i := range srList.Items {
+		if srList.Items[i].Name == resource.Name {
+			// We do this because we need to pass the all siblings as interpolation context while interpolating the env vars.
+			srList.Items[i].Status.InternalAddress = ptr.To(ResourceSVCName(resource))
+		}
+	}
+	res := make([]*v1alpha1.StackResource, len(srList.Items))
+	for i := range srList.Items {
+		res[i] = &srList.Items[i]
+	}
+	return res, nil
 }
