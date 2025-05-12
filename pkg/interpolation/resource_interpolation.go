@@ -1,40 +1,94 @@
 package interpolation
 
 import (
-	"regexp"
-	"strings"
+	"bytes"
+	"fmt"
+	"text/template"
 )
 
-// HasInterpolation checks if the input string has interpolation.
-// Interpolation is defined as a string that starts with {{ and ends with }} and a .Attribute.
-// Example: {{db.ExternalAddress}}
-// db = The name of the resource referenced.
-// ExternalAddress = The attribute of the resource referenced.
-func HasInterpolation(input string) bool {
-	pattern := `\{\{(\w+):(\d+)\}\}`
-	regex := regexp.MustCompile(pattern)
-	return regex.MatchString(input)
+type TemplateFunctions struct {
+	context *InterpolationContext
 }
 
-func findMatches(input string) []string {
-	pattern := `\{\{(\w+):(\d+)\}\}`
-	regex := regexp.MustCompile(pattern)
-	return regex.FindAllString(input, -1)
-}
-
-func findValue(resource string, port string, interpolatedValuesFn func(string, string) string) string {
-	return interpolatedValuesFn(resource, port)
-}
-
-func InterpolateString(input string, interpolatedValuesFn func(string, string) string) string {
-	matches := findMatches(input)
-	output := input
-	for _, match := range matches {
-		// Remove the {{ and }} from the match.
-		value := match[2 : len(match)-2]
-		resource, port := strings.Split(value, ":")[0], strings.Split(value, ":")[1]
-		resolvedValue := findValue(resource, port, interpolatedValuesFn)
-		output = regexp.MustCompile(match).ReplaceAllString(output, resolvedValue)
+// Template functions for interpolation
+func (f *TemplateFunctions) URL(resourceName string, port ...int) (string, error) {
+	resource, ok := f.context.Resources[resourceName]
+	if !ok {
+		return "", fmt.Errorf("resource '%s' not found", resourceName)
 	}
-	return output
+
+	if len(resource.Status.PublicIngresses) == 0 {
+		return "", fmt.Errorf("resource '%s' has no public ingresses", resourceName)
+	}
+
+	// If no port specified, return the first ingress URL
+	if len(port) == 0 {
+		if len(resource.Status.PublicIngresses) != 1 {
+			return "", fmt.Errorf("multiple public ingresses found for resource '%s', specify a port",
+				resourceName)
+		}
+		return resource.Status.PublicIngresses[0].URL, nil
+	}
+
+	targetPort := port[0]
+
+	for _, ingress := range resource.Status.PublicIngresses {
+		if ingress.TargetPort == targetPort {
+			return ingress.URL, nil
+		}
+	}
+
+	return "", fmt.Errorf("no ingress found for resource '%s' with port %d",
+		resourceName, targetPort)
+}
+
+func (f *TemplateFunctions) Internal(resourceName string) (string, error) {
+	resource, ok := f.context.Resources[resourceName]
+	if !ok {
+		return "", fmt.Errorf("resource '%s' not found", resourceName)
+	}
+
+	if resource.Status.InternalService == nil {
+		return "", fmt.Errorf("resource '%s' has no internal service", resourceName)
+	}
+
+	return *resource.Status.InternalService, nil
+}
+
+type Interpolator struct {
+	context   *InterpolationContext
+	funcMap   template.FuncMap
+	functions *TemplateFunctions
+}
+
+func NewInterpolator(ctx *InterpolationContext) *Interpolator {
+	functions := &TemplateFunctions{context: ctx}
+
+	funcMap := template.FuncMap{
+		"STACKRESOURCE_PUBLIC_URL":        functions.URL,
+		"STACKRESOURCE_INTERNAL_ENDPOINT": functions.Internal,
+	}
+
+	return &Interpolator{
+		context:   ctx,
+		funcMap:   funcMap,
+		functions: functions,
+	}
+}
+
+func (i *Interpolator) InterpolateString(templateString string) (string, error) {
+	tmpl, err := template.New("interpolator").
+		Funcs(i.funcMap).
+		Option("missingkey=error").
+		Parse(templateString)
+	if err != nil {
+		return "", fmt.Errorf("template parse error: %w", err)
+	}
+
+	var result bytes.Buffer
+	if err := tmpl.Execute(&result, i.context); err != nil {
+		return "", fmt.Errorf("template execution error: %w", err)
+	}
+
+	return result.String(), nil
 }
