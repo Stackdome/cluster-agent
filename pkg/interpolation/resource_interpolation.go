@@ -23,17 +23,24 @@ func (f *TemplateFunctions) URL(resourceName string, port ...int) (string, error
 
 	// If no port specified, return the first ingress URL
 	if len(port) == 0 {
-		if len(resource.Status.PublicIngresses) != 1 {
+		switch {
+		case len(resource.Status.PublicIngresses) > 1:
 			return "", fmt.Errorf("multiple public ingresses found for resource '%s', specify a port",
 				resourceName)
+		case len(resource.Status.PublicIngresses) == 1 && !resource.Status.PublicIngresses[0].ExposedToPublic:
+			return "", fmt.Errorf("resource '%s' has no public ingress", resourceName)
+		default:
+			return resource.Status.PublicIngresses[0].URL, nil
 		}
-		return resource.Status.PublicIngresses[0].URL, nil
 	}
 
 	targetPort := port[0]
 
 	for _, ingress := range resource.Status.PublicIngresses {
 		if ingress.TargetPort == targetPort {
+			if !ingress.ExposedToPublic {
+				return "", fmt.Errorf("resource '%s' has no public ingress for port %d", resourceName, targetPort)
+			}
 			return ingress.URL, nil
 		}
 	}
@@ -65,8 +72,8 @@ func NewInterpolator(ctx *InterpolationContext) *Interpolator {
 	functions := &TemplateFunctions{context: ctx}
 
 	funcMap := template.FuncMap{
-		"STACKRESOURCE_PUBLIC_URL":        functions.URL,
-		"STACKRESOURCE_INTERNAL_ENDPOINT": functions.Internal,
+		"STACKDOME_PUBLIC_URL":        functions.URL,
+		"STACKDOME_INTERNAL_ENDPOINT": functions.Internal,
 	}
 
 	return &Interpolator{

@@ -94,21 +94,21 @@ var _ = Describe("Interpolator", func() {
 	Describe("URL function", func() {
 		Context("when resource exists with a single ingress", func() {
 			It("returns the URL without port specification", func() {
-				result, err := interpolator.InterpolateString(`{{ STACKRESOURCE_PUBLIC_URL "web-app" }}`)
+				result, err := interpolator.InterpolateString(`{{ STACKDOME_PUBLIC_URL "web-app" }}`)
 
 				Expect(err).NotTo(HaveOccurred())
 				Expect(result).To(Equal("https://web-app.example.com"))
 			})
 
 			It("returns the URL with matching port specification", func() {
-				result, err := interpolator.InterpolateString(`{{ STACKRESOURCE_PUBLIC_URL "web-app" 8080 }}`)
+				result, err := interpolator.InterpolateString(`{{ STACKDOME_PUBLIC_URL "web-app" 8080 }}`)
 
 				Expect(err).NotTo(HaveOccurred())
 				Expect(result).To(Equal("https://web-app.example.com"))
 			})
 
 			It("fails with non-matching port specification", func() {
-				result, err := interpolator.InterpolateString(`{{ STACKRESOURCE_PUBLIC_URL "web-app" 9090 }}`)
+				result, err := interpolator.InterpolateString(`{{ STACKDOME_PUBLIC_URL "web-app" 9090 }}`)
 
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("no ingress found for resource 'web-app' with port 9090"))
@@ -118,7 +118,7 @@ var _ = Describe("Interpolator", func() {
 
 		Context("when resource exists with multiple ingresses", func() {
 			It("fails when no port is specified", func() {
-				result, err := interpolator.InterpolateString(`{{ STACKRESOURCE_PUBLIC_URL "api-service" }}`)
+				result, err := interpolator.InterpolateString(`{{ STACKDOME_PUBLIC_URL "api-service" }}`)
 
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("multiple public ingresses found for resource 'api-service', specify a port"))
@@ -126,14 +126,14 @@ var _ = Describe("Interpolator", func() {
 			})
 
 			It("returns the correct URL when matching port is specified", func() {
-				result, err := interpolator.InterpolateString(`{{ STACKRESOURCE_PUBLIC_URL "api-service" 9000 }}`)
+				result, err := interpolator.InterpolateString(`{{ STACKDOME_PUBLIC_URL "api-service" 9000 }}`)
 
 				Expect(err).NotTo(HaveOccurred())
 				Expect(result).To(Equal("https://api-alt.example.com"))
 			})
 
 			It("returns the first ingress URL when matching port is specified", func() {
-				result, err := interpolator.InterpolateString(`{{ STACKRESOURCE_PUBLIC_URL "api-service" 8000 }}`)
+				result, err := interpolator.InterpolateString(`{{ STACKDOME_PUBLIC_URL "api-service" 8000 }}`)
 
 				Expect(err).NotTo(HaveOccurred())
 				Expect(result).To(Equal("https://api.example.com"))
@@ -142,7 +142,7 @@ var _ = Describe("Interpolator", func() {
 
 		Context("when resource does not exist", func() {
 			It("returns an error", func() {
-				result, err := interpolator.InterpolateString(`{{ STACKRESOURCE_PUBLIC_URL "non-existent" }}`)
+				result, err := interpolator.InterpolateString(`{{ STACKDOME_PUBLIC_URL "non-existent" }}`)
 
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("resource 'non-existent' not found"))
@@ -152,7 +152,7 @@ var _ = Describe("Interpolator", func() {
 
 		Context("when resource has no public ingresses", func() {
 			It("returns an error", func() {
-				result, err := interpolator.InterpolateString(`{{ STACKRESOURCE_PUBLIC_URL "internal-only" }}`)
+				result, err := interpolator.InterpolateString(`{{ STACKDOME_PUBLIC_URL "internal-only" }}`)
 
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("resource 'internal-only' has no public ingresses"))
@@ -195,7 +195,7 @@ var _ = Describe("Interpolator", func() {
 	Describe("InterpolateString", func() {
 		Context("with valid templates", func() {
 			It("interpolates simple resource references", func() {
-				template := `Web URL: {{ STACKRESOURCE_PUBLIC_URL "web-app" }}, API URL: {{ STACKRESOURCE_PUBLIC_URL "api-service" 8000 }}`
+				template := `Web URL: {{ STACKDOME_PUBLIC_URL "web-app" }}, API URL: {{ STACKDOME_PUBLIC_URL "api-service" 8000 }}`
 				result, err := interpolator.InterpolateString(template)
 
 				Expect(err).NotTo(HaveOccurred())
@@ -220,7 +220,7 @@ var _ = Describe("Interpolator", func() {
 
 			It("combines multiple interpolations", func() {
 				template := `Service: {{ .Resources.webapp.Name }}
-							 Public URL: {{ STACKRESOURCE_PUBLIC_URL "webapp" }}
+							 Public URL: {{ STACKDOME_PUBLIC_URL "webapp" }}
 							 Internal: {{ STACKRESOURCE_INTERNAL_ENDPOINT "webapp" }}
 							 Version: {{ .Runtime.app.version }}`
 
@@ -238,7 +238,7 @@ var _ = Describe("Interpolator", func() {
 
 		Context("with syntax errors", func() {
 			It("returns a template parse error", func() {
-				template := `{{ STACKRESOURCE_PUBLIC_URL "unclosed }`
+				template := `{{ STACKDOME_PUBLIC_URL "unclosed }`
 				result, err := interpolator.InterpolateString(template)
 
 				Expect(err).To(HaveOccurred())

@@ -20,8 +20,9 @@ type ResourceStatus struct {
 }
 
 type IngressContext struct {
-	URL        string `json:"url"`
-	TargetPort int    `json:"target_port"`
+	ExposedToPublic bool   `json:"expose_to_public"`
+	URL             string `json:"url"`
+	TargetPort      int    `json:"target_port"`
 }
 
 func NewInterpolationContext(resources []*corev1alpha1.StackResource) (*InterpolationContext, error) {
@@ -47,8 +48,9 @@ func buildPublicIngressContext(in []corev1alpha1.Port) []IngressContext {
 	for i, ingress := range in {
 		if ingress.ExposeToPublic {
 			out[i] = IngressContext{
-				URL:        ingress.FQDN,
-				TargetPort: int(ingress.Number),
+				ExposedToPublic: ingress.ExposeToPublic,
+				URL:             ingress.FQDN,
+				TargetPort:      int(ingress.Number),
 			}
 		}
 	}
