@@ -150,7 +150,6 @@ func (r *svcReconciler) ensureSvc(ctx context.Context, resource *v1alpha1.StackR
 	svcPorts := make([]corev1.ServicePort, 0)
 	for _, port := range ports {
 		svcPorts = append(svcPorts, corev1.ServicePort{
-			Protocol:   "TCP",
 			Port:       port.Number,
 			TargetPort: intstr.FromInt(int(port.Number)),
 		})
