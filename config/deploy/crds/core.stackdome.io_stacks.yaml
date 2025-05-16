@@ -43,13 +43,6 @@ spec:
           spec:
             description: StackSpec defines the desired state of a Stack
             properties:
-              domain:
-                description: |-
-                  Username       string                  `json:"username"`
-                  Organisation   string                  `json:"organisation"`
-                  SLD+TLD. Example: example.io
-                  Should not be empty and is a valid domain.
-                type: string
               stackResources:
                 items:
                   properties:
@@ -406,7 +399,6 @@ spec:
                   type: object
                 type: array
             required:
-            - domain
             - stackResources
             type: object
           status:
