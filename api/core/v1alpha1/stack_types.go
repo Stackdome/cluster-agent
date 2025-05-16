@@ -27,12 +27,6 @@ const (
 type StackSpec struct {
 	// +required
 	StackResources []StackResourceTemplate `json:"stackResources"`
-	// Username       string                  `json:"username"`
-	// Organisation   string                  `json:"organisation"`
-	// SLD+TLD. Example: example.io
-	// Should not be empty and is a valid domain.
-	// +required
-	Domain string `json:"domain"`
 }
 
 type StackResourceTemplate struct {

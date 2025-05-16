@@ -8,6 +8,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"stackdome.io/cluster-agent/api/core/v1alpha1"
 	"stackdome.io/cluster-agent/internal/controller"
@@ -20,21 +21,40 @@ func (r *StackReconciler) ReconcileStackResources(ctx context.Context, stack *v1
 		desiredStackResources = append(desiredStackResources, desiredStackResource)
 	}
 
-	existingStackResources := make([]*v1alpha1.StackResource, 0)
+	reconciledStackResources := make([]*v1alpha1.StackResource, 0)
 	for _, desiredStackResource := range desiredStackResources {
-		existingStackResource, err := r.reconcileStackResource(ctx, stack, desiredStackResource)
+		reconciledStackResource, err := r.reconcileStackResource(ctx, stack, desiredStackResource)
 		if err != nil {
 			return resultNil, err
 		}
-		existingStackResources = append(existingStackResources, existingStackResource)
+		reconciledStackResources = append(reconciledStackResources, reconciledStackResource)
 	}
 
-	for _, sr := range existingStackResources {
+	for _, sr := range reconciledStackResources {
 		if !r.stackResourceAvailable(sr) {
 			reportStackNotReady(stack, "StackResourcesNotReady", fmt.Sprintf("StackResource: '%s' not ready", sr.Name))
 			return resultNil, nil
 		}
 	}
+
+	// Remove existing stack resources that are not in the desired state.
+	existingStackResources := &v1alpha1.StackResourceList{}
+	if err := r.Client.List(ctx, existingStackResources, client.InNamespace(stack.Namespace)); err != nil {
+		return resultNil, err
+	}
+	for _, existingSR := range existingStackResources.Items {
+		ownedByUs, err := controllerutil.HasOwnerReference(existingSR.OwnerReferences, stack, r.Scheme)
+		if err != nil {
+			return resultNil, err
+		}
+		// If its owned by us and not in the desired state, delete it.
+		if ownedByUs && !inDesiredStackResources(existingSR.Name, desiredStackResources) {
+			if err := r.Client.Delete(ctx, &existingSR); err != nil {
+				return resultNil, err
+			}
+		}
+	}
+
 	reportStackReady(stack)
 	return resultNil, nil
 }
@@ -92,4 +112,13 @@ func constructStackResourceCR(stack *v1alpha1.Stack, stackResourceTemplate *v1al
 			StateFul:             stackResourceTemplate.Spec.StateFul,
 		},
 	}
+}
+
+func inDesiredStackResources(stackResourceName string, desiredStackResources []*v1alpha1.StackResource) bool {
+	for _, desiredStackResource := range desiredStackResources {
+		if desiredStackResource.Name == stackResourceName {
+			return true
+		}
+	}
+	return false
 }
