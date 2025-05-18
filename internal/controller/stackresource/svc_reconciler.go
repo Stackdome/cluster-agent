@@ -202,5 +202,6 @@ func (r *svcReconciler) ensureSvc(ctx context.Context, resource *v1alpha1.StackR
 	if controller.AreServicesEqual(&desiredSvc, existingSvc) {
 		return existingSvc, nil
 	}
-	return nil, nil
+	desiredSvc.ResourceVersion = existingSvc.ResourceVersion
+	return nil, r.Client.Update(ctx, &desiredSvc)
 }
