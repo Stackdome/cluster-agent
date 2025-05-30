@@ -65,33 +65,32 @@ spec:
                         properties:
                           dockerConfigAuth:
                             properties:
-                              credentialsRef:
-                                description: CredentialSecretKeyPair selects username
-                                  and password keys from a Secret
+                              secretKey:
+                                description: Key inside the secret that contains the
+                                  Docker config JSON
+                                type: string
+                              secretRef:
+                                description: Reference to the secret containing the
+                                  Docker config JSONs
                                 properties:
-                                  passwordKey:
-                                    description: PasswordKey is the key in the secret
-                                      for the password
+                                  name:
+                                    description: name is unique within a namespace
+                                      to reference a secret resource.
                                     type: string
-                                  secretName:
-                                    description: Secret is the name of the secret
+                                  namespace:
+                                    description: namespace defines the space within
+                                      which the secret name must be unique.
                                     type: string
-                                  secretNamespace:
-                                    type: string
-                                  usernameKey:
-                                    description: UsernameKey is the key in the secret
-                                      for the username
-                                    type: string
-                                required:
-                                - passwordKey
-                                - secretName
-                                - secretNamespace
-                                - usernameKey
                                 type: object
+                                x-kubernetes-map-type: atomic
+                            required:
+                            - secretKey
+                            - secretRef
                             type: object
                           type:
                             type: string
                         required:
+                        - dockerConfigAuth
                         - type
                         type: object
                       insecure:
@@ -120,19 +119,28 @@ spec:
                                     description: PasswordKey is the key in the secret
                                       for the password
                                     type: string
-                                  secretName:
-                                    description: Secret is the name of the secret
-                                    type: string
-                                  secretNamespace:
-                                    type: string
+                                  secretRef:
+                                    description: |-
+                                      SecretReference represents a Secret Reference. It has enough information to retrieve secret
+                                      in any namespace
+                                    properties:
+                                      name:
+                                        description: name is unique within a namespace
+                                          to reference a secret resource.
+                                        type: string
+                                      namespace:
+                                        description: namespace defines the space within
+                                          which the secret name must be unique.
+                                        type: string
+                                    type: object
+                                    x-kubernetes-map-type: atomic
                                   usernameKey:
                                     description: UsernameKey is the key in the secret
                                       for the username
                                     type: string
                                 required:
                                 - passwordKey
-                                - secretName
-                                - secretNamespace
+                                - secretRef
                                 - usernameKey
                                 type: object
                               usernamePasswordAuthRef:
@@ -143,19 +151,28 @@ spec:
                                     description: PasswordKey is the key in the secret
                                       for the password
                                     type: string
-                                  secretName:
-                                    description: Secret is the name of the secret
-                                    type: string
-                                  secretNamespace:
-                                    type: string
+                                  secretRef:
+                                    description: |-
+                                      SecretReference represents a Secret Reference. It has enough information to retrieve secret
+                                      in any namespace
+                                    properties:
+                                      name:
+                                        description: name is unique within a namespace
+                                          to reference a secret resource.
+                                        type: string
+                                      namespace:
+                                        description: namespace defines the space within
+                                          which the secret name must be unique.
+                                        type: string
+                                    type: object
+                                    x-kubernetes-map-type: atomic
                                   usernameKey:
                                     description: UsernameKey is the key in the secret
                                       for the username
                                     type: string
                                 required:
                                 - passwordKey
-                                - secretName
-                                - secretNamespace
+                                - secretRef
                                 - usernameKey
                                 type: object
                             type: object
@@ -249,33 +266,32 @@ spec:
                     properties:
                       dockerConfigAuth:
                         properties:
-                          credentialsRef:
-                            description: CredentialSecretKeyPair selects username
-                              and password keys from a Secret
+                          secretKey:
+                            description: Key inside the secret that contains the Docker
+                              config JSON
+                            type: string
+                          secretRef:
+                            description: Reference to the secret containing the Docker
+                              config JSONs
                             properties:
-                              passwordKey:
-                                description: PasswordKey is the key in the secret
-                                  for the password
+                              name:
+                                description: name is unique within a namespace to
+                                  reference a secret resource.
                                 type: string
-                              secretName:
-                                description: Secret is the name of the secret
+                              namespace:
+                                description: namespace defines the space within which
+                                  the secret name must be unique.
                                 type: string
-                              secretNamespace:
-                                type: string
-                              usernameKey:
-                                description: UsernameKey is the key in the secret
-                                  for the username
-                                type: string
-                            required:
-                            - passwordKey
-                            - secretName
-                            - secretNamespace
-                            - usernameKey
                             type: object
+                            x-kubernetes-map-type: atomic
+                        required:
+                        - secretKey
+                        - secretRef
                         type: object
                       type:
                         type: string
                     required:
+                    - dockerConfigAuth
                     - type
                     type: object
                 required:
@@ -302,33 +318,32 @@ spec:
                         properties:
                           dockerConfigAuth:
                             properties:
-                              credentialsRef:
-                                description: CredentialSecretKeyPair selects username
-                                  and password keys from a Secret
+                              secretKey:
+                                description: Key inside the secret that contains the
+                                  Docker config JSON
+                                type: string
+                              secretRef:
+                                description: Reference to the secret containing the
+                                  Docker config JSONs
                                 properties:
-                                  passwordKey:
-                                    description: PasswordKey is the key in the secret
-                                      for the password
+                                  name:
+                                    description: name is unique within a namespace
+                                      to reference a secret resource.
                                     type: string
-                                  secretName:
-                                    description: Secret is the name of the secret
+                                  namespace:
+                                    description: namespace defines the space within
+                                      which the secret name must be unique.
                                     type: string
-                                  secretNamespace:
-                                    type: string
-                                  usernameKey:
-                                    description: UsernameKey is the key in the secret
-                                      for the username
-                                    type: string
-                                required:
-                                - passwordKey
-                                - secretName
-                                - secretNamespace
-                                - usernameKey
                                 type: object
+                                x-kubernetes-map-type: atomic
+                            required:
+                            - secretKey
+                            - secretRef
                             type: object
                           type:
                             type: string
                         required:
+                        - dockerConfigAuth
                         - type
                         type: object
                     required:

@@ -171,12 +171,12 @@ func BuildGitSyncParams(volume *v1alpha1.Volume, destinationDir string) (GitSync
 
 		if gitSource.Auth.UsernamePasswordAuthRef != nil {
 			params.UsernamePasswordAuth = true
-			params.SecretName = gitSource.Auth.UsernamePasswordAuthRef.SecretName
+			params.SecretName = gitSource.Auth.UsernamePasswordAuthRef.SecretRef.Name
 			params.UsernameKey = gitSource.Auth.UsernamePasswordAuthRef.UsernameKey
 			params.PasswordKey = gitSource.Auth.UsernamePasswordAuthRef.PasswordKey
 		} else if gitSource.Auth.PersonalAccessTokenRef != nil {
 			params.PersonalAccessTokenAuth = true
-			params.SecretName = gitSource.Auth.PersonalAccessTokenRef.SecretName
+			params.SecretName = gitSource.Auth.PersonalAccessTokenRef.SecretRef.Name
 			params.UsernameKey = gitSource.Auth.PersonalAccessTokenRef.UsernameKey
 			params.PasswordKey = gitSource.Auth.PersonalAccessTokenRef.PasswordKey
 		}

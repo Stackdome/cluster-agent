@@ -5,7 +5,6 @@ import (
 	"hash/fnv"
 
 	corev1 "k8s.io/api/core/v1"
-	"stackdome.io/cluster-agent/api"
 	corev1alpha1 "stackdome.io/cluster-agent/api/core/v1alpha1"
 
 	"github.com/davecgh/go-spew/spew"
@@ -74,8 +73,8 @@ type GitRepoSource struct {
 }
 
 type GitAuth struct {
-	UsernamePasswordAuthRef *api.CredentialSecretKeyPair `json:"usernamePasswordAuthRef,omitempty"`
-	PersonalAccessTokenRef  *api.CredentialSecretKeyPair `json:"personalAccessTokenRef,omitempty"`
+	UsernamePasswordAuthRef *corev1alpha1.CredentialSecretKeyPair `json:"usernamePasswordAuthRef,omitempty"`
+	PersonalAccessTokenRef  *corev1alpha1.CredentialSecretKeyPair `json:"personalAccessTokenRef,omitempty"`
 }
 
 type GitBranch struct {

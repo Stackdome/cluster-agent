@@ -49,23 +49,31 @@ spec:
                 description: This is populated by the WorkspaceResource controller
                   before creating the build job.
                 properties:
-                  dockerAuthSecretRef:
+                  dockerConfigAuthSecret:
                     description: DockerConfigAuth contains the Docker config authentication
                       details
                     properties:
-                      authKey:
-                        description: Key in the secret containing the Docker config
+                      secretKey:
+                        description: Key inside the secret that contains the Docker
+                          config JSON
                         type: string
-                      secretName:
-                        description: Name of the secret
-                        type: string
-                      secretNamespace:
-                        description: Namespace where the secret is located
-                        type: string
+                      secretRef:
+                        description: Reference to the secret containing the Docker
+                          config JSONs
+                        properties:
+                          name:
+                            description: name is unique within a namespace to reference
+                              a secret resource.
+                            type: string
+                          namespace:
+                            description: namespace defines the space within which
+                              the secret name must be unique.
+                            type: string
+                        type: object
+                        x-kubernetes-map-type: atomic
                     required:
-                    - authKey
-                    - secretName
-                    - secretNamespace
+                    - secretKey
+                    - secretRef
                     type: object
                   type:
                     description: Type of the registry authentication
@@ -99,19 +107,28 @@ spec:
                                     description: PasswordKey is the key in the secret
                                       for the password
                                     type: string
-                                  secretName:
-                                    description: Secret is the name of the secret
-                                    type: string
-                                  secretNamespace:
-                                    type: string
+                                  secretRef:
+                                    description: |-
+                                      SecretReference represents a Secret Reference. It has enough information to retrieve secret
+                                      in any namespace
+                                    properties:
+                                      name:
+                                        description: name is unique within a namespace
+                                          to reference a secret resource.
+                                        type: string
+                                      namespace:
+                                        description: namespace defines the space within
+                                          which the secret name must be unique.
+                                        type: string
+                                    type: object
+                                    x-kubernetes-map-type: atomic
                                   usernameKey:
                                     description: UsernameKey is the key in the secret
                                       for the username
                                     type: string
                                 required:
                                 - passwordKey
-                                - secretName
-                                - secretNamespace
+                                - secretRef
                                 - usernameKey
                                 type: object
                               usernamePasswordAuthRef:
@@ -122,19 +139,28 @@ spec:
                                     description: PasswordKey is the key in the secret
                                       for the password
                                     type: string
-                                  secretName:
-                                    description: Secret is the name of the secret
-                                    type: string
-                                  secretNamespace:
-                                    type: string
+                                  secretRef:
+                                    description: |-
+                                      SecretReference represents a Secret Reference. It has enough information to retrieve secret
+                                      in any namespace
+                                    properties:
+                                      name:
+                                        description: name is unique within a namespace
+                                          to reference a secret resource.
+                                        type: string
+                                      namespace:
+                                        description: namespace defines the space within
+                                          which the secret name must be unique.
+                                        type: string
+                                    type: object
+                                    x-kubernetes-map-type: atomic
                                   usernameKey:
                                     description: UsernameKey is the key in the secret
                                       for the username
                                     type: string
                                 required:
                                 - passwordKey
-                                - secretName
-                                - secretNamespace
+                                - secretRef
                                 - usernameKey
                                 type: object
                             type: object

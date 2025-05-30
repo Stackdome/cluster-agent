@@ -83,7 +83,7 @@ func (r *StackReconciler) reconcileStackResource(
 		return nil, err
 	}
 
-	if !equality.Semantic.DeepDerivative(desiredSR.Spec, existingSR.Spec) {
+	if !equality.Semantic.DeepEqual(desiredSR.Spec, existingSR.Spec) {
 		existingSR.Spec = desiredSR.Spec
 		return existingSR, r.Client.Update(ctx, existingSR)
 	}

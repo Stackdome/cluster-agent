@@ -2,7 +2,7 @@ package v1alpha1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	common "stackdome.io/cluster-agent/api"
+	corev1alpha1 "stackdome.io/cluster-agent/api/core/v1alpha1"
 )
 
 type RegistryStatusConditionType string
@@ -19,7 +19,7 @@ type RegistryAuthSpec struct {
 
 type HtPasswordCredentialsSpec struct {
 	// +required
-	CredentialsRef *common.CredentialSecretKeyPair `json:"credentialsRef,omitempty"`
+	CredentialsRef *corev1alpha1.CredentialSecretKeyPair `json:"credentialsRef,omitempty"`
 }
 
 type SecretRef struct {

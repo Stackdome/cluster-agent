@@ -106,11 +106,6 @@ func (r *imageBuildReconciler) configureRegistryAuth(resource *v1alpha1.StackRes
 		return nil
 	}
 
-	authURL, err := resource.RegistryAuthUrl()
-	if err != nil {
-		return fmt.Errorf("failed to get auth URL: %w", err)
-	}
-
 	// Configure auth based on registry type
 	switch buildSpec.Registry.Auth.Type {
 	case v1alpha1.RegistryAuthTypeDockerHub, v1alpha1.RegistryAuthTypeInClusterZotRegistry:
@@ -118,11 +113,7 @@ func (r *imageBuildReconciler) configureRegistryAuth(resource *v1alpha1.StackRes
 			imageBuild.Spec.Auth = &buildsv1alpha1.RegistryAuth{}
 		}
 		imageBuild.Spec.Auth.Type = buildSpec.Registry.Auth.Type
-		imageBuild.Spec.Auth.DockerAuthSecretRef = &buildsv1alpha1.DockerAuthSecretRef{
-			SecretName:      registrySecretName(authURL),
-			SecretNamespace: resource.Namespace,
-			AuthKey:         buildSpec.Registry.Auth.GetDockerConfigSecretKey(),
-		}
+		imageBuild.Spec.Auth.DockerConfigAuthSecret = buildSpec.Registry.Auth.DockerConfigAuth.DeepCopy()
 	}
 
 	return nil
