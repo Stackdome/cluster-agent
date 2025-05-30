@@ -71,22 +71,7 @@ type RegistryAuth struct {
 	Type corev1alpha1.RegistryAuthType `json:"type"`
 	// DockerConfigAuth contains the Docker config authentication details
 	// +optional
-	DockerAuthSecretRef *DockerAuthSecretRef `json:"dockerAuthSecretRef,omitempty"`
-}
-
-// DockerAuthSecretRef references a Docker authentication secret
-type DockerAuthSecretRef struct {
-	// Name of the secret
-	// +required
-	SecretName string `json:"secretName"`
-
-	// Namespace where the secret is located
-	// +required
-	SecretNamespace string `json:"secretNamespace"`
-
-	// Key in the secret containing the Docker config
-	// +required
-	AuthKey string `json:"authKey"`
+	DockerConfigAuthSecret *corev1alpha1.DockerConfigAuth `json:"dockerConfigAuthSecret,omitempty"`
 }
 
 type BuildContextSpec struct {

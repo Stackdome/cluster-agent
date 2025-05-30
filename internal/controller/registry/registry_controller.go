@@ -434,8 +434,8 @@ func (r *RegistryReconciler) reconcileHtPasswordAuthSecret(ctx context.Context, 
 	credentialsInfo := registry.Spec.Auth.HtPasswordCredentials.CredentialsRef
 	htpasswdSecret := &corev1.Secret{}
 	if err := r.Client.Get(ctx, types.NamespacedName{
-		Name:      credentialsInfo.SecretName,
-		Namespace: credentialsInfo.SecretNamespace,
+		Name:      credentialsInfo.SecretRef.Name,
+		Namespace: credentialsInfo.SecretRef.Namespace,
 	}, htpasswdSecret); err != nil {
 		if apierrors.IsNotFound(err) {
 			// set status condition

@@ -245,21 +245,21 @@ func (r *ImageBuildReconciler) getRegistryAuthSecrets(ctx context.Context, build
 	auth := buildConfig.Spec.Auth
 	switch auth.Type {
 	case stackv1alpha1.RegistryAuthTypeDockerHub, stackv1alpha1.RegistryAuthTypeInClusterZotRegistry:
-		dockerConfigSecret, err := r.getDockerConfigSecret(ctx, auth.DockerAuthSecretRef)
+		dockerConfigSecret, err := r.getDockerConfigSecret(ctx, auth.DockerConfigAuthSecret)
 		if err != nil {
 			return nil, "", err
 		}
-		return dockerConfigSecret, auth.DockerAuthSecretRef.AuthKey, nil
+		return dockerConfigSecret, auth.DockerConfigAuthSecret.SecretKey, nil
 	default:
 		return nil, "", fmt.Errorf("unsupported registry auth type: %s", auth.Type)
 	}
 }
 
-func (r *ImageBuildReconciler) getDockerConfigSecret(ctx context.Context, secretRef *buildsv1alpha1.DockerAuthSecretRef) (*v1.Secret, error) {
+func (r *ImageBuildReconciler) getDockerConfigSecret(ctx context.Context, dockerConfigAuth *stackv1alpha1.DockerConfigAuth) (*v1.Secret, error) {
 	dockerConfigSecret := &v1.Secret{}
 	if err := r.Client.Get(ctx, types.NamespacedName{
-		Name:      secretRef.SecretName,
-		Namespace: secretRef.SecretNamespace,
+		Name:      dockerConfigAuth.SecretRef.Name,
+		Namespace: dockerConfigAuth.SecretRef.Namespace,
 	}, dockerConfigSecret); err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil, fmt.Errorf("docker config secret not found")

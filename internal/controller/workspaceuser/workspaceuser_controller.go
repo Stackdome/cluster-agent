@@ -221,7 +221,7 @@ func (r *WorkspaceUserReconciler) reconcileRole(ctx context.Context, user *userv
 	}
 
 	ownedByUs := controller.HasSameController(existingClusterRole, desiredClusterRole)
-	specChanged := !equality.Semantic.DeepDerivative(desiredClusterRole.Rules, existingClusterRole.Rules)
+	specChanged := !equality.Semantic.DeepEqual(desiredClusterRole.Rules, existingClusterRole.Rules)
 	if !ownedByUs || specChanged {
 		existingClusterRole.OwnerReferences = desiredClusterRole.OwnerReferences
 		existingClusterRole.Rules = desiredClusterRole.Rules

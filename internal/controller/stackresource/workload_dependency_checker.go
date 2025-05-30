@@ -33,7 +33,7 @@ func (w *workloadDependencyChecker) DependenciesAvailable(ctx context.Context, r
 	for i := range dependencyList {
 		currentDep := dependencyList[i]
 		if !stackResourceAvailable(&currentDep) {
-			return false, "Some dependency resources are not yet ready", nil
+			return false, fmt.Sprintf("Dependent resource '%s' not yet available", currentDep.Name), nil
 		}
 	}
 	return true, "", nil
@@ -44,7 +44,7 @@ func (w *workloadDependencyChecker) VolumeMountsReadyForUse(ctx context.Context,
 		return true, "", nil
 	}
 
-	volumes, err := w.getWorkspaceVolumes(ctx, resource)
+	volumes, err := w.getVolumes(ctx, resource)
 	if err != nil {
 		return false, "", fmt.Errorf("failed to get workspace volumes: %w", err)
 	}
@@ -107,7 +107,7 @@ func buildSyncCompletedAndUptoDate(buildSyncInfo storagev1alpha1.BuildArtifactSy
 	return buildSyncInfo.Status == storagev1alpha1.BuildArtifactSyncStatusCompleted && buildSyncInfo.BuildID == currentBuildID
 }
 
-func (w *workloadDependencyChecker) getWorkspaceVolumes(ctx context.Context, resource *v1alpha1.StackResource) ([]*storagev1alpha1.Volume, error) {
+func (w *workloadDependencyChecker) getVolumes(ctx context.Context, resource *v1alpha1.StackResource) ([]*storagev1alpha1.Volume, error) {
 	volumeRefs := make([]string, 0)
 	for _, volumeMount := range resource.Spec.VolumeMounts {
 		volumeRefs = append(volumeRefs, volumeMount.SourceVolume)
@@ -129,21 +129,14 @@ func (w *workloadDependencyChecker) getDependencies(ctx context.Context, resourc
 	if len(resource.Spec.DependsOn) == 0 {
 		return nil, nil
 	}
-	wrList := &v1alpha1.StackResourceList{}
-	workspaceRef := metav1.GetControllerOf(resource)
-	if workspaceRef == nil {
-		return nil, fmt.Errorf("missing owner ref for workspace resource")
-	}
-	if err := w.Client.List(ctx, wrList, client.InNamespace(resource.Namespace), client.MatchingFields{
-		ownerKey: workspaceRef.Name,
-	}); err != nil {
+	srList := &v1alpha1.StackResourceList{}
+	if err := w.Client.List(ctx, srList, client.InNamespace(resource.Namespace)); err != nil {
 		return nil, err
 	}
-
 	res := make([]v1alpha1.StackResource, 0)
-	for _, wr := range wrList.Items {
-		if slices.Contains(resource.Spec.DependsOn, wr.Name) {
-			res = append(res, wr)
+	for _, sr := range srList.Items {
+		if sr.Name != resource.Name && slices.Contains(resource.Spec.DependsOn, sr.Name) {
+			res = append(res, sr)
 		}
 	}
 	if len(res) != len(resource.Spec.DependsOn) {

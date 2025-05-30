@@ -8,7 +8,6 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -17,9 +16,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	buildsv1alpha1 "stackdome.io/cluster-agent/api/builds/v1alpha1"
-	storagev1alpha1 "stackdome.io/cluster-agent/api/storage/v1alpha1"
-
 	"stackdome.io/cluster-agent/api/core/v1alpha1"
+	storagev1alpha1 "stackdome.io/cluster-agent/api/storage/v1alpha1"
 	"stackdome.io/cluster-agent/internal/controller"
 	"stackdome.io/cluster-agent/pkg/interpolation"
 )
@@ -185,6 +183,8 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.S
 	if err := controllerutil.SetControllerReference(resource, desiredDeploymentForResource, r.Scheme); err != nil {
 		return resultNil, err
 	}
+	logger.Info("volme info", "volumeInfo", desiredDeploymentForResource.Spec.Template.Spec.Volumes)
+	logger.Info("volme mount info", "volumeMountInfo", desiredDeploymentForResource.Spec.Template.Spec.Containers[0].VolumeMounts)
 
 	existingDeployment := &appsv1.Deployment{}
 	if err := r.Client.Get(ctx,
@@ -199,21 +199,39 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.S
 		}
 		return resultNil, err
 	}
-	if !equality.Semantic.DeepDerivative(desiredDeploymentForResource.DeepCopy().Spec.Template, existingDeployment.DeepCopy().Spec.Template) {
-		logger.Info("Updating existing deployment for workload")
-		existingDeployment.Spec = desiredDeploymentForResource.Spec
-		return resultStop, r.Client.Update(ctx, existingDeployment)
-	}
 
+	deployment := desiredDeploymentForResource.DeepCopy()
+	deployment.SetManagedFields(nil)
+	deployment.TypeMeta = existingDeployment.TypeMeta
 	if r.requiresRestart(resource) {
 		logger.Info("restarting deployment for workload")
-		if existingDeployment.Spec.Template.Annotations == nil {
-			existingDeployment.Spec.Template.Annotations = make(map[string]string)
+		if deployment.Spec.Template.Annotations == nil {
+			deployment.Spec.Template.Annotations = make(map[string]string)
 		}
-		existingDeployment.Spec.Template.Annotations[v1alpha1.RestartResourceAnnotation] = v1.Now().UTC().String()
+		deployment.Spec.Template.Annotations[v1alpha1.RestartResourceAnnotation] = v1.Now().UTC().String()
 		resource.Status.LastRestartRequestProcessedAt = ptr.To(v1.NewTime(time.Now().UTC()))
 		reportStackResourceNotReady(resource, "WorkspaceResouceDeploymentNotReady", "WorkspaceResouceDeploymentNotReady")
-		return resultStop, r.Client.Update(ctx, existingDeployment)
+		return resultStop, r.Client.Patch(ctx, deployment, client.Apply, &client.PatchOptions{
+			Force:        ptr.To(true),
+			FieldManager: controllerName,
+		})
+	} else {
+		err = r.Client.Patch(ctx, deployment, client.Apply, &client.PatchOptions{
+			Force:        ptr.To(true),
+			FieldManager: controllerName,
+		})
+		if err != nil {
+			return resultNil, err
+		}
+	}
+	if err := r.Client.Get(ctx,
+		types.NamespacedName{
+			Name:      desiredDeploymentForResource.Name,
+			Namespace: desiredDeploymentForResource.Namespace,
+		},
+		existingDeployment,
+	); err != nil {
+		return resultNil, err
 	}
 
 	if controller.DeploymentAvailable(existingDeployment) {
@@ -226,27 +244,42 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.S
 
 func (r *workloadReconciler) setImagePullSecret(ctx context.Context, resource *v1alpha1.StackResource, deployment *appsv1.Deployment) error {
 	if resource.NeedsPullSecret() {
-		authUrl, err := resource.RegistryAuthUrl()
-		if err != nil {
-			return fmt.Errorf("failed to get registry auth url: %w", err)
-		}
 		authType := resource.RegistryAuthType()
 		switch authType {
 		case v1alpha1.RegistryAuthTypeDockerHub, v1alpha1.RegistryAuthTypeInClusterZotRegistry:
 			dockerConfigSecret := &corev1.Secret{}
-			if err := r.Client.Get(ctx, types.NamespacedName{
-				Name:      registrySecretName(authUrl),
-				Namespace: resource.Namespace,
-			}, dockerConfigSecret); err != nil {
-				if apierrors.IsNotFound(err) {
-					return fmt.Errorf("docker config secret not found: %w", err)
+			if resource.HasBuildSpec() {
+				// has build spec
+				if err := r.Client.Get(ctx, types.NamespacedName{
+					Name:      resource.Spec.BuildSpec.Registry.Auth.DockerConfigAuth.SecretRef.Name,
+					Namespace: resource.Namespace,
+				}, dockerConfigSecret); err != nil {
+					if apierrors.IsNotFound(err) {
+						return fmt.Errorf("docker config secret not found: %w", err)
+					}
+					return fmt.Errorf("failed to get docker config secret: %w", err)
 				}
-				return fmt.Errorf("failed to get docker config secret: %w", err)
-			}
-			deployment.Spec.Template.Spec.ImagePullSecrets = []corev1.LocalObjectReference{
-				{
-					Name: registrySecretName(authUrl),
-				},
+				deployment.Spec.Template.Spec.ImagePullSecrets = []corev1.LocalObjectReference{
+					{
+						Name: dockerConfigSecret.Name,
+					},
+				}
+			} else {
+				// has image spec
+				if err := r.Client.Get(ctx, types.NamespacedName{
+					Name:      resource.Spec.ImageSpec.PullAuth.DockerConfigAuth.SecretRef.Name,
+					Namespace: resource.Namespace,
+				}, dockerConfigSecret); err != nil {
+					if apierrors.IsNotFound(err) {
+						return fmt.Errorf("docker config secret not found: %w", err)
+					}
+					return fmt.Errorf("failed to get docker config secret: %w", err)
+				}
+				deployment.Spec.Template.Spec.ImagePullSecrets = []corev1.LocalObjectReference{
+					{
+						Name: dockerConfigSecret.Name,
+					},
+				}
 			}
 		default:
 			return fmt.Errorf("unsupported registry auth type: %s", authType)
@@ -308,6 +341,9 @@ func splitEnvVarValue(value string) (string, string) {
 }
 
 func InterpolatedVolumeMountList(resource *v1alpha1.StackResource) []corev1.VolumeMount {
+	if len(resource.Spec.VolumeMounts) == 0 {
+		return []corev1.VolumeMount{}
+	}
 	res := make([]corev1.VolumeMount, 0)
 	for _, mount := range resource.Spec.VolumeMounts {
 		sourceVolumeName := mount.SourceVolume
@@ -329,6 +365,9 @@ func InterpolatedVolumeMountList(resource *v1alpha1.StackResource) []corev1.Volu
 }
 
 func InterpolatedVolumesList(resource *v1alpha1.StackResource, volumeInfo map[string]*storagev1alpha1.Volume) []corev1.Volume {
+	if len(resource.Spec.VolumeMounts) == 0 {
+		return []corev1.Volume{}
+	}
 	res := make([]corev1.Volume, 0)
 	addedVolumes := make(map[string]struct{})
 	for _, mount := range resource.Spec.VolumeMounts {

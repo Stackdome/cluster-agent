@@ -7,10 +7,9 @@ import (
 	"strings"
 
 	"github.com/davecgh/go-spew/spew"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/rand"
-	"stackdome.io/cluster-agent/api"
-	common "stackdome.io/cluster-agent/api"
 )
 
 type RegistryAuthType string
@@ -212,8 +211,8 @@ type GitBranch struct {
 }
 
 type GitAuth struct {
-	UsernamePasswordAuthRef *api.CredentialSecretKeyPair `json:"usernamePasswordAuthRef,omitempty"`
-	PersonalAccessTokenRef  *api.CredentialSecretKeyPair `json:"personalAccessTokenRef,omitempty"`
+	UsernamePasswordAuthRef *CredentialSecretKeyPair `json:"usernamePasswordAuthRef,omitempty"`
+	PersonalAccessTokenRef  *CredentialSecretKeyPair `json:"personalAccessTokenRef,omitempty"`
 }
 
 type RegistrySpec struct {
@@ -230,13 +229,19 @@ type RegistrySpec struct {
 
 type RegistryAuth struct {
 	// +required
-	Type             RegistryAuthType  `json:"type"`
+	Type RegistryAuthType `json:"type"`
+	// +required
 	DockerConfigAuth *DockerConfigAuth `json:"dockerConfigAuth,omitempty"`
 	// Add more config for other auth types like gcr, aws ecr etc.
 }
 
 type DockerConfigAuth struct {
-	CredentialsRef *common.CredentialSecretKeyPair `json:"credentialsRef,omitempty"`
+	// Key inside the secret that contains the Docker config JSON
+	// +required
+	SecretKey string `json:"secretKey"`
+	// Reference to the secret containing the Docker config JSONs
+	// +required
+	SecretRef *corev1.SecretReference `json:"secretRef"`
 }
 
 func (r *RegistryAuth) GetDockerConfigSecretKey() string {
@@ -343,6 +348,14 @@ func (w *StackResource) RegistryAuthUrl() (string, error) {
 		return w.Spec.BuildSpec.Registry.Auth.GetAuthURL(registryHost), nil
 	}
 	return "", fmt.Errorf("missing registry auth url")
+}
+
+func (w *StackResource) HasBuildSpec() bool {
+	return w.Spec.BuildSpec != nil
+}
+
+func (w *StackResource) HasImageSpec() bool {
+	return w.Spec.ImageSpec != nil
 }
 
 func (w *StackResource) RegistryAuthType() RegistryAuthType {

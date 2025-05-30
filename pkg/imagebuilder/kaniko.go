@@ -277,12 +277,12 @@ func (b *BuildParams) generateImageBuildJobYAML() (string, error) {
 				// Configure auth based on provided credentials
 				if b.Source.GitRepo.Repo.Auth.UsernamePasswordAuthRef != nil {
 					creds := b.Source.GitRepo.Repo.Auth.UsernamePasswordAuthRef
-					b.GitSecretName = creds.SecretName
+					b.GitSecretName = creds.SecretRef.Name
 					b.GitUsernameKey = creds.UsernameKey
 					b.GitPasswordKey = creds.PasswordKey
 				} else if b.Source.GitRepo.Repo.Auth.PersonalAccessTokenRef != nil {
 					creds := b.Source.GitRepo.Repo.Auth.PersonalAccessTokenRef
-					b.GitSecretName = creds.SecretName
+					b.GitSecretName = creds.SecretRef.Name
 					b.GitUsernameKey = creds.UsernameKey
 					b.GitPasswordKey = creds.PasswordKey
 				}
@@ -338,9 +338,6 @@ func GenerateImageBuildJob(params BuildParams) (*batchv1.Job, error) {
 	container.Image = config.KanikoExecutorImage
 
 	container.Resources = corev1.ResourceRequirements{
-		Limits: corev1.ResourceList{
-			corev1.ResourceMemory: resource.MustParse("4Gi"),
-		},
 		Requests: corev1.ResourceList{
 			corev1.ResourceCPU:    resource.MustParse("200m"),
 			corev1.ResourceMemory: resource.MustParse("200Mi"),

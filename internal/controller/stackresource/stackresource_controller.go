@@ -16,10 +16,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	buildsv1alpha1 "stackdome.io/cluster-agent/api/builds/v1alpha1"
 	"stackdome.io/cluster-agent/api/core/v1alpha1"
 	storagev1alpha1 "stackdome.io/cluster-agent/api/storage/v1alpha1"
@@ -27,7 +27,8 @@ import (
 )
 
 const (
-	ownerKey = ".metadata.owner"
+	ownerKey       = ".metadata.owner"
+	controllerName = "stackresource-controller"
 )
 
 type subReconcilerResult struct {
@@ -65,24 +66,54 @@ func (r *StackResourceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	logger = logger.WithValues("stackResource:", req.String())
 	logger.Info("in stack resource reconciler")
 	ctx = controller.ContextWithLogger(ctx, logger)
-
-	workspaceResource := &v1alpha1.StackResource{}
-	if err := r.Client.Get(ctx, req.NamespacedName, workspaceResource); err != nil {
+	stackResource := &v1alpha1.StackResource{}
+	if err := r.Client.Get(ctx, req.NamespacedName, stackResource); err != nil {
 		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
 	}
-	res, err := r.reconcile(ctx, workspaceResource)
+	originalStatus := stackResource.Status.DeepCopy()
+
+	// Initialize the status and phase of the stack resource
+	r.initializeStatusAndPhase(stackResource)
+	res, err := r.reconcile(ctx, stackResource)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	applicationBuildStatus, err := r.getImageBuildStatus(ctx, workspaceResource)
+	applicationBuildStatus, err := r.getImageBuildStatus(ctx, stackResource)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	workspaceResource.Status.CurrentBuild = applicationBuildStatus
-	return res, r.Client.Status().Update(ctx, workspaceResource)
+	stackResource.Status.CurrentBuild = applicationBuildStatus
+
+	if !equality.Semantic.DeepEqual(originalStatus, &stackResource.Status) {
+		logger.Info("updating stack resource status")
+		if err := r.Client.Status().Update(ctx, stackResource); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
+	return res, nil
+}
+
+func (r *StackResourceReconciler) initializeStatusAndPhase(resource *v1alpha1.StackResource) {
+	resource.Status.ObservedGeneration = resource.Generation
+	resource.Status.Phase = v1alpha1.StackResourcePhasePending
+	resource.Status.ExternalAddress = nil // this is actually a no-op; maybe skip?
+	resource.Status.InternalAddress = nil // same here
+	resource.Status.ImageSourceRevision = ""
+	resource.Status.CurrentBuild = nil
+	cond := meta.FindStatusCondition(resource.Status.Conditions, string(v1alpha1.StackResourceStatusAvailable))
+	if cond == nil {
+		meta.SetStatusCondition(&resource.Status.Conditions, metav1.Condition{
+			Type:               string(v1alpha1.StackResourceStatusAvailable),
+			Status:             metav1.ConditionUnknown,
+			ObservedGeneration: resource.Generation,
+			Reason:             "StackResourceStausUnknown",
+			Message:            "StackResource status is unknown",
+		})
+	}
 }
 
 func (r *StackResourceReconciler) reconcile(ctx context.Context, resource *v1alpha1.StackResource) (ctrl.Result, error) {
@@ -214,7 +245,7 @@ func NewStackResourceReconciler(client client.Client, scheme *runtime.Scheme) *S
 
 func imageBuildComplete(imageBuild *buildsv1alpha1.ImageBuild) bool {
 	availableCond := meta.FindStatusCondition(imageBuild.Status.Conditions, string(buildsv1alpha1.BuildAvailable))
-	if availableCond != nil && availableCond.Status == v1.ConditionTrue {
+	if availableCond != nil && availableCond.Status == metav1.ConditionTrue {
 		return true
 	}
 	return false

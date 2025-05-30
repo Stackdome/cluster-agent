@@ -35,7 +35,7 @@ func (r *svcReconciler) reconcile(ctx context.Context, resource *v1alpha1.StackR
 	}
 
 	if svc == nil {
-		return r.handleServiceNotReady(ctx)
+		return r.handleServiceNotReady(ctx, resource, "Service for stack resource not created")
 	}
 
 	resource.Status.InternalAddress = &svc.Name
@@ -50,16 +50,17 @@ func (r *svcReconciler) reconcile(ctx context.Context, resource *v1alpha1.StackR
 	}
 
 	if portFqdnMap == nil {
-		return r.handleServiceNotReady(ctx)
+		return r.handleServiceNotReady(ctx, resource, "Ingress for stack resource not created")
 	}
 	resource.Status.ExternalAddress = r.buildExternalAddresses(portFqdnMap)
 	reportStackResourceReady(resource)
 	return resultNil, nil
 }
 
-func (r *svcReconciler) handleServiceNotReady(ctx context.Context) (subReconcilerResult, error) {
+func (r *svcReconciler) handleServiceNotReady(ctx context.Context, resource *v1alpha1.StackResource, message string) (subReconcilerResult, error) {
 	logger := controller.LoggerFromContext(ctx)
 	logger.Info("workload svc not ready")
+	reportStackResourceNotReady(resource, "ServiceNotReady", message)
 	return resultRequeue, nil
 }
 
@@ -134,7 +135,7 @@ func (r *svcReconciler) reconcileIngressForService(
 		return nil, err
 	}
 
-	if !equality.Semantic.DeepDerivative(desiredIngress.Spec, existingIngress.Spec) {
+	if !equality.Semantic.DeepEqual(desiredIngress.Spec, existingIngress.Spec) {
 		existingIngress.Spec = desiredIngress.Spec
 		return nil, r.Client.Update(ctx, existingIngress)
 	}
@@ -150,6 +151,7 @@ func (r *svcReconciler) ensureSvc(ctx context.Context, resource *v1alpha1.StackR
 	svcPorts := make([]corev1.ServicePort, 0)
 	for _, port := range ports {
 		svcPorts = append(svcPorts, corev1.ServicePort{
+			Name:       fmt.Sprintf("%s-%d", resource.Name, port.Number),
 			Port:       port.Number,
 			TargetPort: intstr.FromInt(int(port.Number)),
 		})
@@ -202,6 +204,7 @@ func (r *svcReconciler) ensureSvc(ctx context.Context, resource *v1alpha1.StackR
 	if controller.AreServicesEqual(&desiredSvc, existingSvc) {
 		return existingSvc, nil
 	}
+	logger.Info("services not equal")
 	desiredSvc.ResourceVersion = existingSvc.ResourceVersion
 	return nil, r.Client.Update(ctx, &desiredSvc)
 }
