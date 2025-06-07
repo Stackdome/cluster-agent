@@ -99,6 +99,10 @@ func (r *StackReconciler) reconcile(ctx context.Context, stack *v1alpha1.Stack) 
 }
 
 func reportStackNotReady(stack *v1alpha1.Stack, reason string, msg string) {
+	objectRevision, ok := stack.Annotations[v1alpha1.StackdomeServerObjectRevisionAnnotationKey]
+	if ok {
+		stack.Status.ObservedStackdomeServerObjectRevision = objectRevision
+	}
 	stack.Status.ObservedGeneration = stack.Generation
 	stack.Status.Phase = v1alpha1.StackPending
 	meta.SetStatusCondition(&stack.Status.Conditions, v1.Condition{
@@ -112,6 +116,10 @@ func reportStackNotReady(stack *v1alpha1.Stack, reason string, msg string) {
 }
 
 func reportStackReady(stack *v1alpha1.Stack) {
+	objectRevision, ok := stack.Annotations[v1alpha1.StackdomeServerObjectRevisionAnnotationKey]
+	if ok {
+		stack.Status.ObservedStackdomeServerObjectRevision = objectRevision
+	}
 	stack.Status.ObservedGeneration = stack.Generation
 	stack.Status.Phase = v1alpha1.StackReady
 	meta.SetStatusCondition(&stack.Status.Conditions, v1.Condition{

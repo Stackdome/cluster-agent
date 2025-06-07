@@ -134,6 +134,10 @@ func (r *StackResourceReconciler) reconcile(ctx context.Context, resource *v1alp
 }
 
 func reportStackResourceNotReady(resource *v1alpha1.StackResource, reason, msg string) {
+	objectRevision, ok := resource.Annotations[v1alpha1.StackdomeServerObjectRevisionAnnotationKey]
+	if ok {
+		resource.Status.ObservedStackdomeServerObjectRevision = objectRevision
+	}
 	resource.Status.ObservedGeneration = resource.Generation
 	resource.Status.Phase = v1alpha1.StackResourcePhasePending
 	resource.Status.ExternalAddress = nil
@@ -152,6 +156,10 @@ func reportStackResourceReady(resource *v1alpha1.StackResource) {
 	resource.Status.ObservedGeneration = resource.Generation
 	if resource.Spec.BuildSpec != nil {
 		resource.Status.ImageSourceRevision = resource.Spec.BuildSpec.SourceRevision.GetSourceRevisionString()
+	}
+	objectRevision, ok := resource.Annotations[v1alpha1.StackdomeServerObjectRevisionAnnotationKey]
+	if ok {
+		resource.Status.ObservedStackdomeServerObjectRevision = objectRevision
 	}
 	resource.Status.Phase = v1alpha1.StackResourcePhaseReady
 	meta.SetStatusCondition(&resource.Status.Conditions, metav1.Condition{
