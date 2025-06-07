@@ -286,8 +286,8 @@ type BuildStatus struct {
 // StackResourceStatus defines the observed state of StackResource
 type StackResourceStatus struct {
 	// The most recent generation observed by the controller.
-	ObservedGeneration                      int64 `json:"observedGeneration,omitempty"`
-	ObservedStackdomeServerObjectGeneration int64 `json:"observedStackdomeServerObjectGeneration,omitempty"`
+	ObservedGeneration                    int64  `json:"observedGeneration,omitempty"`
+	ObservedStackdomeServerObjectRevision string `json:"observedStackdomeServerObjectRevision,omitempty"`
 	// Conditions is a list of status conditions ths object is in.
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 	// +kubebuilder:default=Pending

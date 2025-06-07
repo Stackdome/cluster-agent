@@ -23,6 +23,10 @@ const (
 	StackAvailable StackCondition = "Available"
 )
 
+const (
+	StackdomeServerObjectRevisionAnnotationKey = "stackdome.stackdome.io/stackdome-server-object-revision"
+)
+
 // StackSpec defines the desired state of a Stack
 type StackSpec struct {
 	// +required
@@ -39,8 +43,8 @@ type StackResourceTemplate struct {
 // StackStatus defines the observed state of Stack
 type StackStatus struct {
 	// The most recent generation observed by the controller.
-	ObservedStackdomeServerObjectGeneration int64 `json:"observedStackdomeServerObjectGeneration,omitempty"`
-	ObservedGeneration                      int64 `json:"observedGeneration,omitempty"`
+	ObservedStackdomeServerObjectRevision string `json:"observedStackdomeServerObjectRevision,omitempty"`
+	ObservedGeneration                    int64  `json:"observedGeneration,omitempty"`
 	// Conditions is a list of status conditions ths object is in.
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 	// +kubebuilder:default=Pending

@@ -494,9 +494,8 @@ spec:
                 description: The most recent generation observed by the controller.
                 format: int64
                 type: integer
-              observedStackdomeServerObjectGeneration:
-                format: int64
-                type: integer
+              observedStackdomeServerObjectRevision:
+                type: string
               phase:
                 default: Pending
                 type: string
