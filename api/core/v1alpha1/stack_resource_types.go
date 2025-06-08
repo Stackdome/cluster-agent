@@ -218,6 +218,7 @@ type GitAuth struct {
 type RegistrySpec struct {
 	// Repository URL for constructing the image tag (e.g., docker.io/myorg)
 	// +required
+	// +kubebuilder:validation:MinLength=3
 	RepositoryURL string `json:"repositoryUrl"`
 	// Is the registry insecure
 	// +optional
