@@ -82,7 +82,7 @@ func (r *registryAuthReconciler) reconcileDockerConfigAuthSecret(
 	dockerConfigJsonSecret := &corev1.Secret{}
 	if err := r.client.Get(ctx, client.ObjectKey{
 		Name:      dockerConfigAuth.SecretRef.Name,
-		Namespace: dockerConfigAuth.SecretRef.Namespace,
+		Namespace: stackResource.Namespace,
 	}, dockerConfigJsonSecret); err != nil {
 		if errors.IsNotFound(err) {
 			reportStackResourceNotReady(stackResource, "DockerConfigJsonSecretNotFound", "Docker credentials secret not found")
