@@ -45,7 +45,10 @@ func (Build) init() error {
 	}
 	shortCommitID = strings.TrimSpace(string(shortCommitIDBytes))
 
-	version = strings.TrimSpace(os.Getenv("VERSION"))
+	versionFromEnv := strings.TrimSpace(os.Getenv("VERSION"))
+	if len(versionFromEnv) > 0 {
+		version = versionFromEnv
+	}
 	if len(version) == 0 {
 		version = fmt.Sprint(time.Now().UTC().Unix())
 	}
