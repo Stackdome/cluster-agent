@@ -81,4 +81,13 @@ resources:
   kind: NFSServer
   path: stackdome.io/cluster-agent/api/storage/v1alpha1
   version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: stackdome.io
+  group: addons
+  kind: PostgresCluster
+  path: stackdome.io/cluster-agent/api/addons/v1alpha1
+  version: v1alpha1
 version: "3"
