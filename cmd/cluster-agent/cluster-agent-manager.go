@@ -13,6 +13,8 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 	"k8s.io/utils/ptr"
 
+	cnpgv1 "github.com/cloudnative-pg/cloudnative-pg/api/v1"
+	barmancloudv1 "github.com/cloudnative-pg/plugin-barman-cloud/api/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -23,11 +25,13 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
+	addonsv1alpha1 "stackdome.io/cluster-agent/api/addons/v1alpha1"
 	buildsv1alpha1 "stackdome.io/cluster-agent/api/builds/v1alpha1"
 	corev1alpha1 "stackdome.io/cluster-agent/api/core/v1alpha1"
 	registryv1alpha1 "stackdome.io/cluster-agent/api/registry/v1alpha1"
 	storagev1alpha1 "stackdome.io/cluster-agent/api/storage/v1alpha1"
 	usersv1alpha1 "stackdome.io/cluster-agent/api/users/v1alpha1"
+	postgrescontroller "stackdome.io/cluster-agent/internal/controller/addons/postgrescluster"
 	"stackdome.io/cluster-agent/internal/controller/imagebuild"
 	nfsservercontroller "stackdome.io/cluster-agent/internal/controller/nfsserver"
 	"stackdome.io/cluster-agent/internal/controller/stack"
@@ -55,6 +59,9 @@ func init() {
 	utilruntime.Must(buildsv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(usersv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(storagev1alpha1.AddToScheme(scheme))
+	utilruntime.Must(cnpgv1.AddToScheme(scheme))
+	utilruntime.Must(barmancloudv1.AddToScheme(scheme))
+	utilruntime.Must(addonsv1alpha1.AddToScheme(scheme))
 	//+kubebuilder:scaffold:scheme
 }
 
@@ -249,6 +256,16 @@ func main() {
 	}
 
 	mgr.Add(stackdomeNfsManyProvisioner)
+
+	postgresAddonController := postgrescontroller.NewPostgresAddonReconciler(postgrescontroller.PostgresClusterReconcilerSpec{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	})
+
+	if err = postgresAddonController.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "PostgresCluster")
+		os.Exit(1)
+	}
 
 	//+kubebuilder:scaffold:builder
 

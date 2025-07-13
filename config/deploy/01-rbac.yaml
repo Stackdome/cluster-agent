@@ -135,6 +135,20 @@ rules:
   - patch
   - create
 - apiGroups:
+  - addons.stackdome.io
+  resources:
+  - postgresclusters
+  - postgresclusters/status
+  - postgresclusters/finalizers
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
   - networking.k8s.io
   resources:
   - ingresses
@@ -260,12 +274,44 @@ rules:
   - get
   - list
   - patch
-# - apiGroups:
-#   - "*"
-#   resources:
-#   - "*"
-#   verbs:
-#   - "*"
+- apiGroups:
+  - "postgresql.cnpg.io"
+  resources:
+  - clusters
+  - clusters/status
+  - clusters/finalizers
+  - imagecatalogs
+  - backups
+  - backups/status
+  - backups/finalizers
+  - scheduledbackups
+  - scheduledbackups/status
+  - scheduledbackups/finalizers
+  - databases
+  - databases/status
+  - databases/finalizers
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - "barmancloud.cnpg.io"
+  resources:
+  - objectstores
+  - objectstores/status
+  - objectstores/finalizers
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

@@ -20,3 +20,15 @@ type CredentialSecretKeyPair struct {
 	// +required
 	PasswordKey string `json:"passwordKey"`
 }
+
+type CredentialSecret struct {
+	// +required
+	SecretRef corev1.SecretReference `json:"secretRef"`
+	// +required
+	Key string `json:"key"`
+}
+
+type UserNamePasswordSecret struct {
+	// +required
+	SecretRef corev1.SecretReference `json:"secretRef"`
+}

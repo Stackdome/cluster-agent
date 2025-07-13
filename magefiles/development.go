@@ -52,7 +52,28 @@ func (d Dev) init() error {
 			PackageName: "traefik",
 			Namespace:   "traefik-v2",
 			ReleaseName: "traefik",
+		},
+		dev.ClusterHelmInstall{
+			RepoName:    "cnpg",
+			RepoURL:     "https://cloudnative-pg.github.io/charts",
+			PackageName: "cloudnative-pg",
+			Namespace:   "cnpg-system",
+			ReleaseName: "cnpg",
 			SetVars:     []string{},
+		},
+		dev.ClusterHelmInstall{
+			RepoName:    "jetstack",
+			RepoURL:     "https://charts.jetstack.io",
+			PackageName: "cert-manager",
+			Namespace:   "cert-manager",
+			ReleaseName: "cert-manager",
+			SetVars: []string{
+				"crds.enabled=true",
+				"installCRDs=true",
+			},
+		},
+		dev.ClusterLoadObjectsFromHttp{
+			"https://github.com/cloudnative-pg/plugin-barman-cloud/releases/download/v0.5.0/manifest.yaml",
 		},
 	}
 

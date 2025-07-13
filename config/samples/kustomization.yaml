@@ -8,4 +8,5 @@ resources:
 - workspace_v1alpha1_workspaceconfiguration.yaml
 - registry_v1alpha1_registry.yaml
 - storage_v1alpha1_nfsserver.yaml
+- addons_v1alpha1_postgrescluster.yaml
 #+kubebuilder:scaffold:manifestskustomizesamples
