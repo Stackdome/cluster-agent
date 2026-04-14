@@ -1,0 +1,45 @@
+apiVersion: addons.stackdome.io/v1alpha1
+kind: PostgresCluster
+metadata:
+  name: postgres-with-placement-rules
+  namespace: default
+spec:
+  instances: 3
+  replicasSpec:
+    numSynchronousReplicas: 1
+    dataDurability: preferred
+  postgreSQLSpec:
+    imageCatalogRef:
+      name: postgres-catalog
+    postgreSQLVersion: 16
+    postgreSQLMinorVersion: 3
+    postgresConf:
+      shared_buffers: "1GB"
+      effective_cache_size: "3GB"
+      work_mem: "10MB"
+      maintenance_work_mem: "205MB"
+      # Storage Configuration
+      random_page_cost: "1.1"
+      effective_io_concurrency: "200"
+      # Worker Processes Configuration
+      max_worker_processes: "8"
+      max_parallel_workers_per_gather: "2"
+      max_parallel_workers: "2"
+  clusterBackupSpec:
+    walArchivingEnabled: true
+    objectStoreName: azure-blob-store
+    scheduledBaseBackupSpec:
+      enabled: true
+  storageSpec:
+    storageClassName: standard
+    size: 5Gi
+  instancePlacementSpec:
+    placementPolicy: required
+    tolerations:
+      - key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+        effect: "NoSchedule"
+  databases:
+    - name: app
+      extensions:
+        - name: vector
