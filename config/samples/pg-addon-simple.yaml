@@ -1,0 +1,18 @@
+apiVersion: addons.stackdome.io/v1alpha1
+kind: PostgresCluster
+metadata:
+  name: simple-postgres
+  namespace: default
+spec:
+  instances: 2  
+  replicasSpec:
+    numSynchronousReplicas: 1
+    dataDurability: preferred
+  postgreSQLSpec:
+    imageCatalogRef:
+      name: postgres-catalog
+    postgreSQLVersion: 16
+    postgreSQLMinorVersion: 3
+  storageSpec:
+    storageClassName: standard
+    size: 5Gi

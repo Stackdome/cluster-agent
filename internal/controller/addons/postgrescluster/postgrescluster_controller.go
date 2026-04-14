@@ -125,8 +125,8 @@ func (r *PostgresClusterReconciler) initializeStatusAndPhase(resource *addonsv1a
 			Type:               string(addonsv1alpha1.ClusterReady),
 			Status:             metav1.ConditionUnknown,
 			ObservedGeneration: resource.Generation,
-			Reason:             "StackResourceStausUnknown",
-			Message:            "StackResource status is unknown",
+			Reason:             "PostgresClusterStatusUnknown",
+			Message:            "PostgresCluster status is unknown",
 		})
 	}
 }

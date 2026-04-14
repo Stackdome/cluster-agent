@@ -171,6 +171,7 @@ func (r *databaseReconciler) reconcileUnWantedDatabases(ctx context.Context, res
 				// We will get requeued when "EnsureAbsent" is reconciled by cnpg.
 				return nil
 			} else {
+				// First we set EnsureAbsent, then we update the resource. We will get requeued and then we delete the resource in the next reconciliation loop.
 				current.Spec.Ensure = cnpgv1.EnsureAbsent
 				if err := r.client.Update(ctx, current); err != nil && !k8sapierrors.IsNotFound(err) {
 					return err

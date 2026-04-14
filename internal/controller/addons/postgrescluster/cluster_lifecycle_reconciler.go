@@ -84,7 +84,6 @@ func (r *clusterLifecycleReconciler) reconcileClusterHibernation(ctx context.Con
 		hibernatedCond := meta.FindStatusCondition(cnpgCluster.Status.Conditions, cnpghibernation.HibernationConditionType)
 		if hibernatedCond != nil && hibernatedCond.Status == metav1.ConditionTrue {
 			setStatusCondition(resource, addonsv1alpha1.ClusterHiberated, metav1.ConditionTrue, "ClusterHibernated", "The cluster is currently hibernated")
-			// return resultNil, r.client.Status().Update(ctx, resource)
 			return resultNil, nil
 
 		}
@@ -96,7 +95,6 @@ func (r *clusterLifecycleReconciler) reconcileClusterHibernation(ctx context.Con
 		hibernatedCond := meta.FindStatusCondition(cnpgCluster.Status.Conditions, cnpghibernation.HibernationConditionType)
 		if hibernatedCond == nil || hibernatedCond.Status == metav1.ConditionFalse {
 			meta.RemoveStatusCondition(&resource.Status.Conditions, string(addonsv1alpha1.ClusterHiberated))
-			// return resultNil, r.client.Status().Update(ctx, resource)
 			return resultNil, nil
 		}
 		// We wait for the hibernation condition to be set to false or for it to go missing.
@@ -119,7 +117,6 @@ func (r *clusterLifecycleReconciler) reconcileClusterFencing(ctx context.Context
 			return resultRequeueAfter(time.Second * 30), r.client.Update(ctx, cnpgCluster)
 		}
 		setStatusCondition(resource, addonsv1alpha1.ClusterFenced, metav1.ConditionTrue, "ClusterFenced", "The cluster is currently fenced")
-		// return resultNil, r.client.Status().Update(ctx, resource)
 		return resultNil, nil
 
 	}
@@ -131,7 +128,6 @@ func (r *clusterLifecycleReconciler) reconcileClusterFencing(ctx context.Context
 		return resultRequeueAfter(time.Second * 30), r.client.Update(ctx, cnpgCluster)
 	}
 	if removed := meta.RemoveStatusCondition(&resource.Status.Conditions, string(addonsv1alpha1.ClusterFenced)); removed {
-		// return resultNil, r.client.Status().Update(ctx, resource)
 		return resultNil, nil
 
 	}

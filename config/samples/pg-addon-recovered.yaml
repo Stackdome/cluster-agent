@@ -1,0 +1,33 @@
+apiVersion: addons.stackdome.io/v1alpha1
+kind: PostgresCluster
+metadata:
+  name: postgres-recovered
+  namespace: default
+spec:
+  instances: 2
+  replicasSpec:
+    numSynchronousReplicas: 1
+    dataDurability: preferred
+  bootstrapSpec:
+    recoverySpec:
+      objectStoreSpec:
+        objectStoreName: azure-blob-store
+        sourceClusterName: postgres-with-backup-16
+  postgreSQLSpec:
+    imageCatalogRef:
+      name: postgres-catalog
+    postgreSQLVersion: 16
+    postgreSQLMinorVersion: 3
+  clusterBackupSpec:
+    walArchivingEnabled: true
+    objectStoreName: azure-blob-store
+    scheduledBaseBackupSpec:
+      enabled: true
+  storageSpec:
+    storageClassName: standard
+    size: 5Gi
+  databases:
+    - name: app
+      extensions:
+        - name: vector
+    - name: analytics

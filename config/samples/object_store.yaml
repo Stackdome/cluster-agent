@@ -1,0 +1,14 @@
+apiVersion: barmancloud.cnpg.io/v1
+kind: ObjectStore
+metadata:
+  name: azure-blob-store
+spec:
+  configuration:
+    destinationPath: https://ashishstorage2194.blob.core.windows.net/cnpg-backups
+    azureCredentials:
+      connectionString:
+        name: azure-blob-connection-string
+        key: connectionString
+    wal:
+      compression: gzip
+  retentionPolicy: 1d
