@@ -72,8 +72,8 @@ func (d Dev) init() error {
 				"installCRDs=true",
 			},
 		},
-		dev.ClusterLoadObjectsFromHttp{
-			"https://github.com/cloudnative-pg/plugin-barman-cloud/releases/download/v0.5.0/manifest.yaml",
+		dev.ClusterLoadObjectsFromFiles{
+			"config/deploy/barman-cloud-manifest.yaml",
 		},
 	}
 

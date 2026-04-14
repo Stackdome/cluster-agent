@@ -4,7 +4,10 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path"
@@ -13,7 +16,9 @@ import (
 
 	"github.com/magefile/mage/mg"
 	"github.com/magefile/mage/sh"
+	"github.com/mt-sre/client"
 	"github.com/mt-sre/devkube/dev"
+	imageparser "github.com/novln/docker-parser"
 )
 
 type Build mg.Namespace
@@ -106,7 +111,7 @@ func (Build) cmd(cmd, goos, goarch string) error {
 			env,
 			"go", "build", "-v", "-o", bin, "./cmd/cluster-agent/"+cmd+".go",
 		); err != nil {
-			return fmt.Errorf("compiling addon-operator-manager: %v", err)
+			return fmt.Errorf("compiling cluster-agent-manager: %v", err)
 		}
 	case "containerd-config-reconciler":
 		if err := sh.RunWithV(
@@ -121,43 +126,80 @@ func (Build) cmd(cmd, goos, goarch string) error {
 	return nil
 }
 
-// // Default build target for CI/CD to build binaries
-// func (Build) All() {
-// 	mg.Deps(
-// 		mg.F(Build.cmd, "addon-operator-manager", "linux", "amd64"),
-// 		mg.F(Build.cmd, "addon-operator-webhook", "linux", "amd64"),
-// 		mg.F(Build.cmd, "api-mock", "linux", "amd64"),
-// 		mg.F(Build.cmd, "mage", "", ""),
-// 	)
-// }
+// Default build target for CI/CD to build binaries
+func (Build) All() {
+	mg.Deps(
+		mg.F(Build.cmd, "cluster-agent-manager", "linux", "amd64"),
+	)
+}
 
-// func (Build) BuildImages() {
-// 	mg.Deps(
-// 		mg.F(Build.ImageBuild, "addon-operator-manager"),
-// 		mg.F(Build.ImageBuild, "addon-operator-webhook"),
-// 		mg.F(Build.ImageBuild, "api-mock"),
-// 		mg.F(Build.ImageBuild, "addon-operator-index"), // also pushes bundle
-// 		mg.F(Build.ImageBuild, "addon-operator-package"),
-// 	)
-// }
+func (Build) BuildImages() {
+	mg.Deps(
+		mg.F(Build.ImageBuild, "cluster-agent-manager"),
+	)
+}
 
-// func (Build) PushImages() {
-// 	mg.Deps(
-// 		mg.F(Build.imagePush, "addon-operator-manager"),
-// 		mg.F(Build.imagePush, "addon-operator-webhook"),
-// 		mg.F(Build.imagePush, "addon-operator-index"), // also pushes bundle
-// 		mg.F(Build.imagePush, "addon-operator-package"),
-// 	)
-// }
+func (Build) PushImages() {
+	mg.Deps(
+		mg.F(Build.imagePush, "cluster-agent-manager"),
+	)
+}
 
-// func (Build) PushImagesOnce() {
-// 	mg.Deps(
-// 		mg.F(Build.imagePushOnce, "addon-operator-manager"),
-// 		mg.F(Build.imagePushOnce, "addon-operator-webhook"),
-// 		mg.F(Build.imagePushOnce, "addon-operator-index"), // also pushes bundle
-// 		mg.F(Build.imagePushOnce, "addon-operator-package"),
-// 	)
-// }
+func (Build) PushImagesOnce() {
+	mg.Deps(
+		mg.F(Build.imagePushOnce, "cluster-agent-manager"),
+	)
+}
+
+func (Build) imagePush(imageName string) error {
+	mg.SerialDeps(setupContainerRuntime, Build.init)
+
+	pushInfo := newImagePushInfo(imageName)
+	buildImageDep := mg.F(Build.ImageBuild, imageName)
+
+	return dev.PushImage(pushInfo, buildImageDep)
+}
+
+func (b Build) imagePushOnce(imageName string) error {
+	mg.SerialDeps(
+		Build.init,
+	)
+
+	ok, err := b.imageExists(context.Background(), imageName)
+	if err != nil {
+		return fmt.Errorf("checking if image %q exists: %w", imageName, err)
+	}
+
+	if ok {
+		fmt.Fprintf(os.Stdout, "skipping image %q since it is already up-to-date\n", imageName)
+
+		return nil
+	}
+	return b.imagePush(imageName)
+}
+
+func (Build) imageExists(ctx context.Context, name string) (bool, error) {
+	ref, err := imageparser.Parse(imageURL(name))
+	if err != nil {
+		return false, fmt.Errorf("parsing image reference: %w", err)
+	}
+
+	url := url.URL{
+		Scheme: "https",
+		Host:   ref.Registry(),
+		Path:   path.Join("v2", ref.ShortName(), "manifests", ref.Tag()),
+	}
+
+	c := client.NewClient()
+	res, err := c.Head(ctx, url.String())
+	if err != nil {
+		return false, fmt.Errorf("sending HTTP request: %w", err)
+	}
+
+	defer res.Body.Close()
+
+	return res.StatusCode == http.StatusOK, nil
+}
 
 func (b Build) ImageBuild(cmd string) error {
 	mg.SerialDeps(setupContainerRuntime, b.init)
