@@ -55,10 +55,15 @@ type RegistryReconciler struct {
 	client.Client
 	Scheme          *runtime.Scheme
 	registryBuilder reg.RegistryBuilder
-	subReconcilers  map[string]subReconciler
+	subReconcilers  []namedSubReconciler
 }
 
 type subReconciler func(ctx context.Context, registry *registryv1alpha1.ClusterRegistry) (subReconcilerResult, error)
+
+type namedSubReconciler struct {
+	name      string
+	reconcile subReconciler
+}
 
 func NewRegistryReconciler(client client.Client, scheme *runtime.Scheme, registryBuilder reg.RegistryBuilder) *RegistryReconciler {
 	r := &RegistryReconciler{
@@ -79,15 +84,15 @@ func NewRegistryReconciler(client client.Client, scheme *runtime.Scheme, registr
 		Namespace: registryNamespace,
 	}))
 
-	r.subReconcilers = map[string]subReconciler{
-		"NamepspaceReonciler":                     r.reconcileRegistryNamespace,
-		"RegistryAuthReconciler":                  r.reconcileRegistryAuth,
-		"RegistryStorageReconciler":               r.reconcileRegistryStorage,
-		"RegistryConfigReconciler":                r.reconcileRegistryConfig,
-		"RegistryDeploymentReconciler":            r.reconcileRegistryDeployment,
-		"RegistryServiceReconciler":               r.reconcileRegistryService,
-		"NodeRegistryAccessConfigMapReconciler":   r.reconcileNodeRegistryAccessConfigMap,
-		"SharedRegistryConfigDaemonSetReconciler": r.reconcileSharedRegistryConfigDaemonSet,
+	r.subReconcilers = []namedSubReconciler{
+		{"NamespaceReconciler", r.reconcileRegistryNamespace},
+		{"RegistryAuthReconciler", r.reconcileRegistryAuth},
+		{"RegistryStorageReconciler", r.reconcileRegistryStorage},
+		{"RegistryConfigReconciler", r.reconcileRegistryConfig},
+		{"RegistryDeploymentReconciler", r.reconcileRegistryDeployment},
+		{"RegistryServiceReconciler", r.reconcileRegistryService},
+		{"NodeRegistryAccessConfigMapReconciler", r.reconcileNodeRegistryAccessConfigMap},
+		{"SharedRegistryConfigDaemonSetReconciler", r.reconcileSharedRegistryConfigDaemonSet},
 	}
 	return r
 }
@@ -262,13 +267,13 @@ func (r *RegistryReconciler) reconcileDelete(ctx context.Context, registry *regi
 }
 
 func (r *RegistryReconciler) reconcile(ctx context.Context, registry *registryv1alpha1.ClusterRegistry) (ctrl.Result, error) {
-	for reconcilerName, subReconciler := range r.subReconcilers {
+	for _, sr := range r.subReconcilers {
 		logger := log.FromContext(ctx)
-		logger.Info("reconciling", "sub-reconciler", reconcilerName)
-		result, err := subReconciler(ctx, registry)
+		logger.Info("reconciling", "sub-reconciler", sr.name)
+		result, err := sr.reconcile(ctx, registry)
 		switch {
 		case err != nil:
-			logger.Error(err, "failed to reconcile", "sub-reconciler", reconcilerName)
+			logger.Error(err, "failed to reconcile", "sub-reconciler", sr.name)
 			return ctrl.Result{}, err
 		case result.resultStop:
 			return ctrl.Result{}, nil
