@@ -113,6 +113,11 @@ ifndef ignore-not-found
 endif
 
 
+.PHONY: test-integration
+test-integration: ## Run integration tests (requires Docker for Kind cluster)
+	go test ./test/integration/... -v -ginkgo.v -timeout 30m -count=1 2>&1 | tee test/integration/last-run.log
+
+
 
 .PHONY: docker-build-containerd-reconciler
 docker-build-containerd-reconciler:

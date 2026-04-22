@@ -27,3 +27,6 @@ go.work
 *.swp
 *.swo
 *~
+
+# Integration test logs
+test/integration/last-run.log
