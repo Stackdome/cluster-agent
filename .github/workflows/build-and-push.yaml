@@ -1,0 +1,42 @@
+name: Build and Push Images
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  IMAGE_ORG: ${{ vars.IMAGE_ORG || 'quay.io/stackdome/cluster-agent' }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Extract tag
+        id: tag
+        run: echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to container registry
+        run: |
+          REGISTRY=$(echo "$IMAGE_ORG" | cut -d'/' -f1)
+          echo "${{ secrets.REGISTRY_PASSWORD }}" | docker login "$REGISTRY" -u "${{ secrets.REGISTRY_USERNAME }}" --password-stdin
+
+      - name: Build images
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+          IMAGE_ORG: ${{ env.IMAGE_ORG }}
+        run: go run ./cmd/mage build:buildImages
+
+      - name: Push images
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+          IMAGE_ORG: ${{ env.IMAGE_ORG }}
+        run: go run ./cmd/mage build:pushImages

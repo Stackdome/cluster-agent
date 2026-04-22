@@ -1,16 +1,6 @@
-# ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
 ENVTEST_K8S_VERSION = 1.29.0
-GOOS ?= $(shell go env GOOS)
-version:=$(shell date +%s)
-# Tag for the image:
-image_tag:=$(version)
-image_repository:=quay.io/stackdome
-tools_version:=v0.0.1
-ssh_server_version:=v0.0.1
-# Output binary name
-RECONCILER_BIN = containerd-config-reconciler
-# Docker image details
-RECONCILER_TAG = v0.0.4
+
+IMAGE_REPOSITORY ?= quay.io/stackdome
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
@@ -19,14 +9,8 @@ else
 GOBIN=$(shell go env GOBIN)
 endif
 
-# CONTAINER_TOOL defines the container tool to be used for building images.
-# Be aware that the target commands are only tested with Docker which is
-# scaffolded by default. However, you might want to replace it to use other
-# tools. (i.e. podman)
 CONTAINER_TOOL ?= docker
 
-# Setting SHELL to bash allows bash commands to be executed by recipes.
-# Options are set to exit when a recipe line exits non-zero or a piped command fails.
 SHELL = /usr/bin/env bash -o pipefail
 .SHELLFLAGS = -ec
 
@@ -35,20 +19,9 @@ all: build
 
 ##@ General
 
-# The help target prints out all targets with their descriptions organized
-# beneath their categories. The categories are represented by '##@' and the
-# target descriptions by '##'. The awk command is responsible for reading the
-# entire set of makefiles included in this invocation, looking for lines of the
-# file as xyz: ## something, and then pretty-format the target and help. Then,
-# if there's a line with ##@ something, that gets pretty-printed as a category.
-# More info on the usage of ANSI control characters for terminal formatting:
-# https://en.wikipedia.org/wiki/ANSI_escape_code#SGR_parameters
-# More info on the awk command:
-# http://linuxcommand.org/lc3_adv_awk.php
-
 .PHONY: help
 help: ## Display this help.
-	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n"} /^[a-zA-Z_0-9-]+:.*?##/ { printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n"} /^[a-zA-Z_0-9-]+:.*?##/ { printf "  \033[36m%-30s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
 
 ##@ Development
 
@@ -72,80 +45,39 @@ vet: ## Run go vet against code.
 test: manifests generate fmt vet envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
-# Utilize Kind or modify the e2e tests to load the image locally, enabling compatibility with other vendors.
-.PHONY: test-e2e  # Run the e2e tests against a Kind k8s instance that is spun up.
-test-e2e:
-	go test ./test/e2e/ -v -ginkgo.v
+.PHONY: test-integration
+test-integration: ## Run integration tests (requires Docker for Kind cluster).
+	go test ./test/integration/... -v -ginkgo.v -timeout 30m -count=1 2>&1 | tee test/integration/last-run.log
 
 .PHONY: lint
-lint: golangci-lint ## Run golangci-lint linter & yamllint
+lint: golangci-lint ## Run golangci-lint linter.
 	$(GOLANGCI_LINT) run
 
 .PHONY: lint-fix
-lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
+lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes.
 	$(GOLANGCI_LINT) run --fix
 
 ##@ Build
 
 .PHONY: build
-build: manifests generate fmt vet ## Build manager binary.
-	GOOS=$(GOOS) go build -o bin/stackdome-operator-manager cmd/main.go
+build: ## Build operator and reconciler binaries via mage.
+	go run ./cmd/mage build:all
 
-.PHONY: run
-run: manifests generate fmt vet ## Run a controller from your host.
-	kubectl apply -f config/deploy/crds/ && go run ./cmd/stackdome-cluster-agent/main.go
-
-# If you wish to build the manager image targeting other platforms you can use the --platform flag.
-# (i.e. docker build --platform linux/arm64). However, you must enable docker buildKit for it.
-# More info: https://docs.docker.com/develop/develop-images/build_enhancements/
 .PHONY: docker-build
-docker-build: GOOS=linux
-docker-build: build
-	$(CONTAINER_TOOL) build -t "$(external_image_registry)/$(image_repository):$(image_tag)" .
+docker-build: ## Build container images via mage.
+	go run ./cmd/mage build:buildImages
 
 .PHONY: docker-push
-docker-push: ## Push docker image with the manager.
-	$(CONTAINER_TOOL) push ${IMG}
-
-
-ifndef ignore-not-found
-  ignore-not-found = false
-endif
-
-
-.PHONY: test-integration
-test-integration: ## Run integration tests (requires Docker for Kind cluster)
-	go test ./test/integration/... -v -ginkgo.v -timeout 30m -count=1 2>&1 | tee test/integration/last-run.log
-
-
-
-.PHONY: docker-build-containerd-reconciler
-docker-build-containerd-reconciler:
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-w -s" -o $(RECONCILER_BIN) cmd/containerd-config-reconciler/main.go
-	docker build -t $(image_repository)/registry-config-reconciler:$(RECONCILER_TAG) -f tools/containerd-config-reconciler/Dockerfile .
+docker-push: ## Push container images via mage.
+	go run ./cmd/mage build:pushImages
 
 .PHONY: docker-build-sync-tools
-docker-build-sync-tools:
-	docker build -t $(image_repository)/tools:$(tools_version) -f tools/sync-tools/Dockerfile .
-
+docker-build-sync-tools: ## Build sync-tools image.
+	$(CONTAINER_TOOL) build -t $(IMAGE_REPOSITORY)/tools:$(TAG) -f tools/sync-tools/Dockerfile .
 
 .PHONY: docker-build-ssh-server
-docker-build-ssh-server:
-	docker build -t $(image_repository)/ssh-server:$(ssh_server_version) -f tools/ssh-server/Dockerfile .
-
-
-.PHONY: uninstall
-uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
-	$(KUSTOMIZE) build config/crd | $(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f -
-
-.PHONY: deploy
-deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in ~/.kube/config.
-	cd config/manager && $(KUSTOMIZE) edit set image controller=${IMG}
-	$(KUSTOMIZE) build config/default | $(KUBECTL) apply -f -
-
-.PHONY: undeploy
-undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
-	$(KUSTOMIZE) build config/default | $(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f -
+docker-build-ssh-server: ## Build ssh-server image.
+	$(CONTAINER_TOOL) build -t $(IMAGE_REPOSITORY)/ssh-server:$(TAG) -f tools/ssh-server/Dockerfile .
 
 ##@ Dependencies
 
@@ -155,22 +87,14 @@ $(LOCALBIN):
 	mkdir -p $(LOCALBIN)
 
 ## Tool Binaries
-KUBECTL ?= kubectl
-KUSTOMIZE ?= $(LOCALBIN)/kustomize-$(KUSTOMIZE_VERSION)
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen-$(CONTROLLER_TOOLS_VERSION)
 ENVTEST ?= $(LOCALBIN)/setup-envtest-$(ENVTEST_VERSION)
 GOLANGCI_LINT = $(LOCALBIN)/golangci-lint-$(GOLANGCI_LINT_VERSION)
 
 ## Tool Versions
-KUSTOMIZE_VERSION ?= v5.3.0
 CONTROLLER_TOOLS_VERSION ?= v0.17.3
 ENVTEST_VERSION ?= release-0.17
 GOLANGCI_LINT_VERSION ?= v1.54.2
-
-.PHONY: kustomize
-kustomize: $(KUSTOMIZE) ## Download kustomize locally if necessary.
-$(KUSTOMIZE): $(LOCALBIN)
-	$(call go-install-tool,$(KUSTOMIZE),sigs.k8s.io/kustomize/kustomize/v5,$(KUSTOMIZE_VERSION))
 
 .PHONY: controller-gen
 controller-gen: $(CONTROLLER_GEN) ## Download controller-gen locally if necessary.
