@@ -269,6 +269,10 @@ func populateCmdCache(imageCacheDir, cmd string) error {
 	return nil
 }
 
+var imageOverrides = map[string]string{
+	"containerd-config-reconciler": "quay.io/stackdome/registry-config-reconciler",
+}
+
 func imageURL(name string) string {
 	// Build.init must be run before this function to set `imageOrg` and `version` variables
 	envvar := strings.ReplaceAll(strings.ToUpper(name), "-", "_") + "_IMAGE"
@@ -277,6 +281,9 @@ func imageURL(name string) string {
 	}
 	if len(version) == 0 {
 		panic("empty version, refusing to return container image URL")
+	}
+	if override, ok := imageOverrides[name]; ok {
+		return override + ":" + version
 	}
 	return imageOrg + "/" + name + ":" + version
 }
