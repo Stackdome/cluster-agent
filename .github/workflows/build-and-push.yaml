@@ -24,19 +24,18 @@ jobs:
         id: tag
         run: echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
 
-      - name: Log in to container registry
-        run: |
-          REGISTRY=$(echo "$IMAGE_ORG" | cut -d'/' -f1)
-          echo "${{ secrets.REGISTRY_PASSWORD }}" | docker login "$REGISTRY" -u "${{ secrets.REGISTRY_USERNAME }}" --password-stdin
-
       - name: Build images
         env:
           VERSION: ${{ steps.tag.outputs.version }}
           IMAGE_ORG: ${{ env.IMAGE_ORG }}
+          CONTAINER_RUNTIME: docker
         run: go run ./cmd/mage build:buildImages
 
       - name: Push images
         env:
           VERSION: ${{ steps.tag.outputs.version }}
           IMAGE_ORG: ${{ env.IMAGE_ORG }}
+          CONTAINER_RUNTIME: docker
+          QUAY_USER: ${{ secrets.QUAY_USER }}
+          QUAY_TOKEN: ${{ secrets.QUAY_TOKEN }}
         run: go run ./cmd/mage build:pushImages
