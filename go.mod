@@ -6,7 +6,9 @@ toolchain go1.24.4
 
 require (
 	github.com/BurntSushi/toml v1.5.0
+	github.com/cloudnative-pg/barman-cloud v0.3.1
 	github.com/cloudnative-pg/cloudnative-pg v1.26.0
+	github.com/cloudnative-pg/machinery v0.2.0
 	github.com/cloudnative-pg/plugin-barman-cloud v0.5.0
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc
 	github.com/go-logr/logr v1.4.2
@@ -43,9 +45,7 @@ require (
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/chai2010/gettext-go v1.0.2 // indirect
-	github.com/cloudnative-pg/barman-cloud v0.3.1 // indirect
 	github.com/cloudnative-pg/cnpg-i v0.2.1 // indirect
-	github.com/cloudnative-pg/machinery v0.2.0 // indirect
 	github.com/emicklei/go-restful/v3 v3.12.1 // indirect
 	github.com/evanphx/json-patch v5.7.0+incompatible // indirect
 	github.com/evanphx/json-patch/v5 v5.9.11 // indirect

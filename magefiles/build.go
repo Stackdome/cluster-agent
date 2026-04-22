@@ -130,24 +130,28 @@ func (Build) cmd(cmd, goos, goarch string) error {
 func (Build) All() {
 	mg.Deps(
 		mg.F(Build.cmd, "cluster-agent-manager", "linux", "amd64"),
+		mg.F(Build.cmd, "containerd-config-reconciler", "linux", "amd64"),
 	)
 }
 
 func (Build) BuildImages() {
 	mg.Deps(
 		mg.F(Build.ImageBuild, "cluster-agent-manager"),
+		mg.F(Build.ImageBuild, "containerd-config-reconciler"),
 	)
 }
 
 func (Build) PushImages() {
 	mg.Deps(
 		mg.F(Build.imagePush, "cluster-agent-manager"),
+		mg.F(Build.imagePush, "containerd-config-reconciler"),
 	)
 }
 
 func (Build) PushImagesOnce() {
 	mg.Deps(
 		mg.F(Build.imagePushOnce, "cluster-agent-manager"),
+		mg.F(Build.imagePushOnce, "containerd-config-reconciler"),
 	)
 }
 
