@@ -17,7 +17,7 @@ Dockerfile.cross
 
 # Go workspace file
 go.work
-
+test/integration/last-run.log
 # Kubernetes Generated files - skip generated files, except for vendored files
 !vendor/**/zz_generated.*
 
