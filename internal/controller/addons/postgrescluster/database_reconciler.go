@@ -196,7 +196,10 @@ func (r *databaseReconciler) ensureDatabase(ctx context.Context, resource *addon
 			ClusterRef: corev1.LocalObjectReference{
 				Name: resource.CnpgClusterName(),
 			},
-			Name:       dbSpec.Name,
+			Name: dbSpec.Name,
+			// Currently the owner is always "app", in the future we can consider allowing users to specify the owner in the spec.
+			// This means all the databases created in this postgres cluster will have the same owner, which is "app" in this case.
+			// There is an enhancement created to address this in the future.
 			Owner:      defaultDatabaseOwner,
 			Ensure:     cnpgv1.EnsurePresent,
 			Extensions: []cnpgv1.ExtensionSpec{},
