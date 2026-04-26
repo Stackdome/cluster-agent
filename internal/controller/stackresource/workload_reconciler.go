@@ -167,11 +167,15 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.S
 	}
 
 	if resource.Spec.Init != nil {
+		initImage := *image
+		if resource.Spec.Init.ImageSpec != nil {
+			initImage = resource.Spec.Init.ImageSpec.Image
+		}
 		desiredDeploymentForResource.Spec.Template.Spec.InitContainers = []corev1.Container{
 			{
 				ImagePullPolicy: corev1.PullIfNotPresent,
 				Name:            fmt.Sprintf("%s-init", resource.Name),
-				Image:           *image,
+				Image:           initImage,
 				Command:         resource.Spec.Init.Command,
 				Args:            resource.Spec.Init.Args,
 				Env:             interpolatedEnvVars,
