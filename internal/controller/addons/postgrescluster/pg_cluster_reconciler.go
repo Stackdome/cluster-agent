@@ -226,12 +226,13 @@ func buildAffinityConfiguration(resource *addonsv1alpha1.PostgresCluster) cnpgv1
 }
 
 func buildPostgresConfiguration(resource *addonsv1alpha1.PostgresCluster) cnpgv1.PostgresConfiguration {
-	pgConfig := cnpgv1.PostgresConfiguration{
-		Synchronous: &cnpgv1.SynchronousReplicaConfiguration{
+	pgConfig := cnpgv1.PostgresConfiguration{}
+	if resource.Spec.ReplicasSpec.NumSynchronousReplicas > 0 {
+		pgConfig.Synchronous = &cnpgv1.SynchronousReplicaConfiguration{
 			Method:         cnpgv1.SynchronousReplicaConfigurationMethodAny,
 			Number:         resource.Spec.ReplicasSpec.NumSynchronousReplicas,
 			DataDurability: resource.Spec.ReplicasSpec.SynchronousReplicaDataDurability,
-		},
+		}
 	}
 	pgSpec := resource.Spec.PostgreSQLSpec.DeepCopy()
 	if len(resource.Spec.PostgreSQLSpec.PostgresConf) != 0 {
