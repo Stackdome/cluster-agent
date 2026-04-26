@@ -11,6 +11,8 @@ env:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -39,3 +41,64 @@ jobs:
           QUAY_USER: ${{ secrets.QUAY_USER }}
           QUAY_TOKEN: ${{ secrets.QUAY_TOKEN }}
         run: go run ./cmd/mage build:pushImages
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Login to Quay.io OCI registry
+        env:
+          QUAY_USER: ${{ secrets.QUAY_USER }}
+          QUAY_TOKEN: ${{ secrets.QUAY_TOKEN }}
+        run: echo "$QUAY_TOKEN" | helm registry login quay.io -u "$QUAY_USER" --password-stdin
+
+      - name: Set chart version
+        id: chart_version
+        run: |
+          VERSION="${{ steps.tag.outputs.version }}"
+          CHART_VERSION="${VERSION#v}"
+          echo "chart_version=$CHART_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Update chart versions
+        env:
+          CHART_VERSION: ${{ steps.chart_version.outputs.chart_version }}
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          sed -i "s/^version:.*/version: $CHART_VERSION/" charts/stackdome-agent-standalone/Chart.yaml
+          sed -i "s/^appVersion:.*/appVersion: \"$VERSION\"/" charts/stackdome-agent-standalone/Chart.yaml
+          sed -i "s/^version:.*/version: $CHART_VERSION/" charts/stackdome-agent/Chart.yaml
+          sed -i "s/^appVersion:.*/appVersion: \"$VERSION\"/" charts/stackdome-agent/Chart.yaml
+
+      - name: Package and push standalone chart
+        env:
+          CHART_VERSION: ${{ steps.chart_version.outputs.chart_version }}
+        run: |
+          helm package charts/stackdome-agent-standalone --version "$CHART_VERSION"
+          helm push stackdome-agent-standalone-${CHART_VERSION}.tgz oci://quay.io/stackdome/charts
+
+      - name: Update umbrella dependency to OCI
+        env:
+          CHART_VERSION: ${{ steps.chart_version.outputs.chart_version }}
+        run: |
+          sed -i "s|repository: \"file://../stackdome-agent-standalone\"|repository: \"oci://quay.io/stackdome/charts\"|" charts/stackdome-agent/Chart.yaml
+          sed -i "s/version: \"0.1.0\"/version: \"$CHART_VERSION\"/" charts/stackdome-agent/Chart.yaml
+
+      - name: Package and push umbrella chart
+        env:
+          CHART_VERSION: ${{ steps.chart_version.outputs.chart_version }}
+        run: |
+          helm dependency build charts/stackdome-agent
+          helm package charts/stackdome-agent --version "$CHART_VERSION"
+          helm push stackdome-agent-${CHART_VERSION}.tgz oci://quay.io/stackdome/charts
+
+      - name: Bundle CRDs
+        run: |
+          for f in charts/stackdome-agent-standalone/crds/*.yaml; do
+            echo "---" >> crds.yaml
+            cat "$f" >> crds.yaml
+          done
+
+      - name: Create GitHub Release with CRDs
+        uses: softprops/action-gh-release@v2
+        with:
+          files: crds.yaml
+          generate_release_notes: true
