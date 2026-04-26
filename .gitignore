@@ -30,3 +30,7 @@ test/integration/last-run.log
 
 # Integration test logs
 test/integration/last-run.log
+
+# Helm dependency artifacts
+charts/stackdome-agent/charts/*.tgz
+charts/stackdome-agent/Chart.lock
