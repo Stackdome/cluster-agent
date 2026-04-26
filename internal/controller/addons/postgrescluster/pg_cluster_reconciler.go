@@ -151,11 +151,17 @@ func (r *pgClusterReconciler) populateStatus(ctx context.Context, resource *addo
 	resource.Status.CurrentImage = cnpgCluster.Spec.ImageName
 	resource.Status.CurrentPostgreSQLMajorVersion = fmt.Sprintf("%d", resource.Spec.PostgreSQLSpec.PostgreSQLMajorVersion)
 	resource.Status.CurrentPostgreSQLMinorVersion = fmt.Sprintf("%d", resource.Spec.PostgreSQLSpec.PostgreSQLMinorVersion)
+	writeServiceHost := fmt.Sprintf("%s.%s.svc.cluster.local", cnpgCluster.Status.WriteService, cnpgCluster.Namespace)
 	resource.Status.Outputs = &addonsv1alpha1.PostgresClusterOutputs{
 		ClusterName:           cnpgCluster.Name,
 		ReadService:           fmt.Sprintf("%s.%s.svc.cluster.local", cnpgCluster.Status.ReadService, cnpgCluster.Namespace),
-		WriteService:          fmt.Sprintf("%s.%s.svc.cluster.local", cnpgCluster.Status.WriteService, cnpgCluster.Namespace),
+		WriteService:          writeServiceHost,
 		UserCredentialSecrets: make(map[string]string, 0),
+		ClusterConnection: &addonsv1alpha1.ClusterConnectionInfo{
+			Host:    writeServiceHost,
+			Port:    5432,
+			SSLMode: "require",
+		},
 	}
 	secretList := &corev1.SecretList{}
 	if err := r.client.List(ctx, secretList, client.InNamespace(resource.Namespace)); err != nil {
