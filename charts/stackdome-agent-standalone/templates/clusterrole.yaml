@@ -1,0 +1,267 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "stackdome-agent-standalone.fullname" . }}
+  labels:
+    {{- include "stackdome-agent-standalone.labels" . | nindent 4 }}
+rules:
+- apiGroups:
+  - core.stackdome.io
+  resources:
+  - stacks
+  - stacks/status
+  - stackresources
+  - stackresources/status
+  verbs:
+  - get
+  - list
+  - watch
+  - update
+  - patch
+  - delete
+  - create
+- apiGroups:
+  - builds.stackdome.io
+  resources:
+  - imagebuilds
+  - imagebuilds/status
+  verbs:
+  - get
+  - list
+  - watch
+  - update
+  - patch
+  - delete
+  - create
+- apiGroups:
+  - registry.stackdome.io
+  resources:
+  - clusterregistries
+  - clusterregistries/status
+  verbs:
+  - get
+  - list
+  - watch
+  - update
+  - patch
+  - delete
+  - create
+- apiGroups:
+  - storage.stackdome.io
+  resources:
+  - nfsservers
+  - nfsservers/status
+  - storages
+  - storages/status
+  - volumes
+  - volumes/status
+  verbs:
+  - get
+  - list
+  - watch
+  - update
+  - patch
+  - delete
+  - create
+- apiGroups:
+  - users.stackdome.io
+  resources:
+  - users
+  - users/status
+  verbs:
+  - get
+  - list
+  - watch
+  - update
+  - patch
+  - delete
+  - create
+- apiGroups:
+  - batch
+  resources:
+  - jobs
+  verbs:
+  - get
+  - watch
+  - update
+  - list
+  - patch
+  - create
+- apiGroups:
+  - addons.stackdome.io
+  resources:
+  - postgresclusters
+  - postgresclusters/status
+  - postgresclusters/finalizers
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - ingresses
+  verbs:
+  - get
+  - watch
+  - update
+  - list
+  - patch
+  - create
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  - daemonsets
+  verbs:
+  - get
+  - watch
+  - update
+  - list
+  - patch
+  - create
+- apiGroups:
+  - storage.k8s.io
+  resources:
+  - storageclasses
+  verbs:
+  - get
+  - watch
+  - update
+  - list
+  - patch
+  - create
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  - namespaces
+  - secrets
+  - services
+  - persistentvolumeclaims
+  - persistentvolumes
+  verbs:
+  - create
+  - get
+  - list
+  - watch
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - ""
+  resources:
+  - pods/exec
+  - pods/log
+  - pods/portforward
+  verbs:
+  - create
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - serviceaccounts
+  verbs:
+  - get
+  - create
+  - update
+  - delete
+  - list
+  - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - roles
+  - rolebindings
+  - clusterroles
+  verbs:
+  - get
+  - create
+  - update
+  - list
+  - delete
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - watch
+  - list
+  - get
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - ""
+  resources:
+  - nodes
+  verbs:
+  - watch
+  - list
+  - get
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+  - update
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - networkpolicies
+  verbs:
+  - create
+  - delete
+  - update
+  - watch
+  - get
+  - list
+  - patch
+- apiGroups:
+  - postgresql.cnpg.io
+  resources:
+  - clusters
+  - clusters/status
+  - clusters/finalizers
+  - imagecatalogs
+  - backups
+  - backups/status
+  - backups/finalizers
+  - scheduledbackups
+  - scheduledbackups/status
+  - scheduledbackups/finalizers
+  - databases
+  - databases/status
+  - databases/finalizers
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - barmancloud.cnpg.io
+  resources:
+  - objectstores
+  - objectstores/status
+  - objectstores/finalizers
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete

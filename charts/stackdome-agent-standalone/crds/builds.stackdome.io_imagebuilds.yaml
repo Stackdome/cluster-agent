@@ -1,0 +1,335 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.3
+  name: imagebuilds.builds.stackdome.io
+spec:
+  group: builds.stackdome.io
+  names:
+    kind: ImageBuild
+    listKind: ImageBuildList
+    plural: imagebuilds
+    shortNames:
+    - imgbuild
+    singular: imagebuild
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: ImageBuild is the Schema for the imagebuilds API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ImageBuildSpec defines the desired state of a Build
+            properties:
+              auth:
+                description: This is populated by the WorkspaceResource controller
+                  before creating the build job.
+                properties:
+                  dockerConfigAuthSecret:
+                    description: DockerConfigAuth contains the Docker config authentication
+                      details
+                    properties:
+                      secretKey:
+                        description: Key inside the secret that contains the Docker
+                          config JSON
+                        type: string
+                      secretRef:
+                        description: Reference to the secret containing the Docker
+                          config JSONs
+                        properties:
+                          name:
+                            description: name is unique within a namespace to reference
+                              a secret resource.
+                            type: string
+                          namespace:
+                            description: namespace defines the space within which
+                              the secret name must be unique.
+                            type: string
+                        type: object
+                        x-kubernetes-map-type: atomic
+                    required:
+                    - secretKey
+                    - secretRef
+                    type: object
+                  type:
+                    description: Type of the registry authentication
+                    enum:
+                    - DockerHub
+                    - InClusterZotRegistry
+                    type: string
+                required:
+                - type
+                type: object
+              buildContext:
+                description: Build context.
+                properties:
+                  contextPath:
+                    default: /
+                    description: |-
+                      Build Context path within the context source
+                      Defaults to /
+                    type: string
+                  contextSource:
+                    properties:
+                      git:
+                        properties:
+                          auth:
+                            properties:
+                              personalAccessTokenRef:
+                                description: CredentialSecretKeyPair selects username
+                                  and password keys from a Secret
+                                properties:
+                                  passwordKey:
+                                    description: PasswordKey is the key in the secret
+                                      for the password
+                                    type: string
+                                  secretRef:
+                                    description: |-
+                                      SecretReference represents a Secret Reference. It has enough information to retrieve secret
+                                      in any namespace
+                                    properties:
+                                      name:
+                                        description: name is unique within a namespace
+                                          to reference a secret resource.
+                                        type: string
+                                      namespace:
+                                        description: namespace defines the space within
+                                          which the secret name must be unique.
+                                        type: string
+                                    type: object
+                                    x-kubernetes-map-type: atomic
+                                  usernameKey:
+                                    description: UsernameKey is the key in the secret
+                                      for the username
+                                    type: string
+                                required:
+                                - passwordKey
+                                - secretRef
+                                - usernameKey
+                                type: object
+                              usernamePasswordAuthRef:
+                                description: CredentialSecretKeyPair selects username
+                                  and password keys from a Secret
+                                properties:
+                                  passwordKey:
+                                    description: PasswordKey is the key in the secret
+                                      for the password
+                                    type: string
+                                  secretRef:
+                                    description: |-
+                                      SecretReference represents a Secret Reference. It has enough information to retrieve secret
+                                      in any namespace
+                                    properties:
+                                      name:
+                                        description: name is unique within a namespace
+                                          to reference a secret resource.
+                                        type: string
+                                      namespace:
+                                        description: namespace defines the space within
+                                          which the secret name must be unique.
+                                        type: string
+                                    type: object
+                                    x-kubernetes-map-type: atomic
+                                  usernameKey:
+                                    description: UsernameKey is the key in the secret
+                                      for the username
+                                    type: string
+                                required:
+                                - passwordKey
+                                - secretRef
+                                - usernameKey
+                                type: object
+                            type: object
+                          repoUrl:
+                            type: string
+                        required:
+                        - repoUrl
+                        type: object
+                      volume:
+                        properties:
+                          name:
+                            type: string
+                        required:
+                        - name
+                        type: object
+                    type: object
+                  dockerfilePath:
+                    default: Dockerfile
+                    description: |-
+                      Dockerfile path within the context source
+                      Defaults to Dockerfile
+                    type: string
+                required:
+                - contextSource
+                type: object
+              insecureRegistry:
+                description: Is registry insecure
+                type: boolean
+              registryUrl:
+                description: Registry details for pushing the built image
+                type: string
+              resourceName:
+                description: Resource for which the image is being build.
+                type: string
+              sourceRevision:
+                description: |-
+                  Current source revision for the build context.
+                  Can be :
+                  - git commit hash
+                  - git branch name + sha of the branch head
+                  - git tag name
+                  - sha of the source directory (if using a synced volume)
+                properties:
+                  gitRepo:
+                    description: |-
+                      Can be one of the following:
+                      - git commit hash
+                      - git branch name
+                      - git tag name
+                    properties:
+                      branch:
+                        properties:
+                          HeadSha:
+                            default: HEAD
+                            description: |-
+                              Current commit hash of the branch head.
+                              default is head
+                            type: string
+                          name:
+                            description: Name of the branch
+                            type: string
+                        required:
+                        - HeadSha
+                        - name
+                        type: object
+                      commit:
+                        type: string
+                      tag:
+                        type: string
+                    type: object
+                  volume:
+                    properties:
+                      currentVolumeHash:
+                        description: Hash of the contents of the volume.
+                        type: string
+                    required:
+                    - currentVolumeHash
+                    type: object
+                type: object
+            required:
+            - buildContext
+            - insecureRegistry
+            - registryUrl
+            - resourceName
+            - sourceRevision
+            type: object
+          status:
+            description: ImageBuildStatus defines the observed state of ImageBuild
+            properties:
+              buildSourceRevision:
+                type: string
+              conditions:
+                description: Conditions is a list of status conditions ths object
+                  is in.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              imageUrl:
+                type: string
+              observedGeneration:
+                description: The most recent generation observed by the controller.
+                format: int64
+                type: integer
+              phase:
+                default: Pending
+                description: |-
+                  DEPRECATED: This field is not part of any API contract
+                  it will go away as soon as kubectl can print conditions!
+                  Human readable status - please use .Conditions from code
+                type: string
+              statusHash:
+                type: string
+            required:
+            - imageUrl
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

@@ -1,0 +1,14 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "stackdome-agent-standalone.fullname" . }}
+  labels:
+    {{- include "stackdome-agent-standalone.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "stackdome-agent-standalone.fullname" . }}
+subjects:
+- kind: ServiceAccount
+  name: {{ include "stackdome-agent-standalone.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}

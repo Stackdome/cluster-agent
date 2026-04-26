@@ -1,0 +1,26 @@
+{{- if .Values.metrics.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "stackdome-agent-standalone.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "stackdome-agent-standalone.labels" . | nindent 4 }}
+    {{- with .Values.metrics.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  endpoints:
+  - path: /metrics
+    port: https
+    scheme: https
+    bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+    {{- if .Values.metrics.serviceMonitor.interval }}
+    interval: {{ .Values.metrics.serviceMonitor.interval }}
+    {{- end }}
+    tlsConfig:
+      insecureSkipVerify: true
+  selector:
+    matchLabels:
+      {{- include "stackdome-agent-standalone.selectorLabels" . | nindent 6 }}
+{{- end }}

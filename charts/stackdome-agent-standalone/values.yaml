@@ -1,0 +1,45 @@
+createNamespace: false
+
+image:
+  repository: quay.io/stackdome/cluster-agent/cluster-agent-manager
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+replicaCount: 1
+leaderElect: true
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 128Mi
+  requests:
+    cpu: 10m
+    memory: 64Mi
+
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+metrics:
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    labels: {}
