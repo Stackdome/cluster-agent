@@ -1,0 +1,27 @@
+stackdome-agent-standalone:
+  image:
+    repository: quay.io/stackdome/cluster-agent/cluster-agent-manager
+    tag: ""
+  replicaCount: 1
+  leaderElect: true
+  resources:
+    limits:
+      cpu: 500m
+      memory: 128Mi
+    requests:
+      cpu: 10m
+      memory: 64Mi
+
+cert-manager:
+  enabled: true
+  crds:
+    enabled: false
+
+cloudnative-pg:
+  enabled: true
+
+traefik:
+  enabled: true
+
+plugin-barman-cloud:
+  enabled: true
