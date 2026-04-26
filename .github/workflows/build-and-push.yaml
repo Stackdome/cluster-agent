@@ -80,7 +80,7 @@ jobs:
           CHART_VERSION: ${{ steps.chart_version.outputs.chart_version }}
         run: |
           sed -i "s|repository: \"file://../stackdome-agent-standalone\"|repository: \"oci://quay.io/stackdome/charts\"|" charts/stackdome-agent/Chart.yaml
-          sed -i "s/version: \"0.1.0\"/version: \"$CHART_VERSION\"/" charts/stackdome-agent/Chart.yaml
+          sed -i "s/version: \"0.0.0-placeholder\"/version: \"$CHART_VERSION\"/" charts/stackdome-agent/Chart.yaml
 
       - name: Package and push umbrella chart
         env:
