@@ -102,6 +102,11 @@ func (r *ImageBuildReconciler) reconcileImageBuildWithVolumeSource(ctx context.C
 		return ctrl.Result{}, err
 	}
 
+	resolvedBuildArgs, err := r.resolveBuildArgs(ctx, buildConfig)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
 	jobName := fmt.Sprintf("%s-build", buildConfig.Name)
 	buildSource := &imagebuilder.Source{
 		Volume: &imagebuilder.VolumeSource{
@@ -124,6 +129,7 @@ func (r *ImageBuildReconciler) reconcileImageBuildWithVolumeSource(ctx context.C
 		WithContextPath(buildConfig.Spec.BuildContext.ContextPath).
 		WithSource(buildSource).
 		WithDockerAuth(dockerSecret, dockerSecretKey).
+		WithBuildArgs(resolvedBuildArgs).
 		Build()
 
 	desiredImageBuilderJob, err := imagebuilder.GenerateImageBuildJob(imageBuilderParams)
@@ -176,6 +182,11 @@ func (r *ImageBuildReconciler) reconcileImageBuildWithGitSource(ctx context.Cont
 		return ctrl.Result{}, err
 	}
 
+	resolvedBuildArgs, err := r.resolveBuildArgs(ctx, buildConfig)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
 	jobName := fmt.Sprintf("%s-build", buildConfig.Name)
 	buildSource := &imagebuilder.Source{
 		GitRepo: &imagebuilder.GitRepoBuildSource{
@@ -196,6 +207,7 @@ func (r *ImageBuildReconciler) reconcileImageBuildWithGitSource(ctx context.Cont
 		WithContextPath(buildConfig.Spec.BuildContext.ContextPath).
 		WithSource(buildSource).
 		WithDockerAuth(dockerSecret, dockerSecretKey).
+		WithBuildArgs(resolvedBuildArgs).
 		Build()
 
 	desiredImageBuilderJob, err := imagebuilder.GenerateImageBuildJob(imageBuilderParams)
@@ -267,6 +279,38 @@ func (r *ImageBuildReconciler) getDockerConfigSecret(ctx context.Context, docker
 		return nil, err
 	}
 	return dockerConfigSecret, nil
+}
+
+func (r *ImageBuildReconciler) resolveBuildArgs(ctx context.Context, buildConfig *buildsv1alpha1.ImageBuild) ([]imagebuilder.ResolvedBuildArg, error) {
+	if len(buildConfig.Spec.BuildArgs) == 0 {
+		return nil, nil
+	}
+
+	resolved := make([]imagebuilder.ResolvedBuildArg, 0, len(buildConfig.Spec.BuildArgs))
+	for _, arg := range buildConfig.Spec.BuildArgs {
+		if arg.ValueFrom != nil {
+			secret := &v1.Secret{}
+			if err := r.Client.Get(ctx, types.NamespacedName{
+				Name:      arg.ValueFrom.SecretKeyRef.Name,
+				Namespace: buildConfig.Namespace,
+			}, secret); err != nil {
+				if apierrors.IsNotFound(err) {
+					reportImageBuildStatus(buildConfig, buildsv1alpha1.BuildFailed, metav1.ConditionTrue, "BuildArgSecretNotFound")
+					return nil, fmt.Errorf("secret %q not found for build arg %q", arg.ValueFrom.SecretKeyRef.Name, arg.Name)
+				}
+				return nil, fmt.Errorf("failed to get secret for build arg %q: %w", arg.Name, err)
+			}
+			val, ok := secret.Data[arg.ValueFrom.SecretKeyRef.Key]
+			if !ok {
+				reportImageBuildStatus(buildConfig, buildsv1alpha1.BuildFailed, metav1.ConditionTrue, "BuildArgSecretKeyNotFound")
+				return nil, fmt.Errorf("key %q not found in secret %q for build arg %q", arg.ValueFrom.SecretKeyRef.Key, arg.ValueFrom.SecretKeyRef.Name, arg.Name)
+			}
+			resolved = append(resolved, imagebuilder.ResolvedBuildArg{Name: arg.Name, Value: string(val)})
+		} else {
+			resolved = append(resolved, imagebuilder.ResolvedBuildArg{Name: arg.Name, Value: arg.Value})
+		}
+	}
+	return resolved, nil
 }
 
 func (r *ImageBuildReconciler) handleBuildJobCreation(ctx context.Context, desiredJob *batchv1.Job, buildConfig *buildsv1alpha1.ImageBuild) error {

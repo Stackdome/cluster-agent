@@ -61,6 +61,9 @@ type ImageBuildSpec struct {
 	// This is populated by the WorkspaceResource controller before creating the build job.
 	// +optional
 	Auth *RegistryAuth `json:"auth,omitempty"`
+	// Build arguments passed to the Docker build as --build-arg flags.
+	// +optional
+	BuildArgs []corev1alpha1.BuildArg `json:"buildArgs,omitempty"`
 }
 
 // RegistryAuth contains the registry authentication details

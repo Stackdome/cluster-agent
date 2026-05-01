@@ -1,9 +1,17 @@
 package fixtures
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	corev1alpha1 "stackdome.io/cluster-agent/api/core/v1alpha1"
+)
+
+const (
+	BuildSourceRepoURL        = "https://github.com/ashishmax31/test-private-repo.git"
+	BuildSourceBranch         = "main"
+	BuildSourceResourceName   = "todo-app"
+	RegistryDockerConfigSecret = "registry-docker-config"
 )
 
 // SimpleStack creates a Stack with a single nginx-based StackResource.
@@ -205,6 +213,90 @@ func StackWithInitContainer(name string) *corev1alpha1.Stack {
 // StackForDeletion creates a simple Stack used to test cascade deletion.
 func StackForDeletion(name string) *corev1alpha1.Stack {
 	return SimpleStack(name)
+}
+
+// StackWithBuildArgs creates a Stack with a single resource that builds from a
+// private git repo and uses build arguments (both inline and secret-backed).
+func StackWithBuildArgs(name, registryURL, gitSecretName, buildArgSecretName string) *corev1alpha1.Stack {
+	return &corev1alpha1.Stack{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: defaultNamespace,
+		},
+		Spec: corev1alpha1.StackSpec{
+			StackResources: []corev1alpha1.StackResourceTemplate{
+				{
+					Name: BuildSourceResourceName,
+					Spec: corev1alpha1.StackResourceSpec{
+						BuildSpec: &corev1alpha1.StackResourceBuildSpec{
+							SourceContext: corev1alpha1.BuildContextSource{
+								Git: &corev1alpha1.GitRepoSource{
+									RepoUrl: BuildSourceRepoURL,
+									Auth: &corev1alpha1.GitAuth{
+										PersonalAccessTokenRef: &corev1alpha1.CredentialSecretKeyPair{
+											SecretRef: corev1.SecretReference{
+												Name:      gitSecretName,
+												Namespace: defaultNamespace,
+											},
+											UsernameKey: "username",
+											PasswordKey: "token",
+										},
+									},
+								},
+							},
+							BuildContext:   ".",
+							DockerFilePath: "Dockerfile",
+							SourceRevision: corev1alpha1.SourceRevisionSpec{
+								GitRepo: &corev1alpha1.GitRepoRevision{
+									Branch: &corev1alpha1.GitBranch{
+										Name:    BuildSourceBranch,
+										HeadSha: "HEAD",
+									},
+								},
+							},
+							Registry: corev1alpha1.RegistrySpec{
+								RepositoryURL: registryURL,
+								Insecure:      true,
+								Auth: &corev1alpha1.RegistryAuth{
+									Type: corev1alpha1.RegistryAuthTypeInClusterZotRegistry,
+									DockerConfigAuth: &corev1alpha1.DockerConfigAuth{
+										SecretKey: ".dockerconfigjson",
+										SecretRef: &corev1.SecretReference{
+											Name:      RegistryDockerConfigSecret,
+											Namespace: defaultNamespace,
+										},
+									},
+								},
+							},
+							BuildArgs: []corev1alpha1.BuildArg{
+								{
+									Name:  "APP_ENV",
+									Value: "integration-test",
+								},
+								{
+									Name: "BUILD_TOKEN",
+									ValueFrom: &corev1alpha1.BuildArgValueSource{
+										SecretKeyRef: corev1.SecretKeySelector{
+											LocalObjectReference: corev1.LocalObjectReference{
+												Name: buildArgSecretName,
+											},
+											Key: "token",
+										},
+									},
+								},
+							},
+						},
+						Ports: []corev1alpha1.Port{
+							{
+								Number: 3000,
+								FQDN:   name + ".local",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
 }
 
 // envName converts a resource name to the interpolation variable format.
