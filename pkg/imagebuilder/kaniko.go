@@ -152,6 +152,12 @@ func (b *buildParamsBuilder) WithDockerAuth(secret *corev1.Secret, secretKey str
 	return b
 }
 
+// WithBuildArgs sets the resolved build arguments
+func (b *buildParamsBuilder) WithBuildArgs(args []ResolvedBuildArg) *buildParamsBuilder {
+	b.params.BuildArgs = args
+	return b
+}
+
 // Build creates the final BuildParams object
 func (b *buildParamsBuilder) Build() BuildParams {
 	return b.params
@@ -178,6 +184,7 @@ type BuildParams struct {
 	GitSecretName  string
 	GitUsernameKey string
 	GitPasswordKey string
+	BuildArgs      []ResolvedBuildArg
 }
 
 type Source struct {
@@ -206,6 +213,11 @@ type VolumeMount struct {
 	ContainerMountPath string
 	PvcName            string
 	SubPath            string
+}
+
+type ResolvedBuildArg struct {
+	Name  string
+	Value string
 }
 
 // Converts GitRepoSource to a Kaniko Git context URL
@@ -352,6 +364,10 @@ func GenerateImageBuildJob(params BuildParams) (*batchv1.Job, error) {
 
 	// Add common Kaniko args for all builds
 	container.Args = append(container.Args, "--cache=true", "--cache-copy-layers=true", "--cache-run-layers=true", "--cleanup=true")
+
+	for _, arg := range params.BuildArgs {
+		container.Args = append(container.Args, fmt.Sprintf("--build-arg=%s=%s", arg.Name, arg.Value))
+	}
 
 	return job, nil
 }

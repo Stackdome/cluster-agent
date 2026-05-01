@@ -77,6 +77,7 @@ func (r *imageBuildReconciler) createImageBuild(ctx context.Context, resource *v
 			},
 			RegistryURL:      buildSpec.Registry.RepositoryURL,
 			InsecureRegistry: buildSpec.Registry.Insecure,
+			BuildArgs:        buildSpec.BuildArgs,
 		},
 	}
 

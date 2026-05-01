@@ -98,6 +98,21 @@ type EnvironmentVariables struct {
 	Value string `json:"value"`
 }
 
+// +kubebuilder:validation:XValidation:rule="has(self.value) != has(self.valueFrom)",message="exactly one of value or valueFrom must be set"
+type BuildArg struct {
+	// +required
+	Name string `json:"name"`
+	// +optional
+	Value string `json:"value,omitempty"`
+	// +optional
+	ValueFrom *BuildArgValueSource `json:"valueFrom,omitempty"`
+}
+
+type BuildArgValueSource struct {
+	// +required
+	SecretKeyRef corev1.SecretKeySelector `json:"secretKeyRef"`
+}
+
 type VolumeMount struct {
 	// +required
 	SourceVolume string `json:"sourceVolume"`
@@ -123,6 +138,9 @@ type StackResourceBuildSpec struct {
 	// Registry specification for pushing the built image.
 	// +required
 	Registry RegistrySpec `json:"registry"`
+	// Build arguments passed to the Docker build as --build-arg flags.
+	// +optional
+	BuildArgs []BuildArg `json:"buildArgs,omitempty"`
 }
 
 // Current source revision for the build context.

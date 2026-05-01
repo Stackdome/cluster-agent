@@ -20,6 +20,7 @@ type Environment struct {
 	Scheme          *k8sruntime.Scheme
 	TestNamespace   string
 	ObjectStoreName string
+	RegistryURL     string
 	Logger          logr.Logger
 
 	clusterManager *ClusterManager
@@ -78,12 +79,25 @@ func Setup(env *Environment, ctx context.Context) error {
 		return fmt.Errorf("s3mock infra deployment: %w", err)
 	}
 
+	// Pre-load images needed for registry and builds into Kind
+	rm := NewRegistryManager(c, logger)
+	if err := rm.PreloadImages(ctx); err != nil {
+		return fmt.Errorf("preloading images: %w", err)
+	}
+
 	// Phase 2: Deploy operator
 	logger.Info("Phase 2: Operator deployment")
 	om := NewOperatorManager(cm.GetDevCluster(), logger)
 	if err := om.Deploy(ctx); err != nil {
 		return fmt.Errorf("operator deployment: %w", err)
 	}
+
+	// Phase 2b: Set up in-cluster registry
+	logger.Info("Phase 2b: Registry setup")
+	if err := rm.Setup(ctx); err != nil {
+		return fmt.Errorf("registry setup: %w", err)
+	}
+	env.RegistryURL = fmt.Sprintf("%s.%s.svc.cluster.local", registryName, registryNamespace)
 
 	// Phase 3: Test prerequisites (namespace, ImageCatalog, S3 credentials, ObjectStore)
 	logger.Info("Phase 3: Prerequisites")
