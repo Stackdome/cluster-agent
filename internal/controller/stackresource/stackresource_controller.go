@@ -27,8 +27,7 @@ import (
 )
 
 const (
-	ownerKey       = ".metadata.owner"
-	controllerName = "stackresource-controller"
+	ownerKey = ".metadata.owner"
 )
 
 type subReconcilerResult struct {

@@ -8,6 +8,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	k8sstoragev1 "k8s.io/api/storage/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	k8sresource "k8s.io/apimachinery/pkg/api/resource"
@@ -39,8 +40,6 @@ var (
 )
 
 const (
-	nfsStorageController = "nfs-storage-controller"
-
 	cacheFinalizer = "nfsserver.stackdome.io/cache"
 )
 
@@ -249,7 +248,6 @@ func (r *NFSServerReconciler) reconcileNFSServerDeployment(ctx context.Context, 
 	}
 
 	desiredDeployment.SetGroupVersionKind(appsv1.SchemeGroupVersion.WithKind("Deployment"))
-
 	if err := controllerutil.SetControllerReference(nfsServer, desiredDeployment, r.Scheme); err != nil {
 		return resultNil, err
 	}
@@ -262,14 +260,17 @@ func (r *NFSServerReconciler) reconcileNFSServerDeployment(ctx context.Context, 
 		return resultNil, err
 	}
 
-	if err := r.Client.Patch(ctx, desiredDeployment, client.Apply, &client.PatchOptions{
-		Force:        ptr.To(true),
-		FieldManager: nfsStorageController,
-	}); err != nil {
-		return resultNil, err
+	if !equality.Semantic.DeepDerivative(desiredDeployment.Spec, existingDeployment.Spec) {
+		desiredDeployment.ResourceVersion = existingDeployment.ResourceVersion
+		if err := r.Client.Update(ctx, desiredDeployment); err != nil {
+			return resultNil, err
+		}
 	}
 
-	if controller.DeploymentAvailable(desiredDeployment) {
+	if err := r.Client.Get(ctx, client.ObjectKeyFromObject(desiredDeployment), existingDeployment); err != nil {
+		return resultNil, err
+	}
+	if controller.DeploymentAvailable(existingDeployment) {
 		return resultNil, nil
 	}
 

@@ -143,7 +143,6 @@ func (z *zotRegistry) BuildConfigurationConfigMap(ctx context.Context, registry 
 		},
 	}
 	configCM.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("ConfigMap"))
-
 	return configCM, nil
 }
 

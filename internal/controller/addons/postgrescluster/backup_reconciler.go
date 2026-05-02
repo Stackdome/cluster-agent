@@ -6,6 +6,7 @@ import (
 	"time"
 
 	cnpgv1 "github.com/cloudnative-pg/cloudnative-pg/api/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	k8sapierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -121,24 +122,24 @@ func (r *backupReconciler) reconcileScheduledBackup(
 	if backupSpec.ScheduledBaseBackupSpec != nil && backupSpec.ScheduledBaseBackupSpec.Enabled {
 		// If wal archiving is enabled, we need to create ScheduledBackup with immeadate set to true.
 		desiredScheduledBackup := buildDesiredScheduledBackup(resource, backupSpec.WalArchivingEnabled)
+		if err := controllerutil.SetControllerReference(resource, desiredScheduledBackup, r.scheme); err != nil {
+			return err
+		}
 		existingScheduledBackup := cnpgv1.ScheduledBackup{}
 		if err := r.client.Get(ctx, client.ObjectKey{
 			Name:      scheduledBackupName(resource),
 			Namespace: resource.Namespace,
 		}, &existingScheduledBackup); err != nil {
 			if k8sapierrors.IsNotFound(err) {
-				if err := controllerutil.SetControllerReference(resource, desiredScheduledBackup, r.scheme); err != nil {
-					return err
-				}
 				return r.client.Create(ctx, desiredScheduledBackup)
 			}
 			return err
 		}
-		if err := r.client.Patch(ctx, desiredScheduledBackup, client.Apply, &client.PatchOptions{
-			FieldManager: postgresClusterController,
-			Force:        ptr.To(true),
-		}); err != nil {
-			return err
+		if !equality.Semantic.DeepEqual(existingScheduledBackup.Spec, desiredScheduledBackup.Spec) {
+			desiredScheduledBackup.ResourceVersion = existingScheduledBackup.ResourceVersion
+			if err := r.client.Update(ctx, desiredScheduledBackup); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

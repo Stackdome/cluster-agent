@@ -3,6 +3,7 @@ package stackstorage
 import (
 	"context"
 
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -122,11 +123,11 @@ func (r *volumeReconciler) reconcileVolume(
 		return resultNil, nil, err
 	}
 
-	if err := r.Client.Patch(ctx, desiredVolume, client.Apply, &client.PatchOptions{
-		Force:        ptr.To(true),
-		FieldManager: StorageControllerName,
-	}); err != nil {
-		return resultNil, nil, err
+	if !equality.Semantic.DeepEqual(existingVolume.Spec, desiredVolume.Spec) {
+		desiredVolume.ResourceVersion = existingVolume.ResourceVersion
+		if err := r.Client.Update(ctx, desiredVolume); err != nil {
+			return resultNil, nil, err
+		}
 	}
 
 	if volumeAvailable(existingVolume) {
