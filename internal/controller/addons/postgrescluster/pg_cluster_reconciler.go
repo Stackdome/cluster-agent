@@ -8,7 +8,6 @@ import (
 	cnpgv1 "github.com/cloudnative-pg/cloudnative-pg/api/v1"
 	"github.com/samber/lo"
 	corev1 "k8s.io/api/core/v1"
-	k8sapierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	k8sresource "k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -66,63 +65,69 @@ func (r *pgClusterReconciler) reconcile(ctx context.Context, resource *addonsv1a
 		return resultNil, fmt.Errorf("image not found in catalog %s for version %d", resource.Spec.PostgreSQLSpec.ImageCatalogRef.Name, resource.Spec.PostgreSQLSpec.PostgreSQLMajorVersion)
 	}
 
-	desiredcnpgCluster := buildDesiredCluster(resource, catalogImage.Image)
-	desiredcnpgCluster.SetGroupVersionKind(cnpgv1.SchemeGroupVersion.WithKind("Cluster"))
-	if err := controllerutil.SetControllerReference(resource, desiredcnpgCluster, r.Scheme); err != nil {
+	desiredImage := catalogImage.Image
+
+	cnpgCluster := &cnpgv1.Cluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      resource.CnpgClusterName(),
+			Namespace: resource.Namespace,
+		},
+	}
+
+	var storageDownsizeErr error
+	op, err := controllerutil.CreateOrUpdate(ctx, r.client, cnpgCluster, func() error {
+		// Check storage downsize before mutating.
+		if cnpgCluster.Spec.StorageConfiguration.Size != "" {
+			desiredQuantity, err := k8sresource.ParseQuantity(resource.Spec.StorageSpec.Size)
+			if err != nil {
+				return fmt.Errorf("failed to parse storage size %s: %w", resource.Spec.StorageSpec.Size, err)
+			}
+			existingQuantity, err := k8sresource.ParseQuantity(cnpgCluster.Spec.StorageConfiguration.Size)
+			if err != nil {
+				return fmt.Errorf("failed to parse existing storage size %s: %w", cnpgCluster.Spec.StorageConfiguration.Size, err)
+			}
+			if desiredQuantity.Cmp(existingQuantity) == -1 {
+				storageDownsizeErr = fmt.Errorf("desired storage size is less than existing")
+				return nil
+			}
+		}
+
+		cnpgCluster.Spec.Instances = resource.Spec.Instances
+		// Don't update image if it differs — handled by a separate reconciler.
+		if cnpgCluster.Spec.ImageName == "" {
+			cnpgCluster.Spec.ImageName = desiredImage
+		}
+		cnpgCluster.Spec.StorageConfiguration = cnpgv1.StorageConfiguration{
+			StorageClass: &resource.Spec.StorageSpec.StorageClassName,
+			Size:         resource.Spec.StorageSpec.Size,
+		}
+		cnpgCluster.Spec.Bootstrap = buildBootstrapSpec(resource)
+		cnpgCluster.Spec.ExternalClusters = buildExternalClusters(resource)
+		cnpgCluster.Spec.Plugins = buildPluginsSpec(resource)
+		cnpgCluster.Spec.PostgresConfiguration = buildPostgresConfiguration(resource)
+		cnpgCluster.Spec.Affinity = buildAffinityConfiguration(resource)
+		cnpgCluster.Spec.EnableSuperuserAccess = ptr.To(resource.Spec.EnableSuperuserAccess)
+		cnpgCluster.Spec.Resources = resource.Spec.ResourceSpec
+		if resource.Spec.Instances == 1 {
+			cnpgCluster.Spec.EnablePDB = ptr.To(false)
+		} else {
+			cnpgCluster.Spec.EnablePDB = ptr.To(true)
+		}
+
+		return controllerutil.SetControllerReference(resource, cnpgCluster, r.Scheme)
+	})
+	if err != nil {
 		return resultNil, err
 	}
-
-	existingPgCluster := &cnpgv1.Cluster{}
-	err = r.client.Get(ctx, client.ObjectKey{
-		Name:      resource.CnpgClusterName(),
-		Namespace: resource.Namespace,
-	}, existingPgCluster)
-	if err != nil {
-		if k8sapierrors.IsNotFound(err) {
-			return resultRequeue, r.client.Create(ctx, desiredcnpgCluster)
-		}
-		return resultNil, fmt.Errorf("failed to get existing PostgresCluster: %w", err)
-	}
-
-	if existingPgCluster.Spec.ImageName != desiredcnpgCluster.Spec.ImageName {
-		// We dont update the postgres image in this reconciler, we have a separate reconciler for updates.
-		desiredcnpgCluster.Spec.ImageName = existingPgCluster.Spec.ImageName
-	}
-
-	// Check if we are downsizing the storage size.
-	// If so, we do not allow it.
-	// TODO: Move this to a validation webhook.
-	desiredStorageQuantity, err := k8sresource.ParseQuantity(desiredcnpgCluster.Spec.StorageConfiguration.Size)
-	if err != nil {
-		return resultNil, fmt.Errorf("failed to parse storage size %s: %w", desiredcnpgCluster.Spec.StorageConfiguration.Size, err)
-	}
-	existingStorageQuantity, err := k8sresource.ParseQuantity(existingPgCluster.Spec.StorageConfiguration.Size)
-	if err != nil {
-		return resultNil, fmt.Errorf("failed to parse existing storage size %s: %w", existingPgCluster.Spec.StorageConfiguration.Size, err)
-	}
-
-	if desiredStorageQuantity.Cmp(existingStorageQuantity) == -1 {
-		// We do not allow shrinking the storage size.
+	if storageDownsizeErr != nil {
 		setStatusCondition(resource, addonsv1alpha1.ClusterConfigurationValid, metav1.ConditionFalse, "InvalidStorageSize", "Desired storage size is less than existing")
 		setPhase(resource, addonsv1alpha1.ErrorPhase)
 		return resultStop, nil
 	}
 
-	if err := r.client.Patch(ctx, desiredcnpgCluster, client.Apply, &client.PatchOptions{
-		Force:        ptr.To(true),
-		FieldManager: postgresClusterController,
-	}); err != nil {
-		return resultNil, err
-	}
+	logger.Info("CNPG Cluster reconciled", "operation", op)
 
-	// refetch the existing cluster to get the latest status.
-	existingPgCluster = &cnpgv1.Cluster{}
-	if err := r.client.Get(ctx, client.ObjectKey{
-		Name:      resource.CnpgClusterName(),
-		Namespace: resource.Namespace,
-	}, existingPgCluster); err != nil {
-		return resultNil, err
-	}
+	existingPgCluster := cnpgCluster
 
 	readyCond := meta.FindStatusCondition(existingPgCluster.Status.Conditions, string(cnpgv1.ConditionClusterReady))
 	switch {

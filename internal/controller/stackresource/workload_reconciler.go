@@ -127,118 +127,83 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.S
 		return resultNil, fmt.Errorf("failed to interpolate env vars: %w", err)
 	}
 
-	desiredDeploymentForResource := &appsv1.Deployment{
+	needsRestart := r.requiresRestart(resource)
+
+	deployment := &appsv1.Deployment{
 		ObjectMeta: v1.ObjectMeta{
 			Name:      GetDeploymentNameForResource(resource),
 			Namespace: resource.Namespace,
 		},
-		Spec: appsv1.DeploymentSpec{
-			Selector: &v1.LabelSelector{
-				MatchLabels: GetDeploymentPodLabelForResource(resource),
-			},
-			Strategy: appsv1.DeploymentStrategy{
-				Type: appsv1.RollingUpdateDeploymentStrategyType,
-			},
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: v1.ObjectMeta{
-					Labels: GetDeploymentPodLabelForResource(resource),
-				},
-				Spec: corev1.PodSpec{
-					Volumes: InterpolatedVolumesList(resource, volumeMountInfo),
-					Containers: []corev1.Container{
-						{
-							ImagePullPolicy: corev1.PullIfNotPresent,
-							Name:            resource.Name,
-							Image:           *image,
-							Command:         resource.Spec.Command,
-							Args:            resource.Spec.Args,
-							Ports:           InterpolatedContainerPorts(resource),
-							Env:             interpolatedEnvVars,
-							VolumeMounts:    InterpolatedVolumeMountList(resource),
-						},
-					},
-				},
-			},
-		},
 	}
 
-	if err := r.setImagePullSecret(ctx, resource, desiredDeploymentForResource); err != nil {
+	op, err := controllerutil.CreateOrUpdate(ctx, r.Client, deployment, func() error {
+		deployment.Spec.Selector = &v1.LabelSelector{
+			MatchLabels: GetDeploymentPodLabelForResource(resource),
+		}
+		deployment.Spec.Strategy.Type = appsv1.RollingUpdateDeploymentStrategyType
+		deployment.Spec.Template.ObjectMeta.Labels = GetDeploymentPodLabelForResource(resource)
+
+		if len(deployment.Spec.Template.Spec.Containers) == 0 {
+			deployment.Spec.Template.Spec.Containers = []corev1.Container{{}}
+		}
+		c := &deployment.Spec.Template.Spec.Containers[0]
+		c.Name = resource.Name
+		c.Image = *image
+		c.ImagePullPolicy = corev1.PullIfNotPresent
+		c.Command = nilIfEmpty(resource.Spec.Command)
+		c.Args = nilIfEmpty(resource.Spec.Args)
+		c.Ports = nilIfEmpty(InterpolatedContainerPorts(resource))
+		c.Env = nilIfEmpty(interpolatedEnvVars)
+		c.VolumeMounts = nilIfEmpty(InterpolatedVolumeMountList(resource))
+
+		deployment.Spec.Template.Spec.Volumes = nilIfEmpty(InterpolatedVolumesList(resource, volumeMountInfo))
+
+		if resource.Spec.Init != nil {
+			initImage := *image
+			if resource.Spec.Init.ImageSpec != nil {
+				initImage = resource.Spec.Init.ImageSpec.Image
+			}
+			if len(deployment.Spec.Template.Spec.InitContainers) == 0 {
+				deployment.Spec.Template.Spec.InitContainers = []corev1.Container{{}}
+			}
+			ic := &deployment.Spec.Template.Spec.InitContainers[0]
+			ic.Name = fmt.Sprintf("%s-init", resource.Name)
+			ic.Image = initImage
+			ic.ImagePullPolicy = corev1.PullIfNotPresent
+			ic.Command = nilIfEmpty(resource.Spec.Init.Command)
+			ic.Args = nilIfEmpty(resource.Spec.Init.Args)
+			ic.Env = nilIfEmpty(interpolatedEnvVars)
+			ic.VolumeMounts = nilIfEmpty(InterpolatedVolumeMountList(resource))
+		} else {
+			deployment.Spec.Template.Spec.InitContainers = nil
+		}
+
+		if err := r.setImagePullSecret(ctx, resource, deployment); err != nil {
+			return err
+		}
+
+		if needsRestart {
+			if deployment.Spec.Template.Annotations == nil {
+				deployment.Spec.Template.Annotations = make(map[string]string)
+			}
+			deployment.Spec.Template.Annotations[v1alpha1.RestartResourceAnnotation] = v1.Now().UTC().String()
+		}
+
+		return controllerutil.SetControllerReference(resource, deployment, r.Scheme)
+	})
+	if err != nil {
 		return resultNil, err
 	}
 
-	if resource.Spec.Init != nil {
-		initImage := *image
-		if resource.Spec.Init.ImageSpec != nil {
-			initImage = resource.Spec.Init.ImageSpec.Image
-		}
-		desiredDeploymentForResource.Spec.Template.Spec.InitContainers = []corev1.Container{
-			{
-				ImagePullPolicy: corev1.PullIfNotPresent,
-				Name:            fmt.Sprintf("%s-init", resource.Name),
-				Image:           initImage,
-				Command:         resource.Spec.Init.Command,
-				Args:            resource.Spec.Init.Args,
-				Env:             interpolatedEnvVars,
-				VolumeMounts:    InterpolatedVolumeMountList(resource),
-			},
-		}
-	}
-
-	if err := controllerutil.SetControllerReference(resource, desiredDeploymentForResource, r.Scheme); err != nil {
-		return resultNil, err
-	}
-	logger.Info("volme info", "volumeInfo", desiredDeploymentForResource.Spec.Template.Spec.Volumes)
-	logger.Info("volme mount info", "volumeMountInfo", desiredDeploymentForResource.Spec.Template.Spec.Containers[0].VolumeMounts)
-
-	existingDeployment := &appsv1.Deployment{}
-	if err := r.Client.Get(ctx,
-		types.NamespacedName{
-			Name:      desiredDeploymentForResource.Name,
-			Namespace: desiredDeploymentForResource.Namespace,
-		},
-		existingDeployment,
-	); err != nil {
-		if apierrors.IsNotFound(err) {
-			return resultStop, r.Client.Create(ctx, desiredDeploymentForResource)
-		}
-		return resultNil, err
-	}
-
-	deployment := desiredDeploymentForResource.DeepCopy()
-	deployment.SetManagedFields(nil)
-	deployment.TypeMeta = existingDeployment.TypeMeta
-	if r.requiresRestart(resource) {
-		logger.Info("restarting deployment for workload")
-		if deployment.Spec.Template.Annotations == nil {
-			deployment.Spec.Template.Annotations = make(map[string]string)
-		}
-		deployment.Spec.Template.Annotations[v1alpha1.RestartResourceAnnotation] = v1.Now().UTC().String()
+	if needsRestart {
 		resource.Status.LastRestartRequestProcessedAt = ptr.To(v1.NewTime(time.Now().UTC()))
 		reportStackResourceNotReady(resource, "WorkspaceResouceDeploymentNotReady", "WorkspaceResouceDeploymentNotReady")
-		return resultStop, r.Client.Patch(ctx, deployment, client.Apply, &client.PatchOptions{
-			Force:        ptr.To(true),
-			FieldManager: controllerName,
-		})
-	} else {
-		err = r.Client.Patch(ctx, deployment, client.Apply, &client.PatchOptions{
-			Force:        ptr.To(true),
-			FieldManager: controllerName,
-		})
-		if err != nil {
-			return resultNil, err
-		}
-	}
-	if err := r.Client.Get(ctx,
-		types.NamespacedName{
-			Name:      desiredDeploymentForResource.Name,
-			Namespace: desiredDeploymentForResource.Namespace,
-		},
-		existingDeployment,
-	); err != nil {
-		return resultNil, err
+		return resultStop, nil
 	}
 
-	if controller.DeploymentAvailable(existingDeployment) {
+	logger.Info("deployment reconciled", "operation", op)
+
+	if controller.DeploymentAvailable(deployment) {
 		return resultNil, nil
 	}
 	logger.Info("deployment not ready")
@@ -338,12 +303,6 @@ func InterpolatedContainerPorts(resource *v1alpha1.StackResource) []corev1.Conta
 	return res
 }
 
-func splitEnvVarValue(value string) (string, string) {
-	parts := strings.SplitN(value, ".", 2)
-	part1 := strings.TrimPrefix(parts[0], "$")
-	return part1, parts[1]
-}
-
 func InterpolatedVolumeMountList(resource *v1alpha1.StackResource) []corev1.VolumeMount {
 	if len(resource.Spec.VolumeMounts) == 0 {
 		return []corev1.VolumeMount{}
@@ -405,10 +364,6 @@ func (r *workloadReconciler) getVolumeMountInfoMap(ctx context.Context, resource
 	return res, nil
 }
 
-func workspaceResourceName(workspaceName, resourceName string) string {
-	return fmt.Sprintf("%s-%s", workspaceName, resourceName)
-}
-
 func (r *workloadReconciler) GetSiblings(ctx context.Context, resource *v1alpha1.StackResource) ([]*v1alpha1.StackResource, error) {
 	srList := &v1alpha1.StackResourceList{}
 	if err := r.Client.List(ctx, srList, client.InNamespace(resource.Namespace)); err != nil {
@@ -427,4 +382,11 @@ func (r *workloadReconciler) GetSiblings(ctx context.Context, resource *v1alpha1
 		res[i] = &srList.Items[i]
 	}
 	return res, nil
+}
+
+func nilIfEmpty[T any](s []T) []T {
+	if len(s) == 0 {
+		return nil
+	}
+	return s
 }
