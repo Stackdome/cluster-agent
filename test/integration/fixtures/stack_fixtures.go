@@ -12,6 +12,8 @@ const (
 	BuildSourceBranch         = "main"
 	BuildSourceResourceName   = "todo-app"
 	RegistryDockerConfigSecret = "registry-docker-config"
+	// Requires: main branch, root Dockerfile, docker/Dockerfile.prod, docker/Dockerfile.broken
+	PublicTestRepoURL = "https://github.com/Stackdome/test-repo.git"
 )
 
 // SimpleStack creates a Stack with a single nginx-based StackResource.
@@ -293,6 +295,478 @@ func StackWithBuildArgs(name, registryURL, gitSecretName, buildArgSecretName str
 							},
 						},
 					},
+				},
+			},
+		},
+	}
+}
+
+// StackWithCommandArgs creates a Stack with a single resource that has
+// explicit Command and Args set.
+func StackWithCommandArgs(name string) *corev1alpha1.Stack {
+	resourceName := name + "-cmd"
+	return &corev1alpha1.Stack{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: defaultNamespace,
+		},
+		Spec: corev1alpha1.StackSpec{
+			StackResources: []corev1alpha1.StackResourceTemplate{
+				{
+					Name: resourceName,
+					Spec: corev1alpha1.StackResourceSpec{
+						ImageSpec: &corev1alpha1.ImageSpec{
+							Image: "nginx:1.25-alpine",
+						},
+						Command: []string{"nginx"},
+						Args:    []string{"-g", "daemon off;"},
+						Ports: []corev1alpha1.Port{
+							{
+								Number: 80,
+								FQDN:   resourceName + ".local",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// StackWithPublicPorts creates a Stack with a resource that has one public
+// port and one internal port.
+func StackWithPublicPorts(name string) *corev1alpha1.Stack {
+	resourceName := name + "-pub"
+	return &corev1alpha1.Stack{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: defaultNamespace,
+		},
+		Spec: corev1alpha1.StackSpec{
+			StackResources: []corev1alpha1.StackResourceTemplate{
+				{
+					Name: resourceName,
+					Spec: corev1alpha1.StackResourceSpec{
+						ImageSpec: &corev1alpha1.ImageSpec{
+							Image: "nginx:1.25-alpine",
+						},
+						Ports: []corev1alpha1.Port{
+							{
+								Number:         80,
+								ExposeToPublic: true,
+								FQDN:           name + "-pub.example.com",
+							},
+							{
+								Number: 9090,
+								FQDN:   resourceName + "-metrics.local",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// StackWithNoPorts creates a Stack with a single resource that has no ports.
+func StackWithNoPorts(name string) *corev1alpha1.Stack {
+	resourceName := name + "-noport"
+	return &corev1alpha1.Stack{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: defaultNamespace,
+		},
+		Spec: corev1alpha1.StackSpec{
+			StackResources: []corev1alpha1.StackResourceTemplate{
+				{
+					Name: resourceName,
+					Spec: corev1alpha1.StackResourceSpec{
+						ImageSpec: &corev1alpha1.ImageSpec{
+							Image: "nginx:1.25-alpine",
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// StackWithDependencyChain creates a Stack with 3 resources forming a linear
+// dependency chain: A -> B -> C.
+func StackWithDependencyChain(name string) *corev1alpha1.Stack {
+	resourceA := name + "-chain-a"
+	resourceB := name + "-chain-b"
+	resourceC := name + "-chain-c"
+	return &corev1alpha1.Stack{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: defaultNamespace,
+		},
+		Spec: corev1alpha1.StackSpec{
+			StackResources: []corev1alpha1.StackResourceTemplate{
+				{
+					Name: resourceA,
+					Spec: corev1alpha1.StackResourceSpec{
+						ImageSpec: &corev1alpha1.ImageSpec{
+							Image: "nginx:1.25-alpine",
+						},
+						Ports: []corev1alpha1.Port{
+							{
+								Number: 80,
+								FQDN:   resourceA + ".local",
+							},
+						},
+					},
+				},
+				{
+					Name: resourceB,
+					Spec: corev1alpha1.StackResourceSpec{
+						ImageSpec: &corev1alpha1.ImageSpec{
+							Image: "nginx:1.25-alpine",
+						},
+						Ports: []corev1alpha1.Port{
+							{
+								Number: 80,
+								FQDN:   resourceB + ".local",
+							},
+						},
+						DependsOn: []string{resourceA},
+					},
+				},
+				{
+					Name: resourceC,
+					Spec: corev1alpha1.StackResourceSpec{
+						ImageSpec: &corev1alpha1.ImageSpec{
+							Image: "nginx:1.25-alpine",
+						},
+						Ports: []corev1alpha1.Port{
+							{
+								Number: 80,
+								FQDN:   resourceC + ".local",
+							},
+						},
+						DependsOn: []string{resourceB},
+					},
+				},
+			},
+		},
+	}
+}
+
+// StackWithFanInDependencies creates a Stack with 3 resources where C depends
+// on both A and B (fan-in pattern).
+func StackWithFanInDependencies(name string) *corev1alpha1.Stack {
+	resourceA := name + "-fan-a"
+	resourceB := name + "-fan-b"
+	resourceC := name + "-fan-c"
+	return &corev1alpha1.Stack{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: defaultNamespace,
+		},
+		Spec: corev1alpha1.StackSpec{
+			StackResources: []corev1alpha1.StackResourceTemplate{
+				{
+					Name: resourceA,
+					Spec: corev1alpha1.StackResourceSpec{
+						ImageSpec: &corev1alpha1.ImageSpec{
+							Image: "nginx:1.25-alpine",
+						},
+						Ports: []corev1alpha1.Port{
+							{
+								Number: 80,
+								FQDN:   resourceA + ".local",
+							},
+						},
+					},
+				},
+				{
+					Name: resourceB,
+					Spec: corev1alpha1.StackResourceSpec{
+						ImageSpec: &corev1alpha1.ImageSpec{
+							Image: "nginx:1.25-alpine",
+						},
+						Ports: []corev1alpha1.Port{
+							{
+								Number: 80,
+								FQDN:   resourceB + ".local",
+							},
+						},
+					},
+				},
+				{
+					Name: resourceC,
+					Spec: corev1alpha1.StackResourceSpec{
+						ImageSpec: &corev1alpha1.ImageSpec{
+							Image: "nginx:1.25-alpine",
+						},
+						Ports: []corev1alpha1.Port{
+							{
+								Number: 80,
+								FQDN:   resourceC + ".local",
+							},
+						},
+						DependsOn: []string{resourceA, resourceB},
+					},
+				},
+			},
+		},
+	}
+}
+
+// StackWithInitCustomImage creates a Stack whose resource has an init container
+// with a custom image (busybox).
+func StackWithInitCustomImage(name string) *corev1alpha1.Stack {
+	resourceName := name + "-init-img"
+	return &corev1alpha1.Stack{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: defaultNamespace,
+		},
+		Spec: corev1alpha1.StackSpec{
+			StackResources: []corev1alpha1.StackResourceTemplate{
+				{
+					Name: resourceName,
+					Spec: corev1alpha1.StackResourceSpec{
+						ImageSpec: &corev1alpha1.ImageSpec{
+							Image: "nginx:1.25-alpine",
+						},
+						Init: &corev1alpha1.InitSpec{
+							Command: []string{"sh"},
+							Args:    []string{"-c", "echo 'init with custom image'"},
+							ImageSpec: &corev1alpha1.ImageSpec{
+								Image: "busybox:1.36",
+							},
+						},
+						Ports: []corev1alpha1.Port{
+							{
+								Number: 80,
+								FQDN:   resourceName + ".local",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// StackWithThreeResources creates a Stack with 3 independent resources:
+// web, api, and worker.
+func StackWithThreeResources(name string) *corev1alpha1.Stack {
+	webName := name + "-web"
+	apiName := name + "-api"
+	workerName := name + "-worker"
+	return &corev1alpha1.Stack{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: defaultNamespace,
+		},
+		Spec: corev1alpha1.StackSpec{
+			StackResources: []corev1alpha1.StackResourceTemplate{
+				{
+					Name: webName,
+					Spec: corev1alpha1.StackResourceSpec{
+						ImageSpec: &corev1alpha1.ImageSpec{
+							Image: "nginx:1.25-alpine",
+						},
+						Ports: []corev1alpha1.Port{
+							{
+								Number: 80,
+								FQDN:   webName + ".local",
+							},
+						},
+					},
+				},
+				{
+					Name: apiName,
+					Spec: corev1alpha1.StackResourceSpec{
+						ImageSpec: &corev1alpha1.ImageSpec{
+							Image: "nginx:1.25-alpine",
+						},
+						Ports: []corev1alpha1.Port{
+							{
+								Number: 8080,
+								FQDN:   apiName + ".local",
+							},
+						},
+					},
+				},
+				{
+					Name: workerName,
+					Spec: corev1alpha1.StackResourceSpec{
+						ImageSpec: &corev1alpha1.ImageSpec{
+							Image: "nginx:1.25-alpine",
+						},
+						Ports: []corev1alpha1.Port{
+							{
+								Number: 9090,
+								FQDN:   workerName + ".local",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// StackForMutation creates a simple Stack used for mutation/update tests.
+func StackForMutation(name string) *corev1alpha1.Stack {
+	return SimpleStack(name)
+}
+
+// StackForRestart creates a simple Stack used for restart tests.
+func StackForRestart(name string) *corev1alpha1.Stack {
+	return SimpleStack(name)
+}
+
+// SimpleBuildStack creates a Stack with a single resource that builds from a
+// public git repo with no authentication, using the root Dockerfile.
+func SimpleBuildStack(name, registryURL string) *corev1alpha1.Stack {
+	resourceName := name + "-build"
+	return &corev1alpha1.Stack{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: defaultNamespace,
+		},
+		Spec: corev1alpha1.StackSpec{
+			StackResources: []corev1alpha1.StackResourceTemplate{
+				{
+					Name: resourceName,
+					Spec: corev1alpha1.StackResourceSpec{
+						BuildSpec: &corev1alpha1.StackResourceBuildSpec{
+							SourceContext: corev1alpha1.BuildContextSource{
+								Git: &corev1alpha1.GitRepoSource{
+									RepoUrl: PublicTestRepoURL,
+								},
+							},
+							BuildContext:   ".",
+							DockerFilePath: "Dockerfile",
+							SourceRevision: corev1alpha1.SourceRevisionSpec{
+								GitRepo: &corev1alpha1.GitRepoRevision{
+									Branch: &corev1alpha1.GitBranch{
+										Name:    "main",
+										HeadSha: "HEAD",
+									},
+								},
+							},
+							Registry: registrySpecWithAuth(registryURL),
+						},
+						Ports: []corev1alpha1.Port{
+							{
+								Number: 3000,
+								FQDN:   name + ".local",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// BuildStackCustomPaths creates a Stack that builds from a public git repo
+// with a custom Dockerfile path.
+func BuildStackCustomPaths(name, registryURL string) *corev1alpha1.Stack {
+	resourceName := name + "-build"
+	return &corev1alpha1.Stack{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: defaultNamespace,
+		},
+		Spec: corev1alpha1.StackSpec{
+			StackResources: []corev1alpha1.StackResourceTemplate{
+				{
+					Name: resourceName,
+					Spec: corev1alpha1.StackResourceSpec{
+						BuildSpec: &corev1alpha1.StackResourceBuildSpec{
+							SourceContext: corev1alpha1.BuildContextSource{
+								Git: &corev1alpha1.GitRepoSource{
+									RepoUrl: PublicTestRepoURL,
+								},
+							},
+							BuildContext:   ".",
+							DockerFilePath: "docker/Dockerfile.prod",
+							SourceRevision: corev1alpha1.SourceRevisionSpec{
+								GitRepo: &corev1alpha1.GitRepoRevision{
+									Branch: &corev1alpha1.GitBranch{
+										Name:    "main",
+										HeadSha: "HEAD",
+									},
+								},
+							},
+							Registry: registrySpecWithAuth(registryURL),
+						},
+						Ports: []corev1alpha1.Port{
+							{
+								Number: 3000,
+								FQDN:   name + ".local",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// BuildStackBrokenDockerfile creates a Stack that builds from a public git repo
+// but references a broken Dockerfile path, intended to test build failure handling.
+func BuildStackBrokenDockerfile(name, registryURL string) *corev1alpha1.Stack {
+	resourceName := name + "-build"
+	return &corev1alpha1.Stack{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: defaultNamespace,
+		},
+		Spec: corev1alpha1.StackSpec{
+			StackResources: []corev1alpha1.StackResourceTemplate{
+				{
+					Name: resourceName,
+					Spec: corev1alpha1.StackResourceSpec{
+						BuildSpec: &corev1alpha1.StackResourceBuildSpec{
+							SourceContext: corev1alpha1.BuildContextSource{
+								Git: &corev1alpha1.GitRepoSource{
+									RepoUrl: PublicTestRepoURL,
+								},
+							},
+							BuildContext:   ".",
+							DockerFilePath: "docker/Dockerfile.broken",
+							SourceRevision: corev1alpha1.SourceRevisionSpec{
+								GitRepo: &corev1alpha1.GitRepoRevision{
+									Branch: &corev1alpha1.GitBranch{
+										Name:    "main",
+										HeadSha: "HEAD",
+									},
+								},
+							},
+							Registry: registrySpecWithAuth(registryURL),
+						},
+						Ports: []corev1alpha1.Port{
+							{
+								Number: 3000,
+								FQDN:   name + ".local",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func registrySpecWithAuth(registryURL string) corev1alpha1.RegistrySpec {
+	return corev1alpha1.RegistrySpec{
+		RepositoryURL: registryURL,
+		Insecure:      true,
+		Auth: &corev1alpha1.RegistryAuth{
+			Type: corev1alpha1.RegistryAuthTypeInClusterZotRegistry,
+			DockerConfigAuth: &corev1alpha1.DockerConfigAuth{
+				SecretKey: ".dockerconfigjson",
+				SecretRef: &corev1.SecretReference{
+					Name:      RegistryDockerConfigSecret,
+					Namespace: defaultNamespace,
 				},
 			},
 		},

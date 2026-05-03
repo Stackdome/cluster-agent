@@ -21,6 +21,8 @@ const (
 	registryNamespace  = "stackdome-registry"
 	registryCredSecret = "registry-creds"
 	registryPort       = int32(5000)
+	registryUsername   = "admin"
+	registryPassword   = "admin"
 )
 
 type RegistryManager struct {
@@ -52,8 +54,8 @@ func (rm *RegistryManager) Setup(ctx context.Context) error {
 			Namespace: registryNamespace,
 		},
 		StringData: map[string]string{
-			"username": "admin",
-			"password": "admin",
+			"username": registryUsername,
+			"password": registryPassword,
 		},
 	}
 	if err := rm.client.Create(ctx, credSecret); err != nil {

@@ -7,6 +7,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -153,4 +154,90 @@ func GetContainerEnvVar(dep *appsv1.Deployment, envName string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// GetIngressForResource retrieves the Ingress created for a StackResource.
+func GetIngressForResource(ctx context.Context, c client.Client, namespace, resourceName string) (*networkingv1.Ingress, error) {
+	ingress := &networkingv1.Ingress{}
+	err := c.Get(ctx, client.ObjectKey{
+		Name:      resourceName + "-http-proxy",
+		Namespace: namespace,
+	}, ingress)
+	return ingress, err
+}
+
+// GetStackResource retrieves a StackResource by key.
+func GetStackResource(ctx context.Context, c client.Client, key client.ObjectKey) (*corev1alpha1.StackResource, error) {
+	sr := &corev1alpha1.StackResource{}
+	err := c.Get(ctx, key, sr)
+	return sr, err
+}
+
+// WaitForDeploymentUpdated polls until the Deployment matches the given predicate.
+func WaitForDeploymentUpdated(ctx context.Context, c client.Client, namespace, name string, predicate func(*appsv1.Deployment) bool, timeout time.Duration) (*appsv1.Deployment, error) {
+	deadline := time.After(timeout)
+	tick := time.NewTicker(5 * time.Second)
+	defer tick.Stop()
+
+	for {
+		select {
+		case <-deadline:
+			dep, _ := GetDeploymentForResource(ctx, c, namespace, name)
+			return dep, fmt.Errorf("timed out waiting for Deployment %s to match predicate", name)
+		case <-tick.C:
+			dep, err := GetDeploymentForResource(ctx, c, namespace, name)
+			if err != nil {
+				continue
+			}
+			if predicate(dep) {
+				return dep, nil
+			}
+		}
+	}
+}
+
+// WaitForStackResourceCount polls until the namespace has at least the given number of StackResources.
+func WaitForStackResourceCount(ctx context.Context, c client.Client, namespace string, count int, timeout time.Duration) error {
+	deadline := time.After(timeout)
+	tick := time.NewTicker(5 * time.Second)
+	defer tick.Stop()
+
+	for {
+		select {
+		case <-deadline:
+			return fmt.Errorf("timed out waiting for %d StackResources in %s", count, namespace)
+		case <-tick.C:
+			list := &corev1alpha1.StackResourceList{}
+			if err := c.List(ctx, list, client.InNamespace(namespace)); err != nil {
+				continue
+			}
+			if len(list.Items) >= count {
+				return nil
+			}
+		}
+	}
+}
+
+// HasOwnerReference checks whether an object has an owner reference with the given name and kind.
+func HasOwnerReference(obj metav1.ObjectMeta, ownerName, ownerKind string) bool {
+	for _, ref := range obj.OwnerReferences {
+		if ref.Name == ownerName && ref.Kind == ownerKind {
+			return true
+		}
+	}
+	return false
+}
+
+// GetPodTemplateAnnotation retrieves an annotation from a Deployment's pod template.
+func GetPodTemplateAnnotation(dep *appsv1.Deployment, key string) (string, bool) {
+	if dep.Spec.Template.Annotations == nil {
+		return "", false
+	}
+	val, ok := dep.Spec.Template.Annotations[key]
+	return val, ok
+}
+
+// ServiceIsHeadless checks whether a Service has ClusterIP set to "None".
+func ServiceIsHeadless(svc *corev1.Service) bool {
+	return svc.Spec.ClusterIP == "None"
 }
