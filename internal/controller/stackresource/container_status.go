@@ -14,20 +14,6 @@ import (
 	"stackdome.io/cluster-agent/internal/controller"
 )
 
-func containerWaitingReason(cs corev1.ContainerStatus) string {
-	if cs.State.Waiting != nil {
-		return cs.State.Waiting.Reason
-	}
-	return ""
-}
-
-func containerTerminatedReason(cs corev1.ContainerStatus) string {
-	if cs.State.Terminated != nil {
-		return cs.State.Terminated.Reason
-	}
-	return ""
-}
-
 var crashReasons = map[string]bool{
 	"CrashLoopBackOff":     true,
 	"ImagePullBackOff":     true,
@@ -136,8 +122,6 @@ func captureFailedContainerStatuses(ctx context.Context, kubeClient kubernetes.I
 
 	labels := GetDeploymentPodLabelForResource(resource)
 	labelSelector := fmt.Sprintf("resource=%s", labels["resource"])
-	logger.Info("listing pods for container status capture", "namespace", resource.Namespace, "labelSelector", labelSelector)
-
 	podList, err := kubeClient.CoreV1().Pods(resource.Namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: labelSelector,
 	})
@@ -146,37 +130,21 @@ func captureFailedContainerStatuses(ctx context.Context, kubeClient kubernetes.I
 		return
 	}
 
-	logger.Info("found pods for container status capture", "count", len(podList.Items))
-
 	if len(podList.Items) == 0 {
 		return
 	}
 
 	var crashingPod *corev1.Pod
 	for i := range podList.Items {
-		pod := &podList.Items[i]
-		for _, cs := range pod.Status.ContainerStatuses {
-			logger.Info("pod container status",
-				"pod", pod.Name,
-				"container", cs.Name,
-				"ready", cs.Ready,
-				"restartCount", cs.RestartCount,
-				"waitingReason", containerWaitingReason(cs),
-				"terminatedReason", containerTerminatedReason(cs),
-			)
-		}
-		if hasAnyCrashingContainer(pod) {
-			crashingPod = pod
+		if hasAnyCrashingContainer(&podList.Items[i]) {
+			crashingPod = &podList.Items[i]
 			break
 		}
 	}
 
 	if crashingPod == nil {
-		logger.Info("no crashing containers found in any pod")
 		return
 	}
-
-	logger.Info("found crashing pod", "pod", crashingPod.Name)
 
 	statuses := make([]v1alpha1.FailedContainerStatus, 0)
 

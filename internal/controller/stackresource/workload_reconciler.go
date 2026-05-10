@@ -206,7 +206,6 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.S
 	logger.Info("deployment reconciled", "operation", op)
 
 	currentRevision := deployment.Annotations["deployment.kubernetes.io/revision"]
-	logger.Info("deployment revision check", "revision", currentRevision, "available", controller.DeploymentAvailable(deployment))
 
 	if controller.DeploymentAvailable(deployment) {
 		resource.Status.FailedContainerStatuses = nil
@@ -214,21 +213,14 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.S
 		return resultNil, nil
 	}
 
-	logger.Info("deployment not ready",
-		"existingFailedStatuses", len(resource.Status.FailedContainerStatuses),
-		"observedRevision", resource.Status.ObservedDeploymentRevision,
-		"currentRevision", currentRevision,
-	)
+	logger.Info("deployment not ready")
 
 	if len(resource.Status.FailedContainerStatuses) > 0 && resource.Status.ObservedDeploymentRevision == currentRevision {
-		logger.Info("skipping container status capture - already captured for this revision")
 		reportStackResourceNotReady(resource, "WorkspaceResouceDeploymentNotReady", "WorkspaceResouceDeploymentNotReady")
 		return resultStop, nil
 	}
 
-	logger.Info("attempting container status capture")
 	captureFailedContainerStatuses(ctx, r.KubeClient, resource)
-	logger.Info("container status capture complete", "capturedCount", len(resource.Status.FailedContainerStatuses))
 	if len(resource.Status.FailedContainerStatuses) > 0 {
 		resource.Status.ObservedDeploymentRevision = currentRevision
 	}
