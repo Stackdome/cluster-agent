@@ -19,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/client-go/kubernetes"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	buildsv1alpha1 "stackdome.io/cluster-agent/api/builds/v1alpha1"
 	"stackdome.io/cluster-agent/api/core/v1alpha1"
@@ -103,6 +104,9 @@ func (r *StackResourceReconciler) initializeStatusAndPhase(resource *v1alpha1.St
 	resource.Status.InternalAddress = nil // same here
 	resource.Status.ImageSourceRevision = ""
 	resource.Status.CurrentBuild = nil
+	// NOTE: FailedContainerStatuses and ObservedDeploymentRevision are intentionally
+	// NOT cleared here. They persist across reconciles and are managed by the
+	// workload reconciler based on deployment revision changes.
 	cond := meta.FindStatusCondition(resource.Status.Conditions, string(v1alpha1.StackResourceStatusAvailable))
 	if cond == nil {
 		meta.SetStatusCondition(&resource.Status.Conditions, metav1.Condition{
@@ -217,7 +221,7 @@ func stackResourceAvailable(resource *v1alpha1.StackResource) bool {
 	return false
 }
 
-func NewStackResourceReconciler(client client.Client, scheme *runtime.Scheme) *StackResourceReconciler {
+func NewStackResourceReconciler(client client.Client, scheme *runtime.Scheme, kubeClient kubernetes.Interface) *StackResourceReconciler {
 	w := &StackResourceReconciler{
 		Client:    client,
 		Scheme:    scheme,
@@ -240,6 +244,7 @@ func NewStackResourceReconciler(client client.Client, scheme *runtime.Scheme) *S
 			Client:            client,
 			Scheme:            scheme,
 			DependencyChecker: depChecker,
+			KubeClient:        kubeClient,
 		},
 		&svcReconciler{
 			Client: client,

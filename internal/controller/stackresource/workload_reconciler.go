@@ -9,6 +9,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/client-go/kubernetes"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -31,6 +32,7 @@ type workloadReconciler struct {
 	client.Client
 	Scheme            *runtime.Scheme
 	DependencyChecker DependencyChecker
+	KubeClient        kubernetes.Interface
 }
 
 func GetDeploymentNameForResource(resource *v1alpha1.StackResource) string {
@@ -203,10 +205,26 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.S
 
 	logger.Info("deployment reconciled", "operation", op)
 
+	currentRevision := deployment.Annotations["deployment.kubernetes.io/revision"]
+
 	if controller.DeploymentAvailable(deployment) {
+		resource.Status.FailedContainerStatuses = nil
+		resource.Status.ObservedDeploymentRevision = ""
 		return resultNil, nil
 	}
+
 	logger.Info("deployment not ready")
+
+	if len(resource.Status.FailedContainerStatuses) > 0 && resource.Status.ObservedDeploymentRevision == currentRevision {
+		reportStackResourceNotReady(resource, "WorkspaceResouceDeploymentNotReady", "WorkspaceResouceDeploymentNotReady")
+		return resultStop, nil
+	}
+
+	captureFailedContainerStatuses(ctx, r.KubeClient, r.Client, resource)
+	if len(resource.Status.FailedContainerStatuses) > 0 {
+		resource.Status.ObservedDeploymentRevision = currentRevision
+	}
+
 	reportStackResourceNotReady(resource, "WorkspaceResouceDeploymentNotReady", "WorkspaceResouceDeploymentNotReady")
 	return resultStop, nil
 }
