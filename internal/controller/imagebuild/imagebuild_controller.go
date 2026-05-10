@@ -7,6 +7,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -27,7 +28,8 @@ import (
 // ImageBuildReconciler reconciles a ImageBuild object
 type ImageBuildReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme     *runtime.Scheme
+	KubeClient kubernetes.Interface
 }
 
 func (r *ImageBuildReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -162,10 +164,13 @@ func (r *ImageBuildReconciler) reconcileImageBuildWithVolumeSource(ctx context.C
 	}
 
 	if jobFailedCondition != nil && jobFailedCondition.Status == v1.ConditionStatus(metav1.ConditionTrue) {
+		captureBuildFailureDetail(ctx, r.KubeClient, r.Client, buildConfig, existingJob)
 		reportImageBuildStatus(buildConfig, buildsv1alpha1.BuildFailed, metav1.ConditionTrue, "BuildJobFailed")
 		buildConfig.Status.Phase = buildsv1alpha1.BuildPhaseFailed
 		return ctrl.Result{}, nil
 	}
+
+	captureBuildFailureDetail(ctx, r.KubeClient, r.Client, buildConfig, existingJob)
 
 	reportImageBuildStatus(buildConfig, buildsv1alpha1.BuildAvailable, metav1.ConditionFalse, "BuildJobNotYetComplete")
 	return ctrl.Result{}, nil
@@ -242,10 +247,13 @@ func (r *ImageBuildReconciler) reconcileImageBuildWithGitSource(ctx context.Cont
 	}
 
 	if jobFailedCondition != nil && jobFailedCondition.Status == v1.ConditionStatus(metav1.ConditionTrue) {
+		captureBuildFailureDetail(ctx, r.KubeClient, r.Client, buildConfig, existingJob)
 		reportImageBuildStatus(buildConfig, buildsv1alpha1.BuildFailed, metav1.ConditionTrue, "BuildJobFailed")
 		buildConfig.Status.Phase = buildsv1alpha1.BuildPhaseFailed
 		return ctrl.Result{}, nil
 	}
+
+	captureBuildFailureDetail(ctx, r.KubeClient, r.Client, buildConfig, existingJob)
 
 	reportImageBuildStatus(buildConfig, buildsv1alpha1.BuildAvailable, metav1.ConditionFalse, "BuildJobNotYetComplete")
 	return ctrl.Result{}, nil
@@ -390,6 +398,7 @@ func reportImageBuildStatus(
 
 func reportImageBuildComplete(buildConfig *buildsv1alpha1.ImageBuild) {
 	buildConfig.Status.Phase = buildsv1alpha1.BuildPhaseSuccess
+	buildConfig.Status.BuildFailureDetail = nil
 	buildConfig.Status.BuildSourceRevision = buildConfig.Spec.SourceRevision.GetSourceRevisionString()
 	meta.SetStatusCondition(&buildConfig.Status.Conditions, metav1.Condition{
 		Type:               string(buildsv1alpha1.BuildAvailable),
