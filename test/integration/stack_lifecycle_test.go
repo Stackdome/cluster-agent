@@ -1481,6 +1481,24 @@ var _ = Describe("Stack Lifecycle", Ordered, func() {
 				"StackResource should not be Available when build fails")
 		})
 
+		It("should populate BuildFailureDetail with exit status and logs", func() {
+			srName := stack.Spec.StackResources[0].Name
+
+			By("Getting the failed ImageBuild")
+			imageBuild, err := helpers.WaitForImageBuildCreated(ctx, c, testEnv.TestNamespace, srName, imageBuildTimeout)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Waiting for BuildFailureDetail to be populated")
+			imageBuild, err = helpers.WaitForBuildFailureDetail(ctx, c, client.ObjectKeyFromObject(imageBuild), buildReadyTimeout)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(imageBuild.Status.BuildFailureDetail).NotTo(BeNil())
+			detail := imageBuild.Status.BuildFailureDetail
+			Expect(detail.State).To(Equal("terminated"))
+			Expect(detail.ExitCode).NotTo(BeNil())
+			Expect(detail.Logs).NotTo(BeEmpty())
+		})
+
 		AfterAll(func() {
 			if CurrentSpecReport().Failed() {
 				GinkgoWriter.Println(helpers.DumpBuildDiagnostics(ctx, c, testEnv.KubeClient, testEnv.TestNamespace))
