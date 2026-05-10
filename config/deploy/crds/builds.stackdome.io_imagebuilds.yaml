@@ -295,6 +295,28 @@ spec:
           status:
             description: ImageBuildStatus defines the observed state of ImageBuild
             properties:
+              buildFailureDetail:
+                properties:
+                  exitCode:
+                    format: int32
+                    type: integer
+                  finishedAt:
+                    format: date-time
+                    type: string
+                  logs:
+                    type: string
+                  message:
+                    type: string
+                  reason:
+                    type: string
+                  startedAt:
+                    format: date-time
+                    type: string
+                  state:
+                    type: string
+                required:
+                - state
+                type: object
               buildSourceRevision:
                 type: string
               conditions:
