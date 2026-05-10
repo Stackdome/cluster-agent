@@ -42,6 +42,17 @@ func DeploymentAvailable(deployment *appsv1.Deployment) bool {
 	return false
 }
 
+func DeploymentProgressDeadlineExceeded(deployment *appsv1.Deployment) bool {
+	for _, condition := range deployment.Status.Conditions {
+		if condition.Type == appsv1.DeploymentProgressing &&
+			condition.Status == corev1.ConditionFalse &&
+			condition.Reason == "ProgressDeadlineExceeded" {
+			return true
+		}
+	}
+	return false
+}
+
 func AreServicesEqual(svc1, svc2 *corev1.Service) bool {
 	// Create a copy of the services to avoid modifying the original objects
 	svc1Copy := svc1.DeepCopy()

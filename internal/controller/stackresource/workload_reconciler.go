@@ -234,6 +234,10 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.S
 	}
 
 	reportStackResourceNotReady(resource, "WorkspaceResouceDeploymentNotReady", "WorkspaceResouceDeploymentNotReady")
+
+	if len(resource.Status.FailedContainerStatuses) == 0 && !controller.DeploymentProgressDeadlineExceeded(deployment) {
+		return resultRequeueAfter(10 * time.Second), nil
+	}
 	return resultStop, nil
 }
 
