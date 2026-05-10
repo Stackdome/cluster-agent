@@ -1493,6 +1493,103 @@ var _ = Describe("Stack Lifecycle", Ordered, func() {
 		})
 	})
 
+	Context("FailedContainerStatuses - crash detection", Ordered, func() {
+		var stack *corev1alpha1.Stack
+
+		BeforeAll(func() {
+			testEnv = GetEnvironment()
+			ctx = context.Background()
+			c = testEnv.Client
+
+			stack = fixtures.CrashingStack("crash-detect")
+			Expect(c.Create(ctx, stack)).To(Succeed())
+		})
+
+		It("should populate FailedContainerStatuses when container crashes", func() {
+			srName := stack.Spec.StackResources[0].Name
+			srKey := client.ObjectKey{Name: srName, Namespace: testEnv.TestNamespace}
+
+			By("Waiting for FailedContainerStatuses to be populated")
+			sr, err := helpers.WaitForFailedContainerStatuses(ctx, c, srKey, 3*time.Minute)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(sr.Status.FailedContainerStatuses).NotTo(BeEmpty())
+			fcs := sr.Status.FailedContainerStatuses[0]
+			Expect(fcs.Name).To(Equal(srName))
+			Expect(fcs.ExitCode).NotTo(BeNil())
+			Expect(*fcs.ExitCode).To(Equal(int32(1)))
+			Expect(fcs.State).To(BeElementOf("waiting", "terminated"))
+			Expect(fcs.Logs).To(ContainSubstring("ERROR: connection refused"))
+
+			By("Verifying ObservedDeploymentRevision is set")
+			Expect(sr.Status.ObservedDeploymentRevision).NotTo(BeEmpty())
+		})
+
+		It("should clear FailedContainerStatuses when container recovers", func() {
+			srName := stack.Spec.StackResources[0].Name
+			srKey := client.ObjectKey{Name: srName, Namespace: testEnv.TestNamespace}
+
+			By("Updating Stack to use a healthy image")
+			Expect(c.Get(ctx, client.ObjectKeyFromObject(stack), stack)).To(Succeed())
+			stack.Spec.StackResources[0].Spec.ImageSpec.Image = "nginx:1.25-alpine"
+			stack.Spec.StackResources[0].Spec.Command = nil
+			stack.Spec.StackResources[0].Spec.Args = nil
+			Expect(c.Update(ctx, stack)).To(Succeed())
+
+			By("Waiting for StackResource to become Available")
+			sr, err := helpers.WaitForStackResourceAvailable(ctx, c, srKey, 5*time.Minute)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(sr.Status.FailedContainerStatuses).To(BeNil())
+			Expect(sr.Status.ObservedDeploymentRevision).To(BeEmpty())
+		})
+
+		AfterAll(func() {
+			if stack != nil {
+				By("Cleaning up crash-detect Stack")
+				_ = c.Delete(ctx, stack)
+				_ = helpers.WaitForStackDeleted(ctx, c, client.ObjectKeyFromObject(stack), stackDeleteTimeout)
+			}
+		})
+	})
+
+	Context("FailedContainerStatuses - image pull failure", Ordered, func() {
+		var stack *corev1alpha1.Stack
+
+		BeforeAll(func() {
+			testEnv = GetEnvironment()
+			ctx = context.Background()
+			c = testEnv.Client
+
+			stack = fixtures.ImagePullFailStack("imgpull-fail")
+			Expect(c.Create(ctx, stack)).To(Succeed())
+		})
+
+		It("should populate FailedContainerStatuses with ImagePullBackOff", func() {
+			srName := stack.Spec.StackResources[0].Name
+			srKey := client.ObjectKey{Name: srName, Namespace: testEnv.TestNamespace}
+
+			By("Waiting for FailedContainerStatuses to be populated")
+			sr, err := helpers.WaitForFailedContainerStatuses(ctx, c, srKey, 2*time.Minute)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(sr.Status.FailedContainerStatuses).NotTo(BeEmpty())
+			fcs := sr.Status.FailedContainerStatuses[0]
+			Expect(fcs.Reason).To(BeElementOf("ImagePullBackOff", "ErrImagePull"))
+			Expect(fcs.ExitCode).To(BeNil())
+			Expect(fcs.Logs).To(BeEmpty())
+			Expect(fcs.Message).To(ContainSubstring("nonexistent-registry.example.com/fake-image"))
+		})
+
+		AfterAll(func() {
+			if stack != nil {
+				By("Cleaning up imgpull-fail Stack")
+				_ = c.Delete(ctx, stack)
+				_ = helpers.WaitForStackDeleted(ctx, c, client.ObjectKeyFromObject(stack), stackDeleteTimeout)
+			}
+		})
+	})
+
 	Context("Stack deletion", func() {
 		It("should clean up all owned resources on deletion", func() {
 			stack := fixtures.StackForDeletion("del-stack")
