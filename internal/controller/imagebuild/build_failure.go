@@ -68,7 +68,9 @@ func captureBuildFailureDetail(ctx context.Context, kubeClient kubernetes.Interf
 			detail.Logs = fetchBuildLogs(ctx, kubeClient, buildConfig.Namespace, pod.Name)
 		}
 
-		buildConfig.Status.BuildFailureDetail = detail
+		if detail.State != "" {
+			buildConfig.Status.BuildFailureDetail = detail
+		}
 		return
 	}
 }
