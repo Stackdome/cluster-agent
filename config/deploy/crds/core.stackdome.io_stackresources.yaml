@@ -527,6 +527,37 @@ spec:
                   - targetPort
                   type: object
                 type: array
+              failedContainerStatuses:
+                items:
+                  properties:
+                    exitCode:
+                      format: int32
+                      type: integer
+                    finishedAt:
+                      format: date-time
+                      type: string
+                    logs:
+                      type: string
+                    message:
+                      type: string
+                    name:
+                      type: string
+                    reason:
+                      type: string
+                    restartCount:
+                      format: int32
+                      type: integer
+                    startedAt:
+                      format: date-time
+                      type: string
+                    state:
+                      type: string
+                  required:
+                  - name
+                  - restartCount
+                  - state
+                  type: object
+                type: array
               imageSourceRevision:
                 type: string
               internalAddress:
@@ -535,6 +566,8 @@ spec:
                 type: string
               lastRestartRequestProcessedAt:
                 format: date-time
+                type: string
+              observedDeploymentRevision:
                 type: string
               observedGeneration:
                 description: The most recent generation observed by the controller.

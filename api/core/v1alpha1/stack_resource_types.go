@@ -302,6 +302,18 @@ type BuildStatus struct {
 	Phase          string `json:"phase,omitempty"`
 }
 
+type FailedContainerStatus struct {
+	Name         string       `json:"name"`
+	RestartCount int32        `json:"restartCount"`
+	State        string       `json:"state"`
+	Reason       string       `json:"reason,omitempty"`
+	Message      string       `json:"message,omitempty"`
+	ExitCode     *int32       `json:"exitCode,omitempty"`
+	StartedAt    *metav1.Time `json:"startedAt,omitempty"`
+	FinishedAt   *metav1.Time `json:"finishedAt,omitempty"`
+	Logs         string       `json:"logs,omitempty"`
+}
+
 // StackResourceStatus defines the observed state of StackResource
 type StackResourceStatus struct {
 	// The most recent generation observed by the controller.
@@ -319,7 +331,9 @@ type StackResourceStatus struct {
 	// Current build that this resource uses.
 	// Applicable only to resources which have BuildSpec defined.
 	CurrentBuild *BuildStatus `json:"currentBuild,omitempty"`
-	StatusHash   string       `json:"statusHash,omitempty"`
+	StatusHash                 string                  `json:"statusHash,omitempty"`
+	FailedContainerStatuses    []FailedContainerStatus `json:"failedContainerStatuses,omitempty"`
+	ObservedDeploymentRevision string                  `json:"observedDeploymentRevision,omitempty"`
 }
 
 // +kubebuilder:object:root=true
