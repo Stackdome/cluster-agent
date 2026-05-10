@@ -2,13 +2,13 @@ package stackresource
 
 import (
 	"context"
+	"fmt"
 	"io"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/utils/ptr"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"stackdome.io/cluster-agent/api/core/v1alpha1"
 	"stackdome.io/cluster-agent/internal/controller"
@@ -117,14 +117,15 @@ func shouldFetchLogs(cs corev1.ContainerStatus) (fetch bool, previous bool) {
 	return false, false
 }
 
-func captureFailedContainerStatuses(ctx context.Context, kubeClient kubernetes.Interface, c client.Client, resource *v1alpha1.StackResource) {
+func captureFailedContainerStatuses(ctx context.Context, kubeClient kubernetes.Interface, resource *v1alpha1.StackResource) {
 	logger := controller.LoggerFromContext(ctx)
 
-	podList := &corev1.PodList{}
-	if err := c.List(ctx, podList,
-		client.InNamespace(resource.Namespace),
-		client.MatchingLabels(GetDeploymentPodLabelForResource(resource)),
-	); err != nil {
+	labels := GetDeploymentPodLabelForResource(resource)
+	labelSelector := fmt.Sprintf("resource=%s", labels["resource"])
+	podList, err := kubeClient.CoreV1().Pods(resource.Namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: labelSelector,
+	})
+	if err != nil {
 		logger.Error(err, "failed to list pods for container status capture")
 		return
 	}

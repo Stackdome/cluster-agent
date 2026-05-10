@@ -2,28 +2,28 @@ package imagebuild
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"sort"
 
-	corev1 "k8s.io/api/core/v1"
 	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/utils/ptr"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	buildsv1alpha1 "stackdome.io/cluster-agent/api/builds/v1alpha1"
 	"stackdome.io/cluster-agent/internal/controller"
 )
 
-func captureBuildFailureDetail(ctx context.Context, kubeClient kubernetes.Interface, c client.Client, buildConfig *buildsv1alpha1.ImageBuild, job *batchv1.Job) {
+func captureBuildFailureDetail(ctx context.Context, kubeClient kubernetes.Interface, buildConfig *buildsv1alpha1.ImageBuild, job *batchv1.Job) {
 	logger := controller.LoggerFromContext(ctx)
 
-	podList := &corev1.PodList{}
-	if err := c.List(ctx, podList,
-		client.InNamespace(buildConfig.Namespace),
-		client.MatchingLabels{"job-name": job.Name},
-	); err != nil {
+	labelSelector := fmt.Sprintf("job-name=%s", job.Name)
+	podList, err := kubeClient.CoreV1().Pods(buildConfig.Namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: labelSelector,
+	})
+	if err != nil {
 		logger.Error(err, "failed to list pods for build failure capture")
 		return
 	}

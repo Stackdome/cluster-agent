@@ -164,13 +164,13 @@ func (r *ImageBuildReconciler) reconcileImageBuildWithVolumeSource(ctx context.C
 	}
 
 	if jobFailedCondition != nil && jobFailedCondition.Status == v1.ConditionStatus(metav1.ConditionTrue) {
-		captureBuildFailureDetail(ctx, r.KubeClient, r.Client, buildConfig, existingJob)
+		captureBuildFailureDetail(ctx, r.KubeClient, buildConfig, existingJob)
 		reportImageBuildStatus(buildConfig, buildsv1alpha1.BuildFailed, metav1.ConditionTrue, "BuildJobFailed")
 		buildConfig.Status.Phase = buildsv1alpha1.BuildPhaseFailed
 		return ctrl.Result{}, nil
 	}
 
-	captureBuildFailureDetail(ctx, r.KubeClient, r.Client, buildConfig, existingJob)
+	captureBuildFailureDetail(ctx, r.KubeClient, buildConfig, existingJob)
 
 	reportImageBuildStatus(buildConfig, buildsv1alpha1.BuildAvailable, metav1.ConditionFalse, "BuildJobNotYetComplete")
 	return ctrl.Result{}, nil
@@ -247,13 +247,13 @@ func (r *ImageBuildReconciler) reconcileImageBuildWithGitSource(ctx context.Cont
 	}
 
 	if jobFailedCondition != nil && jobFailedCondition.Status == v1.ConditionStatus(metav1.ConditionTrue) {
-		captureBuildFailureDetail(ctx, r.KubeClient, r.Client, buildConfig, existingJob)
+		captureBuildFailureDetail(ctx, r.KubeClient, buildConfig, existingJob)
 		reportImageBuildStatus(buildConfig, buildsv1alpha1.BuildFailed, metav1.ConditionTrue, "BuildJobFailed")
 		buildConfig.Status.Phase = buildsv1alpha1.BuildPhaseFailed
 		return ctrl.Result{}, nil
 	}
 
-	captureBuildFailureDetail(ctx, r.KubeClient, r.Client, buildConfig, existingJob)
+	captureBuildFailureDetail(ctx, r.KubeClient, buildConfig, existingJob)
 
 	reportImageBuildStatus(buildConfig, buildsv1alpha1.BuildAvailable, metav1.ConditionFalse, "BuildJobNotYetComplete")
 	return ctrl.Result{}, nil

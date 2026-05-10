@@ -220,7 +220,7 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.S
 		return resultStop, nil
 	}
 
-	captureFailedContainerStatuses(ctx, r.KubeClient, r.Client, resource)
+	captureFailedContainerStatuses(ctx, r.KubeClient, resource)
 	if len(resource.Status.FailedContainerStatuses) > 0 {
 		resource.Status.ObservedDeploymentRevision = currentRevision
 	}
