@@ -788,3 +788,61 @@ func envName(name string) string {
 	}
 	return string(result)
 }
+
+func CrashingStack(name string) *corev1alpha1.Stack {
+	resourceName := name + "-crash"
+	return &corev1alpha1.Stack{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: defaultNamespace,
+		},
+		Spec: corev1alpha1.StackSpec{
+			StackResources: []corev1alpha1.StackResourceTemplate{
+				{
+					Name: resourceName,
+					Spec: corev1alpha1.StackResourceSpec{
+						ImageSpec: &corev1alpha1.ImageSpec{
+							Image: "busybox:1.36",
+						},
+						Command: []string{"sh"},
+						Args:    []string{"-c", "echo 'app starting'; echo 'connecting to database'; echo 'ERROR: connection refused'; exit 1"},
+						Ports: []corev1alpha1.Port{
+							{
+								Number: 8080,
+								FQDN:   resourceName + ".local",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func ImagePullFailStack(name string) *corev1alpha1.Stack {
+	resourceName := name + "-pullfail"
+	return &corev1alpha1.Stack{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: defaultNamespace,
+		},
+		Spec: corev1alpha1.StackSpec{
+			StackResources: []corev1alpha1.StackResourceTemplate{
+				{
+					Name: resourceName,
+					Spec: corev1alpha1.StackResourceSpec{
+						ImageSpec: &corev1alpha1.ImageSpec{
+							Image: "nonexistent-registry.example.com/fake-image:v999",
+						},
+						Ports: []corev1alpha1.Port{
+							{
+								Number: 8080,
+								FQDN:   resourceName + ".local",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}

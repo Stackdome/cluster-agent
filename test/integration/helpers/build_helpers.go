@@ -137,6 +137,29 @@ func WaitForImageBuildFailed(ctx context.Context, c client.Client, key client.Ob
 	}
 }
 
+func WaitForBuildFailureDetail(ctx context.Context, c client.Client, key client.ObjectKey, timeout time.Duration) (*buildsv1alpha1.ImageBuild, error) {
+	deadline := time.After(timeout)
+	tick := time.NewTicker(10 * time.Second)
+	defer tick.Stop()
+
+	for {
+		select {
+		case <-deadline:
+			build := &buildsv1alpha1.ImageBuild{}
+			_ = c.Get(ctx, key, build)
+			return build, fmt.Errorf("timed out waiting for BuildFailureDetail on ImageBuild %s", key.Name)
+		case <-tick.C:
+			build := &buildsv1alpha1.ImageBuild{}
+			if err := c.Get(ctx, key, build); err != nil {
+				continue
+			}
+			if build.Status.BuildFailureDetail != nil {
+				return build, nil
+			}
+		}
+	}
+}
+
 // DumpBuildDiagnostics returns a summary of ImageBuild CRs, build Jobs, build
 // Pods, and the last 50 lines of each build pod's logs in the given namespace.
 // Call before cleanup so failures leave a trail in the test log.
