@@ -97,7 +97,7 @@ func (r *ImageBuildReconciler) reconcileImageBuildWithVolumeSource(ctx context.C
 		return ctrl.Result{Requeue: true}, nil
 	}
 
-	dockerSecret, dockerSecretKey, err := r.getRegistryAuthSecrets(ctx, buildConfig, nil)
+	dockerSecret, dockerSecretKey, err := r.getRegistryAuthSecrets(ctx, buildConfig)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -163,6 +163,7 @@ func (r *ImageBuildReconciler) reconcileImageBuildWithVolumeSource(ctx context.C
 
 	if jobFailedCondition != nil && jobFailedCondition.Status == v1.ConditionStatus(metav1.ConditionTrue) {
 		reportImageBuildStatus(buildConfig, buildsv1alpha1.BuildFailed, metav1.ConditionTrue, "BuildJobFailed")
+		buildConfig.Status.Phase = buildsv1alpha1.BuildPhaseFailed
 		return ctrl.Result{}, nil
 	}
 
@@ -177,7 +178,7 @@ func (r *ImageBuildReconciler) reconcileImageBuildWithGitSource(ctx context.Cont
 	logger := controller.LoggerFromContext(ctx)
 	logger.Info("reconciling image build with git source")
 
-	dockerSecret, dockerSecretKey, err := r.getRegistryAuthSecrets(ctx, buildConfig, nil)
+	dockerSecret, dockerSecretKey, err := r.getRegistryAuthSecrets(ctx, buildConfig)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -242,6 +243,7 @@ func (r *ImageBuildReconciler) reconcileImageBuildWithGitSource(ctx context.Cont
 
 	if jobFailedCondition != nil && jobFailedCondition.Status == v1.ConditionStatus(metav1.ConditionTrue) {
 		reportImageBuildStatus(buildConfig, buildsv1alpha1.BuildFailed, metav1.ConditionTrue, "BuildJobFailed")
+		buildConfig.Status.Phase = buildsv1alpha1.BuildPhaseFailed
 		return ctrl.Result{}, nil
 	}
 
@@ -249,7 +251,7 @@ func (r *ImageBuildReconciler) reconcileImageBuildWithGitSource(ctx context.Cont
 	return ctrl.Result{}, nil
 }
 
-func (r *ImageBuildReconciler) getRegistryAuthSecrets(ctx context.Context, buildConfig *buildsv1alpha1.ImageBuild, jobConfig *imagebuilder.BuildParams) (*v1.Secret, string, error) {
+func (r *ImageBuildReconciler) getRegistryAuthSecrets(ctx context.Context, buildConfig *buildsv1alpha1.ImageBuild) (*v1.Secret, string, error) {
 	if buildConfig.Spec.Auth == nil {
 		return nil, "", nil
 	}
@@ -394,7 +396,7 @@ func reportImageBuildComplete(buildConfig *buildsv1alpha1.ImageBuild) {
 		Status:             metav1.ConditionTrue,
 		ObservedGeneration: buildConfig.Generation,
 		Reason:             "BuildComplete",
-		Message:            "Image build compelete",
+		Message:            "Image build complete",
 	})
 	buildConfig.Status.StatusHash = buildConfig.StatusHash()
 }

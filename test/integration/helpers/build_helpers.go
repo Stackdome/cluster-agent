@@ -3,9 +3,13 @@ package helpers
 import (
 	"context"
 	"fmt"
+	"io"
+	"strings"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	buildsv1alpha1 "stackdome.io/cluster-agent/api/builds/v1alpha1"
@@ -104,4 +108,119 @@ func JobHasBuildArg(job *batchv1.Job, argName, argValue string) bool {
 		}
 	}
 	return false
+}
+
+// WaitForImageBuildFailed polls until the ImageBuild reaches Failed phase.
+func WaitForImageBuildFailed(ctx context.Context, c client.Client, key client.ObjectKey, timeout time.Duration) (*buildsv1alpha1.ImageBuild, error) {
+	deadline := time.After(timeout)
+	tick := time.NewTicker(10 * time.Second)
+	defer tick.Stop()
+
+	for {
+		select {
+		case <-deadline:
+			build := &buildsv1alpha1.ImageBuild{}
+			_ = c.Get(ctx, key, build)
+			return build, fmt.Errorf("timed out waiting for ImageBuild %s to fail (current phase: %s)", key.Name, build.Status.Phase)
+		case <-tick.C:
+			build := &buildsv1alpha1.ImageBuild{}
+			if err := c.Get(ctx, key, build); err != nil {
+				continue
+			}
+			if build.Status.Phase == buildsv1alpha1.BuildPhaseFailed {
+				return build, nil
+			}
+			if build.Status.Phase == buildsv1alpha1.BuildPhaseSuccess {
+				return build, fmt.Errorf("ImageBuild %s succeeded unexpectedly", key.Name)
+			}
+		}
+	}
+}
+
+// DumpBuildDiagnostics returns a summary of ImageBuild CRs, build Jobs, build
+// Pods, and the last 50 lines of each build pod's logs in the given namespace.
+// Call before cleanup so failures leave a trail in the test log.
+func DumpBuildDiagnostics(ctx context.Context, c client.Client, kubeClient kubernetes.Interface, namespace string) string {
+	out := "\n=== Build Diagnostics ===\n"
+
+	builds := &buildsv1alpha1.ImageBuildList{}
+	if err := c.List(ctx, builds, client.InNamespace(namespace)); err != nil {
+		return out + fmt.Sprintf("failed to list ImageBuilds: %v\n", err)
+	}
+	for _, b := range builds.Items {
+		out += fmt.Sprintf("\nImageBuild: %s\n  Phase: %s\n  Conditions:\n", b.Name, b.Status.Phase)
+		for _, cond := range b.Status.Conditions {
+			out += fmt.Sprintf("    %s=%s (reason=%s, message=%s)\n", cond.Type, cond.Status, cond.Reason, cond.Message)
+		}
+	}
+
+	jobs := &batchv1.JobList{}
+	if err := c.List(ctx, jobs, client.InNamespace(namespace)); err != nil {
+		out += fmt.Sprintf("failed to list Jobs: %v\n", err)
+	} else {
+		for _, j := range jobs.Items {
+			out += fmt.Sprintf("\nJob: %s\n  Active=%d Succeeded=%d Failed=%d\n  Conditions:\n",
+				j.Name, j.Status.Active, j.Status.Succeeded, j.Status.Failed)
+			for _, cond := range j.Status.Conditions {
+				out += fmt.Sprintf("    %s=%s (reason=%s, message=%s)\n", cond.Type, string(cond.Status), cond.Reason, cond.Message)
+			}
+		}
+	}
+
+	pods := &corev1.PodList{}
+	if err := c.List(ctx, pods, client.InNamespace(namespace)); err != nil {
+		out += fmt.Sprintf("failed to list Pods: %v\n", err)
+	} else {
+		for _, p := range pods.Items {
+			out += fmt.Sprintf("\nPod: %s\n  Phase: %s\n", p.Name, p.Status.Phase)
+			for _, cs := range p.Status.ContainerStatuses {
+				out += fmt.Sprintf("  Container %s: ready=%v", cs.Name, cs.Ready)
+				if cs.State.Waiting != nil {
+					out += fmt.Sprintf(" waiting(reason=%s, message=%s)", cs.State.Waiting.Reason, cs.State.Waiting.Message)
+				}
+				if cs.State.Terminated != nil {
+					out += fmt.Sprintf(" terminated(reason=%s, exitCode=%d)", cs.State.Terminated.Reason, cs.State.Terminated.ExitCode)
+				}
+				out += "\n"
+			}
+			for _, cs := range p.Status.InitContainerStatuses {
+				out += fmt.Sprintf("  InitContainer %s: ready=%v", cs.Name, cs.Ready)
+				if cs.State.Waiting != nil {
+					out += fmt.Sprintf(" waiting(reason=%s, message=%s)", cs.State.Waiting.Reason, cs.State.Waiting.Message)
+				}
+				if cs.State.Terminated != nil {
+					out += fmt.Sprintf(" terminated(reason=%s, exitCode=%d)", cs.State.Terminated.Reason, cs.State.Terminated.ExitCode)
+				}
+				out += "\n"
+			}
+
+			if strings.Contains(p.Name, "build") {
+				out += fetchPodLogs(ctx, kubeClient, namespace, p.Name, 50)
+			}
+		}
+	}
+
+	out += "=== End Build Diagnostics ===\n"
+	return out
+}
+
+func fetchPodLogs(ctx context.Context, kubeClient kubernetes.Interface, namespace, podName string, tailLines int64) string {
+	out := fmt.Sprintf("  Logs (last %d lines):\n", tailLines)
+	req := kubeClient.CoreV1().Pods(namespace).GetLogs(podName, &corev1.PodLogOptions{TailLines: &tailLines})
+	stream, err := req.Stream(ctx)
+	if err != nil {
+		return out + fmt.Sprintf("    <failed to fetch logs: %v>\n", err)
+	}
+	defer stream.Close()
+	body, err := io.ReadAll(stream)
+	if err != nil {
+		return out + fmt.Sprintf("    <failed to read logs: %v>\n", err)
+	}
+	if len(body) == 0 {
+		return out + "    <no logs available>\n"
+	}
+	for _, line := range strings.Split(string(body), "\n") {
+		out += "    " + line + "\n"
+	}
+	return out
 }

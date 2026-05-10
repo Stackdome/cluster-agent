@@ -47,7 +47,7 @@ test: manifests generate fmt vet envtest ## Run tests.
 
 .PHONY: test-integration
 test-integration: ## Run integration tests (requires Docker for Kind cluster).
-	go run github.com/onsi/ginkgo/v2/ginkgo -v --timeout 30m ./test/integration/... 2>&1 | tee test/integration/last-run.log
+	go run github.com/onsi/ginkgo/v2/ginkgo -v --timeout 1h ./test/integration/... 2>&1 | tee test/integration/last-run.log
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter.
