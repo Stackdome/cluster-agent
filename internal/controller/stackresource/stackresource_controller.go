@@ -19,7 +19,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
-	"k8s.io/client-go/kubernetes"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	buildsv1alpha1 "stackdome.io/cluster-agent/api/builds/v1alpha1"
 	"stackdome.io/cluster-agent/api/core/v1alpha1"
@@ -56,6 +55,7 @@ const DefaultRequeueTime = 5 * time.Second
 // StackResourceReconciler reconciles a StackResource object
 type StackResourceReconciler struct {
 	client.Client
+	uncachedClient client.Client
 	Scheme         *runtime.Scheme
 	subReconcilers []subReconciler
 	RequeueCh      chan event.GenericEvent
@@ -104,9 +104,8 @@ func (r *StackResourceReconciler) initializeStatusAndPhase(resource *v1alpha1.St
 	resource.Status.InternalAddress = nil // same here
 	resource.Status.ImageSourceRevision = ""
 	resource.Status.CurrentBuild = nil
-	// NOTE: FailedContainerStatuses and ObservedDeploymentRevision are intentionally
-	// NOT cleared here. They persist across reconciles and are managed by the
-	// workload reconciler based on deployment revision changes.
+	// NOTE: LastFailureDetails is intentionally NOT cleared here. It persists
+	// across reconciles and is managed by the workload reconciler.
 	cond := meta.FindStatusCondition(resource.Status.Conditions, string(v1alpha1.StackResourceStatusAvailable))
 	if cond == nil {
 		meta.SetStatusCondition(&resource.Status.Conditions, metav1.Condition{
@@ -221,7 +220,7 @@ func stackResourceAvailable(resource *v1alpha1.StackResource) bool {
 	return false
 }
 
-func NewStackResourceReconciler(client client.Client, scheme *runtime.Scheme, kubeClient kubernetes.Interface) *StackResourceReconciler {
+func NewStackResourceReconciler(client client.Client, scheme *runtime.Scheme, uncachedClient client.Client) *StackResourceReconciler {
 	w := &StackResourceReconciler{
 		Client:    client,
 		Scheme:    scheme,
@@ -244,7 +243,7 @@ func NewStackResourceReconciler(client client.Client, scheme *runtime.Scheme, ku
 			Client:            client,
 			Scheme:            scheme,
 			DependencyChecker: depChecker,
-			KubeClient:        kubeClient,
+			uncachedClient:    uncachedClient,
 		},
 		&svcReconciler{
 			Client: client,

@@ -846,3 +846,35 @@ func ImagePullFailStack(name string) *corev1alpha1.Stack {
 		},
 	}
 }
+
+func InitContainerFailStack(name string) *corev1alpha1.Stack {
+	resourceName := name + "-initfail"
+	return &corev1alpha1.Stack{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: defaultNamespace,
+		},
+		Spec: corev1alpha1.StackSpec{
+			StackResources: []corev1alpha1.StackResourceTemplate{
+				{
+					Name: resourceName,
+					Spec: corev1alpha1.StackResourceSpec{
+						ImageSpec: &corev1alpha1.ImageSpec{
+							Image: "busybox:1.36",
+						},
+						Init: &corev1alpha1.InitSpec{
+							Command: []string{"sh"},
+							Args:    []string{"-c", "echo 'init: checking dependencies'; echo 'init: FATAL: missing required config'; exit 1"},
+						},
+						Ports: []corev1alpha1.Port{
+							{
+								Number: 8080,
+								FQDN:   resourceName + ".local",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}

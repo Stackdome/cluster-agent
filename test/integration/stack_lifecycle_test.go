@@ -1481,7 +1481,7 @@ var _ = Describe("Stack Lifecycle", Ordered, func() {
 				"StackResource should not be Available when build fails")
 		})
 
-		It("should populate BuildFailureDetail with exit status and logs", func() {
+		It("should populate BuildFailureDetail with exit status and termination message", func() {
 			srName := stack.Spec.StackResources[0].Name
 
 			By("Getting the failed ImageBuild")
@@ -1492,11 +1492,10 @@ var _ = Describe("Stack Lifecycle", Ordered, func() {
 			imageBuild, err = helpers.WaitForBuildFailureDetail(ctx, c, client.ObjectKeyFromObject(imageBuild), buildReadyTimeout)
 			Expect(err).NotTo(HaveOccurred())
 
-			Expect(imageBuild.Status.BuildFailureDetail).NotTo(BeNil())
-			detail := imageBuild.Status.BuildFailureDetail
-			Expect(detail.State).To(Equal("terminated"))
-			Expect(detail.ExitCode).NotTo(BeNil())
-			Expect(detail.Logs).NotTo(BeEmpty())
+			Expect(imageBuild.Status.LastBuildFailureDetail).NotTo(BeNil())
+			detail := imageBuild.Status.LastBuildFailureDetail
+			Expect(detail.LastTerminationExitCode).NotTo(BeNil())
+			Expect(detail.LastTerminationMessage).NotTo(BeEmpty())
 		})
 
 		AfterAll(func() {
@@ -1511,7 +1510,7 @@ var _ = Describe("Stack Lifecycle", Ordered, func() {
 		})
 	})
 
-	Context("FailedContainerStatuses - crash detection", Ordered, func() {
+	Context("LastFailureDetails - crash detection", Ordered, func() {
 		var stack *corev1alpha1.Stack
 
 		BeforeAll(func() {
@@ -1523,27 +1522,24 @@ var _ = Describe("Stack Lifecycle", Ordered, func() {
 			Expect(c.Create(ctx, stack)).To(Succeed())
 		})
 
-		It("should populate FailedContainerStatuses when container crashes", func() {
+		It("should populate LastFailureDetails when container crashes", func() {
 			srName := stack.Spec.StackResources[0].Name
 			srKey := client.ObjectKey{Name: srName, Namespace: testEnv.TestNamespace}
 
-			By("Waiting for FailedContainerStatuses to be populated")
-			sr, err := helpers.WaitForFailedContainerStatuses(ctx, c, srKey, 3*time.Minute)
+			By("Waiting for LastFailureDetails to be populated")
+			sr, err := helpers.WaitForLastFailureDetails(ctx, c, srKey, 3*time.Minute)
 			Expect(err).NotTo(HaveOccurred())
 
-			Expect(sr.Status.FailedContainerStatuses).NotTo(BeEmpty())
-			fcs := sr.Status.FailedContainerStatuses[0]
-			Expect(fcs.Name).To(Equal(srName))
-			Expect(fcs.ExitCode).NotTo(BeNil())
-			Expect(*fcs.ExitCode).To(Equal(int32(1)))
-			Expect(fcs.State).To(BeElementOf("waiting", "terminated"))
-			Expect(fcs.Logs).To(ContainSubstring("ERROR: connection refused"))
-
-			By("Verifying ObservedDeploymentRevision is set")
-			Expect(sr.Status.ObservedDeploymentRevision).NotTo(BeEmpty())
+			Expect(sr.Status.LastFailureDetails).NotTo(BeEmpty())
+			detail := sr.Status.LastFailureDetails[0]
+			Expect(detail.ContainerName).To(Equal(srName))
+			Expect(detail.LastTerminationExitCode).NotTo(BeNil())
+			Expect(*detail.LastTerminationExitCode).To(Equal(int32(1)))
+			Expect(detail.LastTerminationReason).NotTo(BeEmpty())
+			Expect(detail.LastTerminationMessage).To(ContainSubstring("ERROR: connection refused"))
 		})
 
-		It("should clear FailedContainerStatuses when container recovers", func() {
+		It("should clear LastFailureDetails when container recovers", func() {
 			srName := stack.Spec.StackResources[0].Name
 			srKey := client.ObjectKey{Name: srName, Namespace: testEnv.TestNamespace}
 
@@ -1558,8 +1554,7 @@ var _ = Describe("Stack Lifecycle", Ordered, func() {
 			sr, err := helpers.WaitForStackResourceAvailable(ctx, c, srKey, 5*time.Minute)
 			Expect(err).NotTo(HaveOccurred())
 
-			Expect(sr.Status.FailedContainerStatuses).To(BeNil())
-			Expect(sr.Status.ObservedDeploymentRevision).To(BeEmpty())
+			Expect(sr.Status.LastFailureDetails).To(BeNil())
 		})
 
 		AfterAll(func() {
@@ -1571,7 +1566,7 @@ var _ = Describe("Stack Lifecycle", Ordered, func() {
 		})
 	})
 
-	Context("FailedContainerStatuses - image pull failure", Ordered, func() {
+	Context("LastFailureDetails - image pull failure", Ordered, func() {
 		var stack *corev1alpha1.Stack
 
 		BeforeAll(func() {
@@ -1583,25 +1578,61 @@ var _ = Describe("Stack Lifecycle", Ordered, func() {
 			Expect(c.Create(ctx, stack)).To(Succeed())
 		})
 
-		It("should populate FailedContainerStatuses with ImagePullBackOff", func() {
+		It("should populate LastFailureDetails with ImagePullBackOff", func() {
 			srName := stack.Spec.StackResources[0].Name
 			srKey := client.ObjectKey{Name: srName, Namespace: testEnv.TestNamespace}
 
-			By("Waiting for FailedContainerStatuses to be populated")
-			sr, err := helpers.WaitForFailedContainerStatuses(ctx, c, srKey, 2*time.Minute)
+			By("Waiting for LastFailureDetails to be populated")
+			sr, err := helpers.WaitForLastFailureDetails(ctx, c, srKey, 2*time.Minute)
 			Expect(err).NotTo(HaveOccurred())
 
-			Expect(sr.Status.FailedContainerStatuses).NotTo(BeEmpty())
-			fcs := sr.Status.FailedContainerStatuses[0]
-			Expect(fcs.Reason).To(BeElementOf("ImagePullBackOff", "ErrImagePull"))
-			Expect(fcs.ExitCode).To(BeNil())
-			Expect(fcs.Logs).To(BeEmpty())
-			Expect(fcs.Message).To(ContainSubstring("nonexistent-registry.example.com/fake-image"))
+			Expect(sr.Status.LastFailureDetails).NotTo(BeEmpty())
+			detail := sr.Status.LastFailureDetails[0]
+			Expect(detail.LastTerminationReason).To(BeElementOf("ImagePullBackOff", "ErrImagePull"))
+			Expect(detail.LastTerminationExitCode).To(BeNil())
+			Expect(detail.LastTerminationMessage).To(ContainSubstring("nonexistent-registry.example.com/fake-image"))
 		})
 
 		AfterAll(func() {
 			if stack != nil {
 				By("Cleaning up imgpull-fail Stack")
+				_ = c.Delete(ctx, stack)
+				_ = helpers.WaitForStackDeleted(ctx, c, client.ObjectKeyFromObject(stack), stackDeleteTimeout)
+			}
+		})
+	})
+
+	Context("LastFailureDetails - init container failure", Ordered, func() {
+		var stack *corev1alpha1.Stack
+
+		BeforeAll(func() {
+			testEnv = GetEnvironment()
+			ctx = context.Background()
+			c = testEnv.Client
+
+			stack = fixtures.InitContainerFailStack("initfail")
+			Expect(c.Create(ctx, stack)).To(Succeed())
+		})
+
+		It("should populate LastFailureDetails with init container crash info", func() {
+			srName := stack.Spec.StackResources[0].Name
+			srKey := client.ObjectKey{Name: srName, Namespace: testEnv.TestNamespace}
+
+			By("Waiting for LastFailureDetails to be populated")
+			sr, err := helpers.WaitForLastFailureDetails(ctx, c, srKey, 3*time.Minute)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(sr.Status.LastFailureDetails).NotTo(BeEmpty())
+			detail := sr.Status.LastFailureDetails[0]
+			Expect(detail.ContainerName).To(Equal(srName + "-init"))
+			Expect(detail.LastTerminationExitCode).NotTo(BeNil())
+			Expect(*detail.LastTerminationExitCode).To(Equal(int32(1)))
+			Expect(detail.LastTerminationMessage).To(ContainSubstring("FATAL: missing required config"))
+		})
+
+		AfterAll(func() {
+			if stack != nil {
+				By("Cleaning up initfail Stack")
 				_ = c.Delete(ctx, stack)
 				_ = helpers.WaitForStackDeleted(ctx, c, client.ObjectKeyFromObject(stack), stackDeleteTimeout)
 			}

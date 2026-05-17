@@ -156,28 +156,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	kubeClient, err := kubernetes.NewForConfig(mgr.GetConfig())
-	if err != nil {
-		setupLog.Error(err, "unable to create kubernetes clientset")
-		os.Exit(1)
-	}
-
-	// if err = (stackstorage.NewStackStorageReconciler(mgr.GetClient(), uncachedClient, mgr.GetScheme())).
-	// 	SetupWithManager(mgr); err != nil {
-	// 	setupLog.Error(err, "unable to create controller", "controller", "WorkspaceState")
-	// 	os.Exit(1)
-	// }
-
-	stackResourceController := stackresource.NewStackResourceReconciler(mgr.GetClient(), mgr.GetScheme(), kubeClient)
+	stackResourceController := stackresource.NewStackResourceReconciler(mgr.GetClient(), mgr.GetScheme(), uncachedClient)
 	if err = stackResourceController.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "WorkspaceResource")
 		os.Exit(1)
 	}
 
 	if err = (&imagebuild.ImageBuildReconciler{
-		Client:     mgr.GetClient(),
-		Scheme:     mgr.GetScheme(),
-		KubeClient: kubeClient,
+		Client:         mgr.GetClient(),
+		Scheme:         mgr.GetScheme(),
+		UncachedClient: uncachedClient,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "WorkspaceApplicationBuild")
 		os.Exit(1)

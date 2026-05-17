@@ -242,7 +242,7 @@ func ServiceIsHeadless(svc *corev1.Service) bool {
 	return svc.Spec.ClusterIP == "None"
 }
 
-func WaitForFailedContainerStatuses(ctx context.Context, c client.Client, key client.ObjectKey, timeout time.Duration) (*corev1alpha1.StackResource, error) {
+func WaitForLastFailureDetails(ctx context.Context, c client.Client, key client.ObjectKey, timeout time.Duration) (*corev1alpha1.StackResource, error) {
 	deadline := time.After(timeout)
 	tick := time.NewTicker(5 * time.Second)
 	defer tick.Stop()
@@ -252,13 +252,13 @@ func WaitForFailedContainerStatuses(ctx context.Context, c client.Client, key cl
 		case <-deadline:
 			sr := &corev1alpha1.StackResource{}
 			_ = c.Get(ctx, key, sr)
-			return sr, fmt.Errorf("timed out waiting for FailedContainerStatuses on StackResource %s", key.Name)
+			return sr, fmt.Errorf("timed out waiting for LastFailureDetails on StackResource %s", key.Name)
 		case <-tick.C:
 			sr := &corev1alpha1.StackResource{}
 			if err := c.Get(ctx, key, sr); err != nil {
 				continue
 			}
-			if len(sr.Status.FailedContainerStatuses) > 0 {
+			if len(sr.Status.LastFailureDetails) > 0 {
 				return sr, nil
 			}
 		}

@@ -7,7 +7,6 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/client-go/kubernetes"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -28,8 +27,8 @@ import (
 // ImageBuildReconciler reconciles a ImageBuild object
 type ImageBuildReconciler struct {
 	client.Client
-	Scheme     *runtime.Scheme
-	KubeClient kubernetes.Interface
+	Scheme         *runtime.Scheme
+	UncachedClient client.Client
 }
 
 func (r *ImageBuildReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -142,38 +141,7 @@ func (r *ImageBuildReconciler) reconcileImageBuildWithVolumeSource(ctx context.C
 		return ctrl.Result{}, err
 	}
 
-	existingJob := &batchv1.Job{}
-	if err := r.Client.Get(
-		ctx,
-		types.NamespacedName{
-			Name:      desiredImageBuilderJob.Name,
-			Namespace: desiredImageBuilderJob.Namespace,
-		},
-		existingJob,
-	); err != nil {
-		if apierrors.IsNotFound(err) {
-			return ctrl.Result{}, r.handleBuildJobCreation(ctx, desiredImageBuilderJob, buildConfig)
-		}
-		return ctrl.Result{}, err
-	}
-	jobCompletedCondition := findJobCondition(existingJob, batchv1.JobComplete)
-	jobFailedCondition := findJobCondition(existingJob, batchv1.JobFailed)
-	if jobCompletedCondition != nil && jobCompletedCondition.Status == v1.ConditionStatus(metav1.ConditionTrue) {
-		buildConfig.Status.ImageUrl = imageBuilderParams.ImageUrl()
-		reportImageBuildComplete(buildConfig)
-	}
-
-	if jobFailedCondition != nil && jobFailedCondition.Status == v1.ConditionStatus(metav1.ConditionTrue) {
-		captureBuildFailureDetail(ctx, r.KubeClient, buildConfig, existingJob)
-		reportImageBuildStatus(buildConfig, buildsv1alpha1.BuildFailed, metav1.ConditionTrue, "BuildJobFailed")
-		buildConfig.Status.Phase = buildsv1alpha1.BuildPhaseFailed
-		return ctrl.Result{}, nil
-	}
-
-	captureBuildFailureDetail(ctx, r.KubeClient, buildConfig, existingJob)
-
-	reportImageBuildStatus(buildConfig, buildsv1alpha1.BuildAvailable, metav1.ConditionFalse, "BuildJobNotYetComplete")
-	return ctrl.Result{}, nil
+	return r.reconcileBuildJob(ctx, buildConfig, desiredImageBuilderJob, imageBuilderParams)
 }
 
 func (r *ImageBuildReconciler) reconcileImageBuildWithGitSource(ctx context.Context, buildConfig *buildsv1alpha1.ImageBuild) (ctrl.Result, error) {
@@ -224,36 +192,61 @@ func (r *ImageBuildReconciler) reconcileImageBuildWithGitSource(ctx context.Cont
 		return ctrl.Result{}, err
 	}
 
+	return r.reconcileBuildJob(ctx, buildConfig, desiredImageBuilderJob, imageBuilderParams)
+}
+
+func (r *ImageBuildReconciler) reconcileBuildJob(ctx context.Context, buildConfig *buildsv1alpha1.ImageBuild, desiredJob *batchv1.Job, params imagebuilder.BuildParams) (ctrl.Result, error) {
+	logger := controller.LoggerFromContext(ctx)
+
 	existingJob := &batchv1.Job{}
 	if err := r.Client.Get(
 		ctx,
 		types.NamespacedName{
-			Name:      desiredImageBuilderJob.Name,
-			Namespace: desiredImageBuilderJob.Namespace,
+			Name:      desiredJob.Name,
+			Namespace: desiredJob.Namespace,
 		},
 		existingJob,
 	); err != nil {
 		if apierrors.IsNotFound(err) {
-			return ctrl.Result{}, r.handleBuildJobCreation(ctx, desiredImageBuilderJob, buildConfig)
+			return ctrl.Result{}, r.handleBuildJobCreation(ctx, desiredJob, buildConfig)
 		}
 		return ctrl.Result{}, err
 	}
+
 	jobCompletedCondition := findJobCondition(existingJob, batchv1.JobComplete)
 	jobFailedCondition := findJobCondition(existingJob, batchv1.JobFailed)
+
 	if jobCompletedCondition != nil && jobCompletedCondition.Status == v1.ConditionStatus(metav1.ConditionTrue) {
-		buildConfig.Status.ImageUrl = imageBuilderParams.ImageUrl()
+		buildConfig.Status.ImageUrl = params.ImageUrl()
 		reportImageBuildComplete(buildConfig)
 		return ctrl.Result{}, nil
 	}
 
 	if jobFailedCondition != nil && jobFailedCondition.Status == v1.ConditionStatus(metav1.ConditionTrue) {
-		captureBuildFailureDetail(ctx, r.KubeClient, buildConfig, existingJob)
+		// Capture final failure details, but don't overwrite existing details if
+		// pods have been cleaned up (podReplacementPolicy: TerminatingOrFailed
+		// removes pods before the Job transitions to Failed).
+		buildFailureDetail, err := getBuildFailureDetail(ctx, r.UncachedClient, buildConfig, existingJob)
+		if err != nil {
+			logger.Error(err, fmt.Sprintf("failed to capture build failure detail for job %s", existingJob.Name))
+		} else if buildFailureDetail != nil {
+			buildConfig.Status.LastBuildFailureDetail = buildFailureDetail
+		}
 		reportImageBuildStatus(buildConfig, buildsv1alpha1.BuildFailed, metav1.ConditionTrue, "BuildJobFailed")
 		buildConfig.Status.Phase = buildsv1alpha1.BuildPhaseFailed
 		return ctrl.Result{}, nil
 	}
 
-	captureBuildFailureDetail(ctx, r.KubeClient, buildConfig, existingJob)
+	// Job still running — capture intermediate failures (best effort).
+	// Skip if we've already captured details to avoid redundant pod listing.
+	if buildConfig.Status.LastBuildFailureDetail == nil {
+		buildFailureDetail, err := getBuildFailureDetail(ctx, r.UncachedClient, buildConfig, existingJob)
+		if err != nil {
+			logger.Error(err, fmt.Sprintf("failed to capture build failure detail for job %s", existingJob.Name))
+		} else {
+			buildConfig.Status.LastBuildFailureDetail = buildFailureDetail
+		}
+	}
 
 	reportImageBuildStatus(buildConfig, buildsv1alpha1.BuildAvailable, metav1.ConditionFalse, "BuildJobNotYetComplete")
 	return ctrl.Result{}, nil
@@ -398,7 +391,7 @@ func reportImageBuildStatus(
 
 func reportImageBuildComplete(buildConfig *buildsv1alpha1.ImageBuild) {
 	buildConfig.Status.Phase = buildsv1alpha1.BuildPhaseSuccess
-	buildConfig.Status.BuildFailureDetail = nil
+	buildConfig.Status.LastBuildFailureDetail = nil
 	buildConfig.Status.BuildSourceRevision = buildConfig.Spec.SourceRevision.GetSourceRevisionString()
 	meta.SetStatusCondition(&buildConfig.Status.Conditions, metav1.Condition{
 		Type:               string(buildsv1alpha1.BuildAvailable),

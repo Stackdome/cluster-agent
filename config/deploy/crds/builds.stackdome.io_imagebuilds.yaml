@@ -295,28 +295,6 @@ spec:
           status:
             description: ImageBuildStatus defines the observed state of ImageBuild
             properties:
-              buildFailureDetail:
-                properties:
-                  exitCode:
-                    format: int32
-                    type: integer
-                  finishedAt:
-                    format: date-time
-                    type: string
-                  logs:
-                    type: string
-                  message:
-                    type: string
-                  reason:
-                    type: string
-                  startedAt:
-                    format: date-time
-                    type: string
-                  state:
-                    type: string
-                required:
-                - state
-                type: object
               buildSourceRevision:
                 type: string
               conditions:
@@ -379,6 +357,21 @@ spec:
                 type: array
               imageUrl:
                 type: string
+              lastBuildFailureDetail:
+                properties:
+                  containerName:
+                    type: string
+                  lastTerminationExitCode:
+                    format: int32
+                    type: integer
+                  lastTerminationMessage:
+                    type: string
+                  lastTerminationReason:
+                    type: string
+                  restartCount:
+                    format: int32
+                    type: integer
+                type: object
               observedGeneration:
                 description: The most recent generation observed by the controller.
                 format: int64

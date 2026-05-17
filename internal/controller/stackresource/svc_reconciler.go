@@ -165,7 +165,7 @@ func (r *svcReconciler) ensureSvc(ctx context.Context, resource *v1alpha1.StackR
 				Namespace: resource.Namespace,
 			},
 			Spec: corev1.ServiceSpec{
-				Selector: GetDeploymentPodLabelForResource(resource),
+				Selector: GetDeploymentLabelForResource(resource),
 				Type:     corev1.ServiceTypeClusterIP,
 				Ports:    svcPorts,
 			},
@@ -177,7 +177,7 @@ func (r *svcReconciler) ensureSvc(ctx context.Context, resource *v1alpha1.StackR
 				Namespace: resource.Namespace,
 			},
 			Spec: corev1.ServiceSpec{
-				Selector:  GetDeploymentPodLabelForResource(resource),
+				Selector:  GetDeploymentLabelForResource(resource),
 				ClusterIP: "None",
 			},
 		}

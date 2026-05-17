@@ -92,16 +92,6 @@ type BuildContextSpec struct {
 	ContextSource *corev1alpha1.BuildContextSource `json:"contextSource"`
 }
 
-type BuildFailureDetail struct {
-	State      string       `json:"state"`
-	Reason     string       `json:"reason,omitempty"`
-	Message    string       `json:"message,omitempty"`
-	ExitCode   *int32       `json:"exitCode,omitempty"`
-	StartedAt  *metav1.Time `json:"startedAt,omitempty"`
-	FinishedAt *metav1.Time `json:"finishedAt,omitempty"`
-	Logs       string       `json:"logs,omitempty"`
-}
-
 // ImageBuildStatus defines the observed state of ImageBuild
 type ImageBuildStatus struct {
 	// The most recent generation observed by the controller.
@@ -112,11 +102,11 @@ type ImageBuildStatus struct {
 	// it will go away as soon as kubectl can print conditions!
 	// Human readable status - please use .Conditions from code
 	// +kubebuilder:default=Pending
-	Phase               BuildPhase `json:"phase,omitempty"`
-	BuildSourceRevision string     `json:"buildSourceRevision,omitempty"`
-	ImageUrl            string     `json:"imageUrl"`
-	StatusHash         string              `json:"statusHash,omitempty"`
-	BuildFailureDetail *BuildFailureDetail `json:"buildFailureDetail,omitempty"`
+	Phase                  BuildPhase                      `json:"phase,omitempty"`
+	BuildSourceRevision    string                          `json:"buildSourceRevision,omitempty"`
+	ImageUrl               string                          `json:"imageUrl"`
+	StatusHash             string                          `json:"statusHash,omitempty"`
+	LastBuildFailureDetail *corev1alpha1.LastFailureDetail `json:"lastBuildFailureDetail,omitempty"`
 }
 
 // +kubebuilder:object:root=true

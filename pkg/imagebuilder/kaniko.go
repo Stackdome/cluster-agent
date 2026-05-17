@@ -346,8 +346,8 @@ func GenerateImageBuildJob(params BuildParams) (*batchv1.Job, error) {
 
 	container := &job.Spec.Template.Spec.Containers[0]
 
-	// Set kaniko image
 	container.Image = config.KanikoExecutorImage
+	container.TerminationMessagePolicy = corev1.TerminationMessageFallbackToLogsOnError
 
 	container.Resources = corev1.ResourceRequirements{
 		Requests: corev1.ResourceList{
@@ -361,6 +361,8 @@ func GenerateImageBuildJob(params BuildParams) (*batchv1.Job, error) {
 
 	// 30 minutes TTL after job finished
 	job.Spec.TTLSecondsAfterFinished = ptr.To(int32(60 * 30))
+	// Set backoff limit to 3 to retry failed builds up to 3 times.
+	job.Spec.BackoffLimit = ptr.To(int32(3))
 
 	// Add common Kaniko args for all builds
 	container.Args = append(container.Args, "--cache=true", "--cache-copy-layers=true", "--cache-run-layers=true", "--cleanup=true")

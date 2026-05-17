@@ -153,7 +153,7 @@ func WaitForBuildFailureDetail(ctx context.Context, c client.Client, key client.
 			if err := c.Get(ctx, key, build); err != nil {
 				continue
 			}
-			if build.Status.BuildFailureDetail != nil {
+			if build.Status.LastBuildFailureDetail != nil {
 				return build, nil
 			}
 		}
