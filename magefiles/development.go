@@ -51,7 +51,7 @@ func (d Dev) init() error {
 			RepoName:    "traefik",
 			RepoURL:     "https://traefik.github.io/charts",
 			PackageName: "traefik",
-			Namespace:   "traefik-v2",
+			Namespace:   corev1alpha1.ClusterInfoDefaultLBNamespace,
 			ReleaseName: "traefik",
 		},
 		dev.ClusterHelmInstall{
