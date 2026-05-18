@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	ClusterInfoSingletonName         = "stackdome-cluster-info"
-	ClusterInfoDefaultLBNamespace    = "stackdome-control-plane"
+	ClusterInfoSingletonName      = "stackdome-cluster-info"
+	ClusterInfoDefaultLBNamespace = "stackdome-control-plane"
 )
 
 type ClusterInfoPhase string
@@ -29,17 +29,17 @@ type ClusterInfoSpec struct {
 }
 
 type ClusterInfoStatus struct {
-	Phase              ClusterInfoPhase   `json:"phase,omitempty"`
-	StatusHash         string             `json:"statusHash,omitempty"`
-	LastRefreshedAt    *metav1.Time       `json:"lastRefreshedAt,omitempty"`
-	KubernetesVersion  string             `json:"kubernetesVersion,omitempty"`
-	TotalNodes         int                `json:"totalNodes,omitempty"`
-	ReadyNodes         int                `json:"readyNodes,omitempty"`
-	AvailabilityZones  []string           `json:"availabilityZones,omitempty"`
-	Nodes              []NodeInfo         `json:"nodes,omitempty"`
-	StorageClasses     []StorageClassInfo `json:"storageClasses,omitempty"`
-	LoadBalancers      []LoadBalancerInfo `json:"loadBalancers,omitempty"`
-	IngressClasses     []IngressClassInfo `json:"ingressClasses,omitempty"`
+	Phase             ClusterInfoPhase   `json:"phase,omitempty"`
+	StatusHash        string             `json:"statusHash,omitempty"`
+	LastRefreshedAt   *metav1.Time       `json:"lastRefreshedAt,omitempty"`
+	KubernetesVersion string             `json:"kubernetesVersion,omitempty"`
+	TotalNodes        int                `json:"totalNodes,omitempty"`
+	ReadyNodes        int                `json:"readyNodes,omitempty"`
+	AvailabilityZones []string           `json:"availabilityZones,omitempty"`
+	Nodes             []NodeInfo         `json:"nodes,omitempty"`
+	StorageClasses    []StorageClassInfo `json:"storageClasses,omitempty"`
+	LoadBalancers     []LoadBalancerInfo `json:"loadBalancers,omitempty"`
+	IngressClasses    []IngressClassInfo `json:"ingressClasses,omitempty"`
 }
 
 type NodeInfo struct {
@@ -76,7 +76,6 @@ type IngressClassInfo struct {
 	Controller string `json:"controller"`
 	IsDefault  bool   `json:"isDefault"`
 }
-
 
 func (c *ClusterInfo) ComputeStatusHash() string {
 	hasher := fnv.New32a()

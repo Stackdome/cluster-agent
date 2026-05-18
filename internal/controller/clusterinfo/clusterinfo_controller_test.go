@@ -3,6 +3,7 @@ package clusterinfo_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -133,6 +134,65 @@ var _ = Describe("ClusterInfoReconciler", func() {
 				Expect(err).NotTo(HaveOccurred())
 			})
 		})
+
+		Context("when StatusHash already matches collected status", func() {
+			It("skips the status patch and returns RequeueAfter", func() {
+				// Precompute the hash for what collectStatus returns with all-empty mocks.
+				// BuildNodeInfoList([]Node{}) returns non-nil empty slices; the other builders
+				// called with nil items also return non-nil empty slices.
+				precomputedStatus := corev1alpha1.ClusterInfoStatus{
+					Nodes:             []corev1alpha1.NodeInfo{},
+					AvailabilityZones: []string{},
+					StorageClasses:    []corev1alpha1.StorageClassInfo{},
+					LoadBalancers:     []corev1alpha1.LoadBalancerInfo{},
+					IngressClasses:    []corev1alpha1.IngressClassInfo{},
+				}
+				existingHash := (&corev1alpha1.ClusterInfo{Status: precomputedStatus}).ComputeStatusHash()
+
+				existingCR := &corev1alpha1.ClusterInfo{
+					ObjectMeta: metav1.ObjectMeta{Name: corev1alpha1.ClusterInfoSingletonName},
+					Spec: corev1alpha1.ClusterInfoSpec{
+						LoadBalancerNamespaces: []string{corev1alpha1.ClusterInfoDefaultLBNamespace},
+					},
+					Status: corev1alpha1.ClusterInfoStatus{StatusHash: existingHash},
+				}
+
+				mockClient.EXPECT().
+					Get(ctx, types.NamespacedName{Name: corev1alpha1.ClusterInfoSingletonName}, gomock.AssignableToTypeOf(&corev1alpha1.ClusterInfo{})).
+					DoAndReturn(func(_ context.Context, _ types.NamespacedName, obj *corev1alpha1.ClusterInfo, _ ...client.GetOption) error {
+						*obj = *existingCR
+						return nil
+					})
+
+				mockClient.EXPECT().
+					List(ctx, gomock.AssignableToTypeOf(&corev1.NodeList{}), gomock.Any()).
+					DoAndReturn(func(_ context.Context, list *corev1.NodeList, _ ...client.ListOption) error {
+						list.Items = []corev1.Node{}
+						return nil
+					})
+
+				mockClient.EXPECT().
+					List(ctx, gomock.AssignableToTypeOf(&storagev1.StorageClassList{}), gomock.Any()).
+					Return(nil)
+
+				mockClient.EXPECT().
+					List(ctx, gomock.AssignableToTypeOf(&corev1.ServiceList{}), gomock.Any()).
+					Return(nil)
+
+				mockClient.EXPECT().
+					List(ctx, gomock.AssignableToTypeOf(&networkv1.IngressClassList{}), gomock.Any()).
+					Return(nil)
+
+				// Status().Patch must NOT be called — no EXPECT().Status() here.
+
+				result, err := reconciler.Reconcile(ctx, ctrl.Request{
+					NamespacedName: types.NamespacedName{Name: corev1alpha1.ClusterInfoSingletonName},
+				})
+
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result.RequeueAfter).To(Equal(10 * time.Minute))
+			})
+		})
 	})
 })
 
@@ -168,9 +228,9 @@ var _ = Describe("collectors", func() {
 			Expect(infos[0].Name).To(Equal("worker-1"))
 			Expect(infos[0].Ready).To(BeTrue())
 			Expect(infos[0].AllocatableCPU).To(Equal("3800m"))
-			Expect(infos[0].AllocatableMemory).To(Equal("7517Mi"))
-			Expect(infos[0].AllocatableEphemeralDisk).To(Equal("54Gi"))
-			Expect(infos[0].CapacityEphemeralDisk).To(Equal("108Gi"))
+			Expect(infos[0].AllocatableMemory).To(Equal("7168Mi"))
+			Expect(infos[0].AllocatableEphemeralDisk).To(Equal("50Gi"))
+			Expect(infos[0].CapacityEphemeralDisk).To(Equal("100Gi"))
 			Expect(infos[0].Topology.Zone).To(Equal("us-east-1a"))
 			Expect(infos[0].Topology.Region).To(Equal("us-east-1"))
 			Expect(zones).To(ConsistOf("us-east-1a"))
@@ -250,7 +310,7 @@ var _ = Describe("collectors", func() {
 					Provisioner: "kubernetes.io/aws-ebs",
 				},
 				{
-					ObjectMeta: metav1.ObjectMeta{Name: "slow-hdd"},
+					ObjectMeta:  metav1.ObjectMeta{Name: "slow-hdd"},
 					Provisioner: "kubernetes.io/gce-pd",
 				},
 			}

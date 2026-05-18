@@ -3,10 +3,8 @@ package clusterinfo
 import (
 	"context"
 	"fmt"
-	"hash/fnv"
 	"time"
 
-	"github.com/davecgh/go-spew/spew"
 	corev1 "k8s.io/api/core/v1"
 	networkv1 "k8s.io/api/networking/v1"
 	storagev1 "k8s.io/api/storage/v1"
@@ -14,7 +12,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/rand"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -101,18 +98,19 @@ func (r *ClusterInfoReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, err
 	}
 
-	hash := computeStatusHash(status)
-	if hash == cr.Status.StatusHash {
+	oldHash := cr.Status.StatusHash
+	patch := client.MergeFrom(cr.DeepCopy())
+	cr.Status = *status
+	hash := cr.ComputeStatusHash()
+	if hash == oldHash {
 		return ctrl.Result{RequeueAfter: 10 * time.Minute}, nil
 	}
 
 	now := metav1.Now()
-	status.StatusHash = hash
-	status.LastRefreshedAt = &now
-	status.Phase = corev1alpha1.ClusterInfoPhaseReady
+	cr.Status.StatusHash = hash
+	cr.Status.LastRefreshedAt = &now
+	cr.Status.Phase = corev1alpha1.ClusterInfoPhaseReady
 
-	patch := client.MergeFrom(cr.DeepCopy())
-	cr.Status = *status
 	if err := r.Status().Patch(ctx, cr, patch); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -163,20 +161,4 @@ func (r *ClusterInfoReconciler) collectStatus(ctx context.Context, spec corev1al
 	status.IngressClasses = BuildIngressClassInfoList(icList.Items)
 
 	return status, nil
-}
-
-func computeStatusHash(status *corev1alpha1.ClusterInfoStatus) string {
-	hasher := fnv.New32a()
-	hasher.Reset()
-	printer := spew.ConfigState{
-		Indent:         " ",
-		SortKeys:       true,
-		DisableMethods: true,
-		SpewKeys:       true,
-	}
-	saved := status.StatusHash
-	status.StatusHash = ""
-	printer.Fprintf(hasher, "%#v", status)
-	status.StatusHash = saved
-	return rand.SafeEncodeString(fmt.Sprint(hasher.Sum32()))
 }

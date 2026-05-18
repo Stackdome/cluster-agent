@@ -2,6 +2,7 @@ package clusterinfo
 
 import (
 	"fmt"
+	"sort"
 
 	corev1 "k8s.io/api/core/v1"
 	networkv1 "k8s.io/api/networking/v1"
@@ -12,11 +13,11 @@ import (
 )
 
 func quantityToMi(q resource.Quantity) string {
-	return fmt.Sprintf("%dMi", q.ScaledValue(resource.Mega))
+	return fmt.Sprintf("%dMi", q.Value()/(1<<20))
 }
 
 func quantityToGi(q resource.Quantity) string {
-	return fmt.Sprintf("%dGi", q.ScaledValue(resource.Giga))
+	return fmt.Sprintf("%dGi", q.Value()/(1<<30))
 }
 
 const (
@@ -65,6 +66,7 @@ func BuildNodeInfoList(nodes []corev1.Node) ([]corev1alpha1.NodeInfo, []string) 
 	for z := range zoneSet {
 		zones = append(zones, z)
 	}
+	sort.Strings(zones)
 	return infos, zones
 }
 

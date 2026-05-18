@@ -318,8 +318,8 @@ type StackResourceStatus struct {
 	LastRestartRequestProcessedAt *metav1.Time `json:"lastRestartRequestProcessedAt,omitempty"`
 	// Current build that this resource uses.
 	// Applicable only to resources which have BuildSpec defined.
-	CurrentBuild       *BuildStatus        `json:"currentBuild,omitempty"`
-	StatusHash                  string              `json:"statusHash,omitempty"`
+	CurrentBuild        *BuildStatus        `json:"currentBuild,omitempty"`
+	StatusHash          string              `json:"statusHash,omitempty"`
 	LastFailureDetails  []LastFailureDetail `json:"lastFailureDetail,omitempty"`
 	LastFailureRevision string              `json:"lastFailureRevision,omitempty"`
 }
