@@ -215,21 +215,16 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.S
 
 	if controller.DeploymentAvailable(deployment) {
 		resource.Status.LastFailureDetails = nil
+		resource.Status.LastFailureRevision = ""
 		return resultNil, nil
 	}
 
 	logger.Info("deployment not ready")
 
-	// We've already fully monitored this revision (progress deadline was exceeded).
-	// Nothing left to do — avoid redundant requeues.
-	if resource.Status.ObservedDeploymentRevision == currentDeploymentRevision {
-		reportStackResourceNotReady(resource, "StackResourceDeploymentNotReady", "StackResourceDeploymentNotReady")
-		return resultStop, nil
-	}
-
-	// Attempt to capture crash details for the current revision. We only capture once per
-	// revision — once details are recorded, LastFailureRevision is tagged and subsequent
-	// requeues skip the (expensive) pod listing.
+	// Attempt to capture crash details for the current revision. We only do the expensive
+	// pod listing when LastFailureRevision is untagged for this revision — once details are
+	// recorded the tag prevents redundant API calls on subsequent watch-event-triggered
+	// reconciles.
 	if resource.Status.LastFailureRevision != currentDeploymentRevision {
 		failureDetails, err := captureLastFailureDetails(ctx, r.uncachedClient, resource, currentDeploymentRevision)
 		if err != nil {
@@ -244,15 +239,13 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.S
 	reportStackResourceNotReady(resource, "StackResourceDeploymentNotReady", "StackResourceDeploymentNotReady")
 
 	// Requeue every 10s until the deployment rollout is settled — either the rollout
-	// completed (NewReplicaSetAvailable) + grace period completed, or timed out (ProgressDeadlineExceeded).
-	// This gives pods time to be created, start, and potentially crash — the failure
-	// details are captured on each pass until tagged. Once settled, we mark this
-	// revision as fully observed and stop requeuing.
+	// completed (NewReplicaSetAvailable) + grace period elapsed, or timed out
+	// (ProgressDeadlineExceeded). This gives pods time to start and potentially crash so
+	// the capture above has multiple chances to catch the failure state.
 	if !controller.DeploymentRolloutSettled(deployment, deploymentGracePeriodAfterNewReplicaSetAvailable) {
 		return resultRequeueAfter(10 * time.Second), nil
 	}
 
-	resource.Status.ObservedDeploymentRevision = currentDeploymentRevision
 	return resultStop, nil
 }
 

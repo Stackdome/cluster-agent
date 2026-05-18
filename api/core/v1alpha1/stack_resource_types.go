@@ -320,9 +320,8 @@ type StackResourceStatus struct {
 	// Applicable only to resources which have BuildSpec defined.
 	CurrentBuild       *BuildStatus        `json:"currentBuild,omitempty"`
 	StatusHash                  string              `json:"statusHash,omitempty"`
-	LastFailureDetails          []LastFailureDetail `json:"lastFailureDetail,omitempty"`
-	LastFailureRevision         string              `json:"lastFailureRevision,omitempty"`
-	ObservedDeploymentRevision  string              `json:"observedDeploymentRevision,omitempty"`
+	LastFailureDetails  []LastFailureDetail `json:"lastFailureDetail,omitempty"`
+	LastFailureRevision string              `json:"lastFailureRevision,omitempty"`
 }
 
 type LastFailureDetail struct {

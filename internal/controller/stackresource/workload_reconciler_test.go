@@ -466,6 +466,26 @@ var _ = Describe("workloadReconciler", func() {
 			Expect(result).To(Equal(resultNil))
 			Expect(resource.Status.LastFailureDetails).To(BeNil())
 		})
+
+		It("should also clear LastFailureRevision so re-capture is possible if deployment degrades again", func() {
+			// Bug: previously only LastFailureDetails was cleared but not LastFailureRevision.
+			// That left the revision tag set, which caused the capture block to be permanently
+			// skipped on subsequent reconciles — so crash details were never repopulated after
+			// the pod's brief Running phase between crash loops.
+			resource.Status.LastFailureRevision = "1"
+			resource.Status.LastFailureDetails = []v1alpha1.LastFailureDetail{
+				{ContainerName: "old-failure"},
+			}
+
+			setupSiblingsList(mockClient)
+			setupCreateOrUpdate(mockClient, availableDeployment("1"))
+
+			_, err := reconciler.reconcile(ctx, resource)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resource.Status.LastFailureDetails).To(BeNil())
+			Expect(resource.Status.LastFailureRevision).To(BeEmpty())
+		})
 	})
 
 	Context("when deployment is not ready", func() {
@@ -535,7 +555,7 @@ var _ = Describe("workloadReconciler", func() {
 	})
 
 	Context("when deployment rollout is settled", func() {
-		It("should stop requeuing and set ObservedDeploymentRevision", func() {
+		It("should stop requeuing after NewReplicaSetAvailable grace period", func() {
 			setupSiblingsList(mockClient)
 			setupCreateOrUpdate(mockClient, settledDeployment("1"))
 			setupEmptyUncachedList(mockUncached)
@@ -544,29 +564,12 @@ var _ = Describe("workloadReconciler", func() {
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result).To(Equal(resultStop))
-			Expect(resource.Status.ObservedDeploymentRevision).To(Equal("1"))
 		})
 
-		It("should stop on ProgressDeadlineExceeded and set ObservedDeploymentRevision", func() {
+		It("should stop on ProgressDeadlineExceeded", func() {
 			setupSiblingsList(mockClient)
 			setupCreateOrUpdate(mockClient, progressDeadlineExceededDeployment("1"))
 			setupEmptyUncachedList(mockUncached)
-
-			result, err := reconciler.reconcile(ctx, resource)
-
-			Expect(err).NotTo(HaveOccurred())
-			Expect(result).To(Equal(resultStop))
-			Expect(resource.Status.ObservedDeploymentRevision).To(Equal("1"))
-		})
-	})
-
-	Context("when revision is already observed", func() {
-		It("should return resultStop immediately without capturing", func() {
-			resource.Status.ObservedDeploymentRevision = "1"
-
-			setupSiblingsList(mockClient)
-			setupCreateOrUpdate(mockClient, notReadyDeployment("1"))
-			// No uncached client expectations — should exit early
 
 			result, err := reconciler.reconcile(ctx, resource)
 
@@ -609,7 +612,6 @@ var _ = Describe("workloadReconciler", func() {
 
 	Context("when new revision after settled", func() {
 		It("should re-enter the capture loop for new revision", func() {
-			resource.Status.ObservedDeploymentRevision = "1"
 			resource.Status.LastFailureRevision = "1"
 			resource.Status.LastFailureDetails = []v1alpha1.LastFailureDetail{
 				{ContainerName: "old-crash"},
@@ -676,7 +678,6 @@ var _ = Describe("workloadReconciler", func() {
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result).To(Equal(resultStop))
-			Expect(resource.Status.ObservedDeploymentRevision).To(Equal("1"))
 		})
 	})
 
