@@ -13,6 +13,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	buildsv1alpha1 "stackdome.io/cluster-agent/api/builds/v1alpha1"
+	corev1alpha1 "stackdome.io/cluster-agent/api/core/v1alpha1"
 )
 
 // WaitForImageBuildCreated polls until an ImageBuild CR with the given prefix exists.
@@ -168,12 +169,38 @@ func DumpBuildDiagnostics(ctx context.Context, c client.Client, kubeClient kuber
 
 	builds := &buildsv1alpha1.ImageBuildList{}
 	if err := c.List(ctx, builds, client.InNamespace(namespace)); err != nil {
-		return out + fmt.Sprintf("failed to list ImageBuilds: %v\n", err)
+		out += fmt.Sprintf("failed to list ImageBuilds: %v\n", err)
+	} else {
+		for _, b := range builds.Items {
+			out += fmt.Sprintf("\nImageBuild: %s\n  Phase: %s\n  Conditions:\n", b.Name, b.Status.Phase)
+			for _, cond := range b.Status.Conditions {
+				out += fmt.Sprintf("    %s=%s (reason=%s, message=%s)\n", cond.Type, cond.Status, cond.Reason, cond.Message)
+			}
+			if d := b.Status.LastBuildFailureDetail; d != nil {
+				out += fmt.Sprintf("  LastBuildFailureDetail:\n    container=%s reason=%s exitCode=%s\n    message=%s\n",
+					d.ContainerName, d.LastTerminationReason, fmtInt32Ptr(d.LastTerminationExitCode), d.LastTerminationMessage)
+			}
+		}
 	}
-	for _, b := range builds.Items {
-		out += fmt.Sprintf("\nImageBuild: %s\n  Phase: %s\n  Conditions:\n", b.Name, b.Status.Phase)
-		for _, cond := range b.Status.Conditions {
-			out += fmt.Sprintf("    %s=%s (reason=%s, message=%s)\n", cond.Type, cond.Status, cond.Reason, cond.Message)
+
+	stackResources := &corev1alpha1.StackResourceList{}
+	if err := c.List(ctx, stackResources, client.InNamespace(namespace)); err != nil {
+		out += fmt.Sprintf("failed to list StackResources: %v\n", err)
+	} else {
+		for _, sr := range stackResources.Items {
+			out += fmt.Sprintf("\nStackResource: %s\n  Phase: %s\n", sr.Name, sr.Status.Phase)
+			for _, cond := range sr.Status.Conditions {
+				out += fmt.Sprintf("  Condition %s=%s (reason=%s, message=%s)\n", cond.Type, cond.Status, cond.Reason, cond.Message)
+			}
+			if sr.Status.CurrentBuild != nil {
+				cb := sr.Status.CurrentBuild
+				out += fmt.Sprintf("  CurrentBuild: name=%s phase=%s available=%v reason=%s message=%s\n",
+					cb.Name, cb.Phase, cb.Available, cb.Reason, cb.Message)
+			}
+			for _, fd := range sr.Status.LastFailureDetails {
+				out += fmt.Sprintf("  LastFailureDetail: container=%s restarts=%d reason=%s exitCode=%s\n    message=%s\n",
+					fd.ContainerName, fd.RestartCount, fd.LastTerminationReason, fmtInt32Ptr(fd.LastTerminationExitCode), fd.LastTerminationMessage)
+			}
 		}
 	}
 
@@ -246,4 +273,11 @@ func fetchPodLogs(ctx context.Context, kubeClient kubernetes.Interface, namespac
 		out += "    " + line + "\n"
 	}
 	return out
+}
+
+func fmtInt32Ptr(p *int32) string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("%d", *p)
 }
