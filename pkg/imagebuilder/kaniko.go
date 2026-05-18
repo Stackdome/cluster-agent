@@ -365,7 +365,9 @@ func GenerateImageBuildJob(params BuildParams) (*batchv1.Job, error) {
 	job.Spec.BackoffLimit = ptr.To(int32(3))
 
 	// Add common Kaniko args for all builds
-	container.Args = append(container.Args, "--cache=true", "--cache-copy-layers=true", "--cache-run-layers=true", "--cleanup=true")
+	// --ignore-path=/product_uuid avoids "device or resource busy" errors when
+	// running inside Kind clusters, where that path is a host-mounted virtual file.
+	container.Args = append(container.Args, "--cache=true", "--cache-copy-layers=true", "--cache-run-layers=true", "--cleanup=true", "--ignore-path=/product_uuid")
 
 	for _, arg := range params.BuildArgs {
 		container.Args = append(container.Args, fmt.Sprintf("--build-arg=%s=%s", arg.Name, arg.Value))
