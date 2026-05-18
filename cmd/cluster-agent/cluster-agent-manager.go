@@ -32,6 +32,7 @@ import (
 	storagev1alpha1 "stackdome.io/cluster-agent/api/storage/v1alpha1"
 	usersv1alpha1 "stackdome.io/cluster-agent/api/users/v1alpha1"
 	postgrescontroller "stackdome.io/cluster-agent/internal/controller/addons/postgrescluster"
+	clusterinfocontroller "stackdome.io/cluster-agent/internal/controller/clusterinfo"
 	"stackdome.io/cluster-agent/internal/controller/imagebuild"
 	nfsservercontroller "stackdome.io/cluster-agent/internal/controller/nfsserver"
 	"stackdome.io/cluster-agent/internal/controller/stack"
@@ -259,6 +260,11 @@ func main() {
 
 	if err = postgresAddonController.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "PostgresCluster")
+		os.Exit(1)
+	}
+
+	if err = (&clusterinfocontroller.ClusterInfoReconciler{}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ClusterInfo")
 		os.Exit(1)
 	}
 
