@@ -164,6 +164,7 @@ rules:
   resources:
   - deployments
   - daemonsets
+  - replicasets
   verbs:
   - get
   - watch

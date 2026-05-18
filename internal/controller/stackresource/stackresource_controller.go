@@ -55,6 +55,7 @@ const DefaultRequeueTime = 5 * time.Second
 // StackResourceReconciler reconciles a StackResource object
 type StackResourceReconciler struct {
 	client.Client
+	uncachedClient client.Client
 	Scheme         *runtime.Scheme
 	subReconcilers []subReconciler
 	RequeueCh      chan event.GenericEvent
@@ -103,6 +104,8 @@ func (r *StackResourceReconciler) initializeStatusAndPhase(resource *v1alpha1.St
 	resource.Status.InternalAddress = nil // same here
 	resource.Status.ImageSourceRevision = ""
 	resource.Status.CurrentBuild = nil
+	// NOTE: LastFailureDetails is intentionally NOT cleared here. It persists
+	// across reconciles and is managed by the workload reconciler.
 	cond := meta.FindStatusCondition(resource.Status.Conditions, string(v1alpha1.StackResourceStatusAvailable))
 	if cond == nil {
 		meta.SetStatusCondition(&resource.Status.Conditions, metav1.Condition{
@@ -217,7 +220,7 @@ func stackResourceAvailable(resource *v1alpha1.StackResource) bool {
 	return false
 }
 
-func NewStackResourceReconciler(client client.Client, scheme *runtime.Scheme) *StackResourceReconciler {
+func NewStackResourceReconciler(client client.Client, scheme *runtime.Scheme, uncachedClient client.Client) *StackResourceReconciler {
 	w := &StackResourceReconciler{
 		Client:    client,
 		Scheme:    scheme,
@@ -240,6 +243,7 @@ func NewStackResourceReconciler(client client.Client, scheme *runtime.Scheme) *S
 			Client:            client,
 			Scheme:            scheme,
 			DependencyChecker: depChecker,
+			uncachedClient:    uncachedClient,
 		},
 		&svcReconciler{
 			Client: client,

@@ -16,6 +16,7 @@ import (
 	"github.com/mt-sre/devkube/dev"
 	"gopkg.in/yaml.v2"
 	appsv1 "k8s.io/api/apps/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -200,8 +201,18 @@ func (d Dev) deployClusterAgentManager(ctx context.Context, cluster *dev.Cluster
 		return fmt.Errorf("deploy cluster-agent-manager crds: %w", err)
 	}
 
+	// Delete existing deployment so the new image is picked up.
+	// CreateAndWaitForReadiness uses Create which is a no-op on AlreadyExists,
+	// so a rebuilt image with the same tag would never roll out.
+	existing := &appsv1.Deployment{}
+	existing.Name = deployment.Name
+	existing.Namespace = deployment.Namespace
+	if err := cluster.CtrlClient.Delete(ctx, existing); err != nil && !k8serrors.IsNotFound(err) {
+		return fmt.Errorf("deleting existing cluster-agent-manager deployment: %w", err)
+	}
+
 	if err := cluster.CreateAndWaitForReadiness(ctx, deployment); err != nil {
-		return fmt.Errorf("deploy addon-operator-manager: %w", err)
+		return fmt.Errorf("deploy cluster-agent-manager: %w", err)
 	}
 	return nil
 }

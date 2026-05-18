@@ -318,8 +318,18 @@ type StackResourceStatus struct {
 	LastRestartRequestProcessedAt *metav1.Time `json:"lastRestartRequestProcessedAt,omitempty"`
 	// Current build that this resource uses.
 	// Applicable only to resources which have BuildSpec defined.
-	CurrentBuild *BuildStatus `json:"currentBuild,omitempty"`
-	StatusHash   string       `json:"statusHash,omitempty"`
+	CurrentBuild       *BuildStatus        `json:"currentBuild,omitempty"`
+	StatusHash                  string              `json:"statusHash,omitempty"`
+	LastFailureDetails  []LastFailureDetail `json:"lastFailureDetail,omitempty"`
+	LastFailureRevision string              `json:"lastFailureRevision,omitempty"`
+}
+
+type LastFailureDetail struct {
+	ContainerName           string `json:"containerName,omitempty"`
+	RestartCount            int32  `json:"restartCount,omitempty"`
+	LastTerminationReason   string `json:"lastTerminationReason,omitempty"`
+	LastTerminationMessage  string `json:"lastTerminationMessage,omitempty"`
+	LastTerminationExitCode *int32 `json:"lastTerminationExitCode,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -343,6 +353,10 @@ func (w *StackResource) NeedsPullSecret() bool {
 		return true
 	}
 	return false
+}
+
+func (w *StackResource) InitContainerName() string {
+	return fmt.Sprintf("%s-init", w.Name)
 }
 
 func (w *StackResource) RegistryAuthUrl() (string, error) {

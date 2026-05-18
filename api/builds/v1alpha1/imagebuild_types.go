@@ -102,10 +102,11 @@ type ImageBuildStatus struct {
 	// it will go away as soon as kubectl can print conditions!
 	// Human readable status - please use .Conditions from code
 	// +kubebuilder:default=Pending
-	Phase               BuildPhase `json:"phase,omitempty"`
-	BuildSourceRevision string     `json:"buildSourceRevision,omitempty"`
-	ImageUrl            string     `json:"imageUrl"`
-	StatusHash          string     `json:"statusHash,omitempty"`
+	Phase                  BuildPhase                      `json:"phase,omitempty"`
+	BuildSourceRevision    string                          `json:"buildSourceRevision,omitempty"`
+	ImageUrl               string                          `json:"imageUrl"`
+	StatusHash             string                          `json:"statusHash,omitempty"`
+	LastBuildFailureDetail *corev1alpha1.LastFailureDetail `json:"lastBuildFailureDetail,omitempty"`
 }
 
 // +kubebuilder:object:root=true

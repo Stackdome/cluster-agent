@@ -22,6 +22,11 @@ import (
 	"stackdome.io/cluster-agent/pkg/interpolation"
 )
 
+const (
+	deploymentRevisionAnnotation                     = "deployment.kubernetes.io/revision"
+	deploymentGracePeriodAfterNewReplicaSetAvailable = 3 * time.Minute
+)
+
 type DependencyChecker interface {
 	DependenciesAvailable(ctx context.Context, resource *v1alpha1.StackResource) (bool, string, error)
 	VolumeMountsReadyForUse(ctx context.Context, resource *v1alpha1.StackResource) (bool, string, error)
@@ -31,13 +36,14 @@ type workloadReconciler struct {
 	client.Client
 	Scheme            *runtime.Scheme
 	DependencyChecker DependencyChecker
+	uncachedClient    client.Client
 }
 
 func GetDeploymentNameForResource(resource *v1alpha1.StackResource) string {
 	return resource.Name
 }
 
-func GetDeploymentPodLabelForResource(resource *v1alpha1.StackResource) map[string]string {
+func GetDeploymentLabelForResource(resource *v1alpha1.StackResource) map[string]string {
 	return map[string]string{
 		"resource": GetDeploymentNameForResource(resource),
 	}
@@ -138,10 +144,11 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.S
 
 	op, err := controllerutil.CreateOrUpdate(ctx, r.Client, deployment, func() error {
 		deployment.Spec.Selector = &v1.LabelSelector{
-			MatchLabels: GetDeploymentPodLabelForResource(resource),
+			MatchLabels: GetDeploymentLabelForResource(resource),
 		}
 		deployment.Spec.Strategy.Type = appsv1.RollingUpdateDeploymentStrategyType
-		deployment.Spec.Template.ObjectMeta.Labels = GetDeploymentPodLabelForResource(resource)
+		deployment.Spec.ProgressDeadlineSeconds = ptr.To(int32(300))
+		deployment.Spec.Template.ObjectMeta.Labels = GetDeploymentLabelForResource(resource)
 
 		if len(deployment.Spec.Template.Spec.Containers) == 0 {
 			deployment.Spec.Template.Spec.Containers = []corev1.Container{{}}
@@ -150,6 +157,7 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.S
 		c.Name = resource.Name
 		c.Image = *image
 		c.ImagePullPolicy = corev1.PullIfNotPresent
+		c.TerminationMessagePolicy = corev1.TerminationMessageFallbackToLogsOnError
 		c.Command = nilIfEmpty(resource.Spec.Command)
 		c.Args = nilIfEmpty(resource.Spec.Args)
 		c.Ports = nilIfEmpty(InterpolatedContainerPorts(resource))
@@ -167,9 +175,10 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.S
 				deployment.Spec.Template.Spec.InitContainers = []corev1.Container{{}}
 			}
 			ic := &deployment.Spec.Template.Spec.InitContainers[0]
-			ic.Name = fmt.Sprintf("%s-init", resource.Name)
+			ic.Name = resource.InitContainerName()
 			ic.Image = initImage
 			ic.ImagePullPolicy = corev1.PullIfNotPresent
+			ic.TerminationMessagePolicy = corev1.TerminationMessageFallbackToLogsOnError
 			ic.Command = nilIfEmpty(resource.Spec.Init.Command)
 			ic.Args = nilIfEmpty(resource.Spec.Init.Args)
 			ic.Env = nilIfEmpty(interpolatedEnvVars)
@@ -197,17 +206,46 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.S
 
 	if needsRestart {
 		resource.Status.LastRestartRequestProcessedAt = ptr.To(v1.NewTime(time.Now().UTC()))
-		reportStackResourceNotReady(resource, "WorkspaceResouceDeploymentNotReady", "WorkspaceResouceDeploymentNotReady")
+		reportStackResourceNotReady(resource, "StackResourceDeploymentNotReady", "StackResourceDeploymentNotReady")
 		return resultStop, nil
 	}
 
 	logger.Info("deployment reconciled", "operation", op)
+	currentDeploymentRevision := deployment.Annotations[deploymentRevisionAnnotation]
 
 	if controller.DeploymentAvailable(deployment) {
+		resource.Status.LastFailureDetails = nil
+		resource.Status.LastFailureRevision = ""
 		return resultNil, nil
 	}
+
 	logger.Info("deployment not ready")
-	reportStackResourceNotReady(resource, "WorkspaceResouceDeploymentNotReady", "WorkspaceResouceDeploymentNotReady")
+
+	// Attempt to capture crash details for the current revision. We only do the expensive
+	// pod listing when LastFailureRevision is untagged for this revision — once details are
+	// recorded the tag prevents redundant API calls on subsequent watch-event-triggered
+	// reconciles.
+	if resource.Status.LastFailureRevision != currentDeploymentRevision {
+		failureDetails, err := captureLastFailureDetails(ctx, r.uncachedClient, resource, currentDeploymentRevision)
+		if err != nil {
+			logger.Error(err, "failed to capture failure details")
+		}
+		resource.Status.LastFailureDetails = failureDetails
+		if len(resource.Status.LastFailureDetails) > 0 {
+			resource.Status.LastFailureRevision = currentDeploymentRevision
+		}
+	}
+
+	reportStackResourceNotReady(resource, "StackResourceDeploymentNotReady", "StackResourceDeploymentNotReady")
+
+	// Requeue every 10s until the deployment rollout is settled — either the rollout
+	// completed (NewReplicaSetAvailable) + grace period elapsed, or timed out
+	// (ProgressDeadlineExceeded). This gives pods time to start and potentially crash so
+	// the capture above has multiple chances to catch the failure state.
+	if !controller.DeploymentRolloutSettled(deployment, deploymentGracePeriodAfterNewReplicaSetAvailable) {
+		return resultRequeueAfter(10 * time.Second), nil
+	}
+
 	return resultStop, nil
 }
 

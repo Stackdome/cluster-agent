@@ -3,6 +3,9 @@ package controller
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"strings"
+	"time"
 
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
@@ -10,7 +13,10 @@ import (
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	corev1alpha1 "stackdome.io/cluster-agent/api/core/v1alpha1"
 )
 
 type controllerContextKey int
@@ -37,6 +43,36 @@ func DeploymentAvailable(deployment *appsv1.Deployment) bool {
 		if condition.Type == appsv1.DeploymentAvailable &&
 			condition.Status == corev1.ConditionTrue && deployment.Generation == deployment.Status.ObservedGeneration {
 			return true
+		}
+	}
+	return false
+}
+
+func DeploymentProgressDeadlineExceeded(deployment *appsv1.Deployment) bool {
+	for _, condition := range deployment.Status.Conditions {
+		if condition.Type == appsv1.DeploymentProgressing &&
+			condition.Status == corev1.ConditionFalse &&
+			condition.Reason == "ProgressDeadlineExceeded" {
+			return true
+		}
+	}
+	return false
+}
+
+// DeploymentRolloutSettled returns true when the deployment rollout is no longer
+// making progress — either it completed (NewReplicaSetAvailable) or timed out
+// (ProgressDeadlineExceeded) — AND enough time has passed for pods to start and
+// potentially crash. The grace period prevents stopping too early, before pods
+// have had a chance to report failures.
+func DeploymentRolloutSettled(deployment *appsv1.Deployment, gracePeriod time.Duration) bool {
+	for _, condition := range deployment.Status.Conditions {
+		if condition.Type == appsv1.DeploymentProgressing {
+			if condition.Status == corev1.ConditionFalse && condition.Reason == "ProgressDeadlineExceeded" {
+				return true
+			}
+			if condition.Status == corev1.ConditionTrue && condition.Reason == "NewReplicaSetAvailable" {
+				return time.Since(condition.LastTransitionTime.Time) >= gracePeriod
+			}
 		}
 	}
 	return false
@@ -103,6 +139,62 @@ func GetNamespacedName(cr client.Object) types.NamespacedName {
 		Namespace: cr.GetNamespace(),
 		Name:      cr.GetName(),
 	}
+}
+
+var crashReasons = map[string]bool{
+	"CrashLoopBackOff":     true,
+	"ImagePullBackOff":     true,
+	"ErrImagePull":         true,
+	"CreateContainerError": true,
+	"OOMKilled":            true,
+	"Error":                true,
+}
+
+func IsCrashState(cs corev1.ContainerStatus) bool {
+	if cs.State.Waiting != nil && crashReasons[cs.State.Waiting.Reason] {
+		return true
+	}
+	if cs.State.Terminated != nil && cs.State.Terminated.ExitCode != 0 {
+		return true
+	}
+	return false
+}
+
+var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+func sanitizeTerminationMessage(msg string) string {
+	msg = ansiEscapePattern.ReplaceAllString(msg, "")
+	msg = strings.ReplaceAll(msg, "\r", "")
+	return msg
+}
+
+func BuildLastFailureDetail(cs corev1.ContainerStatus) corev1alpha1.LastFailureDetail {
+	detail := corev1alpha1.LastFailureDetail{
+		ContainerName: cs.Name,
+		RestartCount:  cs.RestartCount,
+	}
+
+	terminated := GetTerminatedState(cs)
+	if terminated != nil {
+		detail.LastTerminationExitCode = ptr.To(terminated.ExitCode)
+		detail.LastTerminationReason = terminated.Reason
+		detail.LastTerminationMessage = sanitizeTerminationMessage(terminated.Message)
+	} else if cs.State.Waiting != nil {
+		detail.LastTerminationReason = cs.State.Waiting.Reason
+		detail.LastTerminationMessage = sanitizeTerminationMessage(cs.State.Waiting.Message)
+	}
+
+	return detail
+}
+
+func GetTerminatedState(cs corev1.ContainerStatus) *corev1.ContainerStateTerminated {
+	if cs.State.Terminated != nil {
+		return cs.State.Terminated
+	}
+	if cs.LastTerminationState.Terminated != nil {
+		return cs.LastTerminationState.Terminated
+	}
+	return nil
 }
 
 type Named interface {

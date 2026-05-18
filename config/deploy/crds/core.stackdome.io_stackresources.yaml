@@ -533,8 +533,29 @@ spec:
                 description: Internal address is always the cluster wide resolvable
                   internal domain name.
                 type: string
+              lastFailureDetail:
+                items:
+                  properties:
+                    containerName:
+                      type: string
+                    lastTerminationExitCode:
+                      format: int32
+                      type: integer
+                    lastTerminationMessage:
+                      type: string
+                    lastTerminationReason:
+                      type: string
+                    restartCount:
+                      format: int32
+                      type: integer
+                  type: object
+                type: array
+              lastFailureRevision:
+                type: string
               lastRestartRequestProcessedAt:
                 format: date-time
+                type: string
+              observedDeploymentRevision:
                 type: string
               observedGeneration:
                 description: The most recent generation observed by the controller.

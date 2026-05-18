@@ -357,6 +357,21 @@ spec:
                 type: array
               imageUrl:
                 type: string
+              lastBuildFailureDetail:
+                properties:
+                  containerName:
+                    type: string
+                  lastTerminationExitCode:
+                    format: int32
+                    type: integer
+                  lastTerminationMessage:
+                    type: string
+                  lastTerminationReason:
+                    type: string
+                  restartCount:
+                    format: int32
+                    type: integer
+                type: object
               observedGeneration:
                 description: The most recent generation observed by the controller.
                 format: int64
