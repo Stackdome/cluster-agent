@@ -90,6 +90,9 @@ var _ = Describe("Stack Lifecycle", Ordered, func() {
 		})
 
 		AfterAll(func() {
+			if CurrentSpecReport().Failed() {
+				GinkgoWriter.Println(helpers.DumpBuildDiagnostics(ctx, c, testEnv.KubeClient, testEnv.TestNamespace))
+			}
 			if stack != nil {
 				By("Cleaning up simple Stack")
 				_ = c.Delete(ctx, stack)
@@ -136,6 +139,9 @@ var _ = Describe("Stack Lifecycle", Ordered, func() {
 		})
 
 		AfterAll(func() {
+			if CurrentSpecReport().Failed() {
+				GinkgoWriter.Println(helpers.DumpBuildDiagnostics(ctx, c, testEnv.KubeClient, testEnv.TestNamespace))
+			}
 			if stack != nil {
 				By("Cleaning up multi-resource Stack")
 				_ = c.Delete(ctx, stack)
@@ -185,6 +191,9 @@ var _ = Describe("Stack Lifecycle", Ordered, func() {
 		})
 
 		AfterAll(func() {
+			if CurrentSpecReport().Failed() {
+				GinkgoWriter.Println(helpers.DumpBuildDiagnostics(ctx, c, testEnv.KubeClient, testEnv.TestNamespace))
+			}
 			if stack != nil {
 				By("Cleaning up dependency Stack")
 				_ = c.Delete(ctx, stack)
@@ -255,6 +264,9 @@ var _ = Describe("Stack Lifecycle", Ordered, func() {
 		})
 
 		AfterAll(func() {
+			if CurrentSpecReport().Failed() {
+				GinkgoWriter.Println(helpers.DumpBuildDiagnostics(ctx, c, testEnv.KubeClient, testEnv.TestNamespace))
+			}
 			if stack != nil {
 				By("Cleaning up env/ports Stack")
 				_ = c.Delete(ctx, stack)
@@ -289,6 +301,9 @@ var _ = Describe("Stack Lifecycle", Ordered, func() {
 		})
 
 		AfterAll(func() {
+			if CurrentSpecReport().Failed() {
+				GinkgoWriter.Println(helpers.DumpBuildDiagnostics(ctx, c, testEnv.KubeClient, testEnv.TestNamespace))
+			}
 			if stack != nil {
 				By("Cleaning up init container Stack")
 				_ = c.Delete(ctx, stack)
@@ -358,6 +373,9 @@ var _ = Describe("Stack Lifecycle", Ordered, func() {
 		})
 
 		AfterAll(func() {
+			if CurrentSpecReport().Failed() {
+				GinkgoWriter.Println(helpers.DumpBuildDiagnostics(ctx, c, testEnv.KubeClient, testEnv.TestNamespace))
+			}
 			if stack != nil {
 				_ = c.Delete(ctx, stack)
 				_ = helpers.WaitForStackDeleted(ctx, c, client.ObjectKeyFromObject(stack), stackDeleteTimeout)
@@ -430,6 +448,9 @@ var _ = Describe("Stack Lifecycle", Ordered, func() {
 		})
 
 		AfterAll(func() {
+			if CurrentSpecReport().Failed() {
+				GinkgoWriter.Println(helpers.DumpBuildDiagnostics(ctx, c, testEnv.KubeClient, testEnv.TestNamespace))
+			}
 			if stack != nil {
 				_ = c.Delete(ctx, stack)
 				_ = helpers.WaitForStackDeleted(ctx, c, client.ObjectKeyFromObject(stack), stackDeleteTimeout)
@@ -463,6 +484,9 @@ var _ = Describe("Stack Lifecycle", Ordered, func() {
 		})
 
 		AfterAll(func() {
+			if CurrentSpecReport().Failed() {
+				GinkgoWriter.Println(helpers.DumpBuildDiagnostics(ctx, c, testEnv.KubeClient, testEnv.TestNamespace))
+			}
 			if stack != nil {
 				_ = c.Delete(ctx, stack)
 				_ = helpers.WaitForStackDeleted(ctx, c, client.ObjectKeyFromObject(stack), stackDeleteTimeout)
@@ -517,6 +541,9 @@ var _ = Describe("Stack Lifecycle", Ordered, func() {
 		})
 
 		AfterAll(func() {
+			if CurrentSpecReport().Failed() {
+				GinkgoWriter.Println(helpers.DumpBuildDiagnostics(ctx, c, testEnv.KubeClient, testEnv.TestNamespace))
+			}
 			if stack != nil {
 				_ = c.Delete(ctx, stack)
 				_ = helpers.WaitForStackDeleted(ctx, c, client.ObjectKeyFromObject(stack), stackDeleteTimeout)
@@ -552,6 +579,9 @@ var _ = Describe("Stack Lifecycle", Ordered, func() {
 		})
 
 		AfterAll(func() {
+			if CurrentSpecReport().Failed() {
+				GinkgoWriter.Println(helpers.DumpBuildDiagnostics(ctx, c, testEnv.KubeClient, testEnv.TestNamespace))
+			}
 			if stack != nil {
 				_ = c.Delete(ctx, stack)
 				_ = helpers.WaitForStackDeleted(ctx, c, client.ObjectKeyFromObject(stack), stackDeleteTimeout)
@@ -604,6 +634,9 @@ var _ = Describe("Stack Lifecycle", Ordered, func() {
 		})
 
 		AfterAll(func() {
+			if CurrentSpecReport().Failed() {
+				GinkgoWriter.Println(helpers.DumpBuildDiagnostics(ctx, c, testEnv.KubeClient, testEnv.TestNamespace))
+			}
 			if stack != nil {
 				_ = c.Delete(ctx, stack)
 				_ = helpers.WaitForStackDeleted(ctx, c, client.ObjectKeyFromObject(stack), stackDeleteTimeout)
@@ -654,6 +687,9 @@ var _ = Describe("Stack Lifecycle", Ordered, func() {
 		})
 
 		AfterAll(func() {
+			if CurrentSpecReport().Failed() {
+				GinkgoWriter.Println(helpers.DumpBuildDiagnostics(ctx, c, testEnv.KubeClient, testEnv.TestNamespace))
+			}
 			if stack != nil {
 				_ = c.Delete(ctx, stack)
 				_ = helpers.WaitForStackDeleted(ctx, c, client.ObjectKeyFromObject(stack), stackDeleteTimeout)
@@ -694,6 +730,9 @@ var _ = Describe("Stack Lifecycle", Ordered, func() {
 		})
 
 		AfterAll(func() {
+			if CurrentSpecReport().Failed() {
+				GinkgoWriter.Println(helpers.DumpBuildDiagnostics(ctx, c, testEnv.KubeClient, testEnv.TestNamespace))
+			}
 			if stack != nil {
 				_ = c.Delete(ctx, stack)
 				_ = helpers.WaitForStackDeleted(ctx, c, client.ObjectKeyFromObject(stack), stackDeleteTimeout)
@@ -730,6 +769,9 @@ var _ = Describe("Stack Lifecycle", Ordered, func() {
 		})
 
 		AfterAll(func() {
+			if CurrentSpecReport().Failed() {
+				GinkgoWriter.Println(helpers.DumpBuildDiagnostics(ctx, c, testEnv.KubeClient, testEnv.TestNamespace))
+			}
 			if stack != nil {
 				_ = c.Delete(ctx, stack)
 				_ = helpers.WaitForStackDeleted(ctx, c, client.ObjectKeyFromObject(stack), stackDeleteTimeout)
@@ -783,6 +825,9 @@ var _ = Describe("Stack Lifecycle", Ordered, func() {
 		})
 
 		AfterAll(func() {
+			if CurrentSpecReport().Failed() {
+				GinkgoWriter.Println(helpers.DumpBuildDiagnostics(ctx, c, testEnv.KubeClient, testEnv.TestNamespace))
+			}
 			if stack != nil {
 				By("Cleaning up restart Stack")
 				_ = c.Delete(ctx, stack)
@@ -827,6 +872,9 @@ var _ = Describe("Stack Lifecycle", Ordered, func() {
 		})
 
 		AfterAll(func() {
+			if CurrentSpecReport().Failed() {
+				GinkgoWriter.Println(helpers.DumpBuildDiagnostics(ctx, c, testEnv.KubeClient, testEnv.TestNamespace))
+			}
 			if stack != nil {
 				By("Cleaning up image mutation Stack")
 				_ = c.Delete(ctx, stack)
@@ -879,6 +927,9 @@ var _ = Describe("Stack Lifecycle", Ordered, func() {
 		})
 
 		AfterAll(func() {
+			if CurrentSpecReport().Failed() {
+				GinkgoWriter.Println(helpers.DumpBuildDiagnostics(ctx, c, testEnv.KubeClient, testEnv.TestNamespace))
+			}
 			if stack != nil {
 				By("Cleaning up env mutation Stack")
 				_ = c.Delete(ctx, stack)
@@ -940,6 +991,9 @@ var _ = Describe("Stack Lifecycle", Ordered, func() {
 		})
 
 		AfterAll(func() {
+			if CurrentSpecReport().Failed() {
+				GinkgoWriter.Println(helpers.DumpBuildDiagnostics(ctx, c, testEnv.KubeClient, testEnv.TestNamespace))
+			}
 			if stack != nil {
 				By("Cleaning up add-resource mutation Stack")
 				_ = c.Delete(ctx, stack)
@@ -978,6 +1032,9 @@ var _ = Describe("Stack Lifecycle", Ordered, func() {
 		})
 
 		AfterAll(func() {
+			if CurrentSpecReport().Failed() {
+				GinkgoWriter.Println(helpers.DumpBuildDiagnostics(ctx, c, testEnv.KubeClient, testEnv.TestNamespace))
+			}
 			if stack != nil {
 				By("Cleaning up three-resource Stack")
 				_ = c.Delete(ctx, stack)
@@ -1032,6 +1089,9 @@ var _ = Describe("Stack Lifecycle", Ordered, func() {
 		})
 
 		AfterAll(func() {
+			if CurrentSpecReport().Failed() {
+				GinkgoWriter.Println(helpers.DumpBuildDiagnostics(ctx, c, testEnv.KubeClient, testEnv.TestNamespace))
+			}
 			if stack != nil {
 				By("Cleaning up cascade deletion Stack")
 				_ = c.Delete(ctx, stack)
@@ -1159,6 +1219,9 @@ var _ = Describe("Stack Lifecycle", Ordered, func() {
 		})
 
 		AfterAll(func() {
+			if CurrentSpecReport().Failed() {
+				GinkgoWriter.Println(helpers.DumpBuildDiagnostics(ctx, c, testEnv.KubeClient, testEnv.TestNamespace))
+			}
 			if stack != nil {
 				By("Cleaning up build args Stack")
 				_ = c.Delete(ctx, stack)
@@ -1212,6 +1275,9 @@ var _ = Describe("Stack Lifecycle", Ordered, func() {
 		})
 
 		AfterAll(func() {
+			if CurrentSpecReport().Failed() {
+				GinkgoWriter.Println(helpers.DumpBuildDiagnostics(ctx, c, testEnv.KubeClient, testEnv.TestNamespace))
+			}
 			if stack != nil {
 				By("Cleaning up naming-build Stack")
 				_ = c.Delete(ctx, stack)
@@ -1558,6 +1624,9 @@ var _ = Describe("Stack Lifecycle", Ordered, func() {
 		})
 
 		AfterAll(func() {
+			if CurrentSpecReport().Failed() {
+				GinkgoWriter.Println(helpers.DumpBuildDiagnostics(ctx, c, testEnv.KubeClient, testEnv.TestNamespace))
+			}
 			if stack != nil {
 				By("Cleaning up crash-detect Stack")
 				_ = c.Delete(ctx, stack)
@@ -1594,6 +1663,9 @@ var _ = Describe("Stack Lifecycle", Ordered, func() {
 		})
 
 		AfterAll(func() {
+			if CurrentSpecReport().Failed() {
+				GinkgoWriter.Println(helpers.DumpBuildDiagnostics(ctx, c, testEnv.KubeClient, testEnv.TestNamespace))
+			}
 			if stack != nil {
 				By("Cleaning up imgpull-fail Stack")
 				_ = c.Delete(ctx, stack)
@@ -1631,6 +1703,9 @@ var _ = Describe("Stack Lifecycle", Ordered, func() {
 		})
 
 		AfterAll(func() {
+			if CurrentSpecReport().Failed() {
+				GinkgoWriter.Println(helpers.DumpBuildDiagnostics(ctx, c, testEnv.KubeClient, testEnv.TestNamespace))
+			}
 			if stack != nil {
 				By("Cleaning up initfail Stack")
 				_ = c.Delete(ctx, stack)
