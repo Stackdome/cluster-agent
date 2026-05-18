@@ -1,12 +1,23 @@
 package clusterinfo
 
 import (
+	"fmt"
+
 	corev1 "k8s.io/api/core/v1"
 	networkv1 "k8s.io/api/networking/v1"
 	storagev1 "k8s.io/api/storage/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 
 	corev1alpha1 "stackdome.io/cluster-agent/api/core/v1alpha1"
 )
+
+func quantityToMi(q resource.Quantity) string {
+	return fmt.Sprintf("%dMi", q.ScaledValue(resource.Mega))
+}
+
+func quantityToGi(q resource.Quantity) string {
+	return fmt.Sprintf("%dGi", q.ScaledValue(resource.Giga))
+}
 
 const (
 	labelTopologyZone              = "topology.kubernetes.io/zone"
@@ -35,13 +46,13 @@ func BuildNodeInfoList(nodes []corev1.Node) ([]corev1alpha1.NodeInfo, []string) 
 			info.AllocatableCPU = cpu.String()
 		}
 		if mem := node.Status.Allocatable[corev1.ResourceMemory]; !mem.IsZero() {
-			info.AllocatableMemory = mem.String()
+			info.AllocatableMemory = quantityToMi(mem)
 		}
 		if disk := node.Status.Allocatable[corev1.ResourceEphemeralStorage]; !disk.IsZero() {
-			info.AllocatableEphemeralDisk = disk.String()
+			info.AllocatableEphemeralDisk = quantityToGi(disk)
 		}
 		if cap := node.Status.Capacity[corev1.ResourceEphemeralStorage]; !cap.IsZero() {
-			info.CapacityEphemeralDisk = cap.String()
+			info.CapacityEphemeralDisk = quantityToGi(cap)
 		}
 
 		if info.Topology.Zone != "" {

@@ -26,9 +26,9 @@ import (
 	corev1alpha1 "stackdome.io/cluster-agent/api/core/v1alpha1"
 )
 
-
 type ClusterInfoReconciler struct {
 	client.Client
+	UncachedClient  client.Client
 	Scheme          *runtime.Scheme
 	DiscoveryClient discovery.DiscoveryInterface
 }
@@ -36,6 +36,13 @@ type ClusterInfoReconciler struct {
 func (r *ClusterInfoReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.Client = mgr.GetClient()
 	r.Scheme = mgr.GetScheme()
+
+	uncached, err := client.New(mgr.GetConfig(), client.Options{Scheme: mgr.GetScheme()})
+	if err != nil {
+		return fmt.Errorf("failed to create uncached client: %w", err)
+	}
+	r.UncachedClient = uncached
+
 	dc, err := discovery.NewDiscoveryClientForConfig(mgr.GetConfig())
 	if err != nil {
 		return fmt.Errorf("failed to create discovery client: %w", err)
@@ -77,23 +84,26 @@ func mapLBServiceToSingleton(_ context.Context, obj client.Object) []reconcile.R
 
 func (r *ClusterInfoReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	cr := &corev1alpha1.ClusterInfo{}
-	if err := r.Get(ctx, req.NamespacedName, cr); err != nil {
+	if err := r.UncachedClient.Get(ctx, req.NamespacedName, cr); err != nil {
 		if k8sapierrors.IsNotFound(err) {
-			return ctrl.Result{}, r.Create(ctx, &corev1alpha1.ClusterInfo{
+			return ctrl.Result{Requeue: true}, r.Create(ctx, &corev1alpha1.ClusterInfo{
 				ObjectMeta: metav1.ObjectMeta{Name: corev1alpha1.ClusterInfoSingletonName},
+				Spec: corev1alpha1.ClusterInfoSpec{
+					LoadBalancerNamespaces: []string{corev1alpha1.ClusterInfoDefaultLBNamespace},
+				},
 			})
 		}
 		return ctrl.Result{}, err
 	}
 
-	status, err := r.collectStatus(ctx)
+	status, err := r.collectStatus(ctx, cr.Spec)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 
 	hash := computeStatusHash(status)
 	if hash == cr.Status.StatusHash {
-		return ctrl.Result{RequeueAfter: 2 * time.Minute}, nil
+		return ctrl.Result{RequeueAfter: 10 * time.Minute}, nil
 	}
 
 	now := metav1.Now()
@@ -106,10 +116,10 @@ func (r *ClusterInfoReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if err := r.Status().Patch(ctx, cr, patch); err != nil {
 		return ctrl.Result{}, err
 	}
-	return ctrl.Result{RequeueAfter: 2 * time.Minute}, nil
+	return ctrl.Result{RequeueAfter: 10 * time.Minute}, nil
 }
 
-func (r *ClusterInfoReconciler) collectStatus(ctx context.Context) (*corev1alpha1.ClusterInfoStatus, error) {
+func (r *ClusterInfoReconciler) collectStatus(ctx context.Context, spec corev1alpha1.ClusterInfoSpec) (*corev1alpha1.ClusterInfoStatus, error) {
 	status := &corev1alpha1.ClusterInfoStatus{}
 
 	if r.DiscoveryClient != nil {
@@ -119,7 +129,7 @@ func (r *ClusterInfoReconciler) collectStatus(ctx context.Context) (*corev1alpha
 	}
 
 	nodeList := &corev1.NodeList{}
-	if err := r.List(ctx, nodeList); err != nil {
+	if err := r.UncachedClient.List(ctx, nodeList); err != nil {
 		return nil, err
 	}
 	status.Nodes, status.AvailabilityZones = BuildNodeInfoList(nodeList.Items)
@@ -131,19 +141,23 @@ func (r *ClusterInfoReconciler) collectStatus(ctx context.Context) (*corev1alpha
 	}
 
 	scList := &storagev1.StorageClassList{}
-	if err := r.List(ctx, scList); err != nil {
+	if err := r.UncachedClient.List(ctx, scList); err != nil {
 		return nil, err
 	}
 	status.StorageClasses = BuildStorageClassInfoList(scList.Items)
 
-	svcList := &corev1.ServiceList{}
-	if err := r.List(ctx, svcList); err != nil {
-		return nil, err
+	var allSvcs []corev1.Service
+	for _, ns := range spec.LoadBalancerNamespaces {
+		svcList := &corev1.ServiceList{}
+		if err := r.UncachedClient.List(ctx, svcList, client.InNamespace(ns)); err != nil {
+			return nil, err
+		}
+		allSvcs = append(allSvcs, svcList.Items...)
 	}
-	status.LoadBalancers = BuildLoadBalancerInfoList(svcList.Items)
+	status.LoadBalancers = BuildLoadBalancerInfoList(allSvcs)
 
 	icList := &networkv1.IngressClassList{}
-	if err := r.List(ctx, icList); err != nil {
+	if err := r.UncachedClient.List(ctx, icList); err != nil {
 		return nil, err
 	}
 	status.IngressClasses = BuildIngressClassInfoList(icList.Items)

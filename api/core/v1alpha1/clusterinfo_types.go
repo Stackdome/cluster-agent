@@ -9,7 +9,10 @@ import (
 	"k8s.io/apimachinery/pkg/util/rand"
 )
 
-const ClusterInfoSingletonName = "stackdome-cluster-info"
+const (
+	ClusterInfoSingletonName         = "stackdome-cluster-info"
+	ClusterInfoDefaultLBNamespace    = "stackdome-control-plane"
+)
 
 type ClusterInfoPhase string
 
@@ -19,7 +22,11 @@ const (
 	ClusterInfoPhaseUnknown    ClusterInfoPhase = "Unknown"
 )
 
-type ClusterInfoSpec struct{}
+type ClusterInfoSpec struct {
+	// Namespaces to search for LoadBalancer-type Services (e.g. where Traefik runs).
+	// +kubebuilder:default={"stackdome-control-plane"}
+	LoadBalancerNamespaces []string `json:"loadBalancerNamespaces,omitempty"`
+}
 
 type ClusterInfoStatus struct {
 	Phase              ClusterInfoPhase   `json:"phase,omitempty"`

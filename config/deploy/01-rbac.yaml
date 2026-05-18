@@ -54,8 +54,8 @@ rules:
   - stacks/status
   - stackresources
   - stackresources/status
-  - clusterinfos
-  - clusterinfos/status
+  - clusterinfoes
+  - clusterinfoes/status
   verbs:
   - get
   - list

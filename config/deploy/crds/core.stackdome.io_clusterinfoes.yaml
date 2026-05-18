@@ -52,6 +52,15 @@ spec:
           metadata:
             type: object
           spec:
+            properties:
+              loadBalancerNamespaces:
+                default:
+                - stackdome-control-plane
+                description: Namespaces to search for LoadBalancer-type Services (e.g.
+                  where Traefik runs).
+                items:
+                  type: string
+                type: array
             type: object
           status:
             properties:

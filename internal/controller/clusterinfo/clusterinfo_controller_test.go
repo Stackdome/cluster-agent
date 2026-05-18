@@ -56,7 +56,8 @@ var _ = Describe("ClusterInfoReconciler", func() {
 		mockClient = mocks.NewMockClient(mockCtrl)
 		ctx = context.Background()
 		reconciler = &clusterinfo.ClusterInfoReconciler{
-			Client: mockClient,
+			Client:         mockClient,
+			UncachedClient: mockClient,
 		}
 	})
 
@@ -84,14 +85,17 @@ var _ = Describe("ClusterInfoReconciler", func() {
 				})
 
 				Expect(err).NotTo(HaveOccurred())
-				Expect(result).To(Equal(ctrl.Result{}))
+				Expect(result.Requeue).To(BeTrue())
 			})
 		})
 
-		Context("when the ClusterInfo CR exists and all Linkerd checks pass", func() {
+		Context("when the ClusterInfo CR exists", func() {
 			It("collects status and patches", func() {
 				existingCR := &corev1alpha1.ClusterInfo{
 					ObjectMeta: metav1.ObjectMeta{Name: corev1alpha1.ClusterInfoSingletonName},
+					Spec: corev1alpha1.ClusterInfoSpec{
+						LoadBalancerNamespaces: []string{corev1alpha1.ClusterInfoDefaultLBNamespace},
+					},
 				}
 
 				mockClient.EXPECT().
@@ -164,9 +168,9 @@ var _ = Describe("collectors", func() {
 			Expect(infos[0].Name).To(Equal("worker-1"))
 			Expect(infos[0].Ready).To(BeTrue())
 			Expect(infos[0].AllocatableCPU).To(Equal("3800m"))
-			Expect(infos[0].AllocatableMemory).To(Equal("7Gi"))
-			Expect(infos[0].AllocatableEphemeralDisk).To(Equal("50Gi"))
-			Expect(infos[0].CapacityEphemeralDisk).To(Equal("100Gi"))
+			Expect(infos[0].AllocatableMemory).To(Equal("7517Mi"))
+			Expect(infos[0].AllocatableEphemeralDisk).To(Equal("54Gi"))
+			Expect(infos[0].CapacityEphemeralDisk).To(Equal("108Gi"))
 			Expect(infos[0].Topology.Zone).To(Equal("us-east-1a"))
 			Expect(infos[0].Topology.Region).To(Equal("us-east-1"))
 			Expect(zones).To(ConsistOf("us-east-1a"))
