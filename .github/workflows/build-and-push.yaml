@@ -58,6 +58,20 @@ jobs:
           CHART_VERSION="${VERSION#v}"
           echo "chart_version=$CHART_VERSION" >> "$GITHUB_OUTPUT"
 
+      - name: Sync deploy manifests to Helm chart
+        run: |
+          # Sync CRDs - deploy/crds is the source of truth
+          cp config/deploy/crds/*.yaml charts/stackdome-agent-standalone/crds/
+
+          # Sync ClusterRole rules from deploy/01-rbac.yaml into the Helm template.
+          # The template header (metadata with Helm expressions) is preserved; only
+          # the rules block is replaced.
+          TEMPLATE=charts/stackdome-agent-standalone/templates/clusterrole.yaml
+          RULES_LINE=$(grep -n "^rules:" "$TEMPLATE" | cut -d: -f1)
+          HEADER=$(head -n "$RULES_LINE" "$TEMPLATE")
+          RULES=$(yq 'select(.kind == "ClusterRole") | .rules' config/deploy/01-rbac.yaml)
+          printf '%s\n%s\n' "$HEADER" "$RULES" > "$TEMPLATE"
+
       - name: Update chart versions
         env:
           CHART_VERSION: ${{ steps.chart_version.outputs.chart_version }}

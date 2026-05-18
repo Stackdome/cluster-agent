@@ -52,6 +52,51 @@ spec:
               buildSpec:
                 description: Only one of the following fields should be specified
                 properties:
+                  buildArgs:
+                    description: Build arguments passed to the Docker build as --build-arg
+                      flags.
+                    items:
+                      properties:
+                        name:
+                          type: string
+                        value:
+                          type: string
+                        valueFrom:
+                          properties:
+                            secretKeyRef:
+                              description: SecretKeySelector selects a key of a Secret.
+                              properties:
+                                key:
+                                  description: The key of the secret to select from.  Must
+                                    be a valid secret key.
+                                  type: string
+                                name:
+                                  default: ""
+                                  description: |-
+                                    Name of the referent.
+                                    This field is effectively required, but due to backwards compatibility is
+                                    allowed to be empty. Instances of this type with an empty value here are
+                                    almost certainly wrong.
+                                    More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                  type: string
+                                optional:
+                                  description: Specify whether the Secret or its key
+                                    must be defined
+                                  type: boolean
+                              required:
+                              - key
+                              type: object
+                              x-kubernetes-map-type: atomic
+                          required:
+                          - secretKeyRef
+                          type: object
+                      required:
+                      - name
+                      type: object
+                      x-kubernetes-validations:
+                      - message: exactly one of value or valueFrom must be set
+                        rule: has(self.value) != has(self.valueFrom)
+                    type: array
                   buildContext:
                     description: Build Context within the context source.
                     type: string
@@ -487,6 +532,25 @@ spec:
               internalAddress:
                 description: Internal address is always the cluster wide resolvable
                   internal domain name.
+                type: string
+              lastFailureDetail:
+                items:
+                  properties:
+                    containerName:
+                      type: string
+                    lastTerminationExitCode:
+                      format: int32
+                      type: integer
+                    lastTerminationMessage:
+                      type: string
+                    lastTerminationReason:
+                      type: string
+                    restartCount:
+                      format: int32
+                      type: integer
+                  type: object
+                type: array
+              lastFailureRevision:
                 type: string
               lastRestartRequestProcessedAt:
                 format: date-time
