@@ -8,9 +8,9 @@ import (
 )
 
 const (
-	BuildSourceRepoURL        = "https://github.com/ashishmax31/test-private-repo.git"
-	BuildSourceBranch         = "main"
-	BuildSourceResourceName   = "todo-app"
+	BuildSourceRepoURL         = "https://github.com/ashishmax31/test-private-repo.git"
+	BuildSourceBranch          = "main"
+	BuildSourceResourceName    = "todo-app"
 	RegistryDockerConfigSecret = "registry-docker-config"
 	// Requires: main branch, root Dockerfile, docker/Dockerfile.prod, docker/Dockerfile.broken
 	PublicTestRepoURL = "https://github.com/Stackdome/test-repo.git"

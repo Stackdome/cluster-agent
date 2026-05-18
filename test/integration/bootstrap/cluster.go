@@ -62,6 +62,13 @@ func (cm *ClusterManager) Bootstrap(ctx context.Context) error {
 			"config/deploy/crds",
 		},
 		dev.ClusterHelmInstall{
+			RepoName:    "traefik",
+			RepoURL:     "https://traefik.github.io/charts",
+			PackageName: "traefik",
+			Namespace:   corev1alpha1.ClusterInfoDefaultLBNamespace,
+			ReleaseName: "traefik",
+		},
+		dev.ClusterHelmInstall{
 			RepoName:    "cnpg",
 			RepoURL:     "https://cloudnative-pg.github.io/charts",
 			PackageName: "cloudnative-pg",

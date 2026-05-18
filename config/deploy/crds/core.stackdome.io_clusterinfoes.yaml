@@ -1,0 +1,173 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.3
+  name: clusterinfoes.core.stackdome.io
+spec:
+  group: core.stackdome.io
+  names:
+    kind: ClusterInfo
+    listKind: ClusterInfoList
+    plural: clusterinfoes
+    singular: clusterinfo
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.kubernetesVersion
+      name: K8s Version
+      type: string
+    - jsonPath: .status.totalNodes
+      name: Nodes
+      type: integer
+    - jsonPath: .status.readyNodes
+      name: Ready Nodes
+      type: integer
+    - jsonPath: .status.lastRefreshedAt
+      name: Last Refreshed
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            properties:
+              loadBalancerNamespaces:
+                default:
+                - stackdome-control-plane
+                description: Namespaces to search for LoadBalancer-type Services (e.g.
+                  where Traefik runs).
+                items:
+                  type: string
+                type: array
+            type: object
+          status:
+            properties:
+              availabilityZones:
+                items:
+                  type: string
+                type: array
+              ingressClasses:
+                items:
+                  properties:
+                    controller:
+                      type: string
+                    isDefault:
+                      type: boolean
+                    name:
+                      type: string
+                  required:
+                  - controller
+                  - isDefault
+                  - name
+                  type: object
+                type: array
+              kubernetesVersion:
+                type: string
+              lastRefreshedAt:
+                format: date-time
+                type: string
+              loadBalancers:
+                items:
+                  properties:
+                    hasIP:
+                      type: boolean
+                    ingressHostnames:
+                      items:
+                        type: string
+                      type: array
+                    ingressIPs:
+                      items:
+                        type: string
+                      type: array
+                    serviceName:
+                      type: string
+                    serviceNamespace:
+                      type: string
+                  required:
+                  - hasIP
+                  - serviceName
+                  - serviceNamespace
+                  type: object
+                type: array
+              nodes:
+                items:
+                  properties:
+                    allocatableCpu:
+                      type: string
+                    allocatableEphemeralDisk:
+                      type: string
+                    allocatableMemory:
+                      type: string
+                    capacityEphemeralDisk:
+                      type: string
+                    name:
+                      type: string
+                    ready:
+                      type: boolean
+                    topology:
+                      properties:
+                        region:
+                          type: string
+                        zone:
+                          type: string
+                      type: object
+                  required:
+                  - allocatableCpu
+                  - allocatableEphemeralDisk
+                  - allocatableMemory
+                  - capacityEphemeralDisk
+                  - name
+                  - ready
+                  type: object
+                type: array
+              phase:
+                type: string
+              readyNodes:
+                type: integer
+              statusHash:
+                type: string
+              storageClasses:
+                items:
+                  properties:
+                    isDefault:
+                      type: boolean
+                    name:
+                      type: string
+                    provisioner:
+                      type: string
+                  required:
+                  - isDefault
+                  - name
+                  - provisioner
+                  type: object
+                type: array
+              totalNodes:
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

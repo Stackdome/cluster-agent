@@ -555,8 +555,6 @@ spec:
               lastRestartRequestProcessedAt:
                 format: date-time
                 type: string
-              observedDeploymentRevision:
-                type: string
               observedGeneration:
                 description: The most recent generation observed by the controller.
                 format: int64

@@ -54,7 +54,8 @@ rules:
   - stacks/status
   - stackresources
   - stackresources/status
-  # TODO Add finalizers
+  - clusterinfoes
+  - clusterinfoes/status
   verbs:
   - get
   - list
@@ -152,6 +153,7 @@ rules:
   - networking.k8s.io
   resources:
   - ingresses
+  - ingressclasses
   verbs:
   - get
   - watch
