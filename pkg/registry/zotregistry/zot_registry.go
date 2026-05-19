@@ -380,6 +380,16 @@ func (z *zotRegistry) BuildRegistryConfigReconcilerDaemonset(ctx context.Context
 								"--config-file=config.toml",
 								"--registry-config=/config/registries.json",
 							},
+							ReadinessProbe: &corev1.Probe{
+								ProbeHandler: corev1.ProbeHandler{
+									HTTPGet: &corev1.HTTPGetAction{
+										Path: "/healthz",
+										Port: intstr.FromInt32(8080),
+									},
+								},
+								InitialDelaySeconds: 5,
+								PeriodSeconds:       10,
+							},
 							SecurityContext: &corev1.SecurityContext{
 								AllowPrivilegeEscalation: ptr.To(false),
 								ReadOnlyRootFilesystem:   ptr.To(true),

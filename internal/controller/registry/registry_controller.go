@@ -21,7 +21,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	registryv1alpha1 "stackdome.io/cluster-agent/api/registry/v1alpha1"
 	"stackdome.io/cluster-agent/internal/controller"
@@ -625,6 +627,23 @@ func (r *RegistryReconciler) reconcileRegistryConfig(ctx context.Context, regist
 	return resultNil, nil
 }
 
+func (r *RegistryReconciler) mapDaemonSetToRegistries(ctx context.Context, obj client.Object) []reconcile.Request {
+	if obj.GetName() != reg.RegistryConfigReconcilerDaemonSetName || obj.GetNamespace() != registryNamespace {
+		return nil
+	}
+	var registries registryv1alpha1.ClusterRegistryList
+	if err := r.Client.List(ctx, &registries); err != nil {
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(registries.Items))
+	for _, cr := range registries.Items {
+		requests = append(requests, reconcile.Request{
+			NamespacedName: types.NamespacedName{Name: cr.Name},
+		})
+	}
+	return requests
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *RegistryReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
@@ -633,6 +652,9 @@ func (r *RegistryReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.Service{}).
 		Owns(&corev1.PersistentVolumeClaim{}).
 		Owns(&appsv1.Deployment{}).
+		Watches(&appsv1.DaemonSet{}, handler.EnqueueRequestsFromMapFunc(
+			r.mapDaemonSetToRegistries,
+		)).
 		Named("registry-controller").
 		Complete(r)
 }

@@ -45,6 +45,7 @@ type ContainerdConfigReconciler struct {
 	Interval      time.Duration
 	Logger        *log.Logger
 	IsLastSuccess bool
+	LastError     string
 }
 
 // NewContainerdConfigReconciler creates a new reconciler instance
@@ -62,9 +63,9 @@ func (c *ContainerdConfigReconciler) Start(ctx context.Context) {
 	// Initial reconciliation
 	if err := c.Reconcile(); err != nil {
 		c.Logger.Printf("Error in initial configuration: %v", err)
-		c.setHealthStatus(false)
+		c.setHealth(false, err.Error())
 	} else {
-		c.setHealthStatus(true)
+		c.setHealth(true, "")
 	}
 
 	// Start health server
@@ -82,10 +83,10 @@ func (c *ContainerdConfigReconciler) Start(ctx context.Context) {
 		case <-ticker.C:
 			c.Logger.Printf("Checking for registry config changes")
 			if err := c.Reconcile(); err != nil {
-				c.setHealthStatus(false)
+				c.setHealth(false, err.Error())
 				c.Logger.Printf("Error updating configuration: %v", err)
 			} else {
-				c.setHealthStatus(true)
+				c.setHealth(true, "")
 			}
 		}
 	}
@@ -119,22 +120,24 @@ func (c *ContainerdConfigReconciler) StartHealthServer(ctx context.Context) {
 func (c *ContainerdConfigReconciler) healthHandler(w http.ResponseWriter, r *http.Request) {
 	c.mu.RLock()
 	isHealthy := c.IsLastSuccess
+	lastErr := c.LastError
 	c.mu.RUnlock()
 
 	if isHealthy {
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintln(w, "Containerd config written successfully")
+		fmt.Fprintln(w, "containerd config applied and reloaded")
 	} else {
 		w.WriteHeader(http.StatusServiceUnavailable)
-		fmt.Fprintln(w, "Containerd config write failed")
+		fmt.Fprintf(w, "containerd config not applied: %s\n", lastErr)
 	}
 }
 
-// setHealthStatus safely updates the health status
-func (c *ContainerdConfigReconciler) setHealthStatus(isSuccess bool) {
+// setHealth safely updates the health status and last error
+func (c *ContainerdConfigReconciler) setHealth(ok bool, errMsg string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.IsLastSuccess = isSuccess
+	c.IsLastSuccess = ok
+	c.LastError = errMsg
 }
 
 // Reconcile performs the full reconciliation process
@@ -447,26 +450,25 @@ func (c *ContainerdConfigReconciler) reloadContainerd() error {
 	pidCmd := exec.Command("pidof", "containerd")
 	pidOutput, err := pidCmd.Output()
 	if err != nil {
-		c.Logger.Printf("Failed to find containerd process: %v", err)
-		// Don't return an error if containerd isn't running
-		return nil
+		return fmt.Errorf("failed to find containerd process (is HostPID enabled?): %w", err)
 	}
 
 	pidStr := strings.TrimSpace(string(pidOutput))
 	c.Logger.Printf("Found containerd PID(s): %s", pidStr)
 
+	var lastErr error
 	for _, pid := range strings.Fields(pidStr) {
 		c.Logger.Printf("Sending SIGHUP to containerd process %s", pid)
 		killCmd := exec.Command("kill", "-HUP", pid)
 		if output, err := killCmd.CombinedOutput(); err != nil {
-			c.Logger.Printf("Failed to send SIGHUP to PID %s: %v, output: %s", pid, err, output)
-			// Continue with other PIDs, don't fail immediately
+			lastErr = fmt.Errorf("failed to send SIGHUP to PID %s: %w, output: %s", pid, err, output)
+			c.Logger.Printf("%v", lastErr)
 		} else {
 			c.Logger.Printf("Successfully sent SIGHUP to PID %s", pid)
 		}
 	}
 
-	return nil
+	return lastErr
 }
 
 func main() {

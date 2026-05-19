@@ -119,14 +119,14 @@ var _ = Describe("Registry Lifecycle", Ordered, func() {
 			}, ds)
 			Expect(err).NotTo(HaveOccurred())
 
-			By("Verifying HostPID is not set")
-			Expect(ds.Spec.Template.Spec.HostPID).To(BeFalse())
+			By("Verifying HostPID is set (required to SIGHUP containerd)")
+			Expect(ds.Spec.Template.Spec.HostPID).To(BeTrue())
 
 			By("Verifying pod security context")
 			podSC := ds.Spec.Template.Spec.SecurityContext
 			Expect(podSC).NotTo(BeNil())
-			Expect(podSC.RunAsNonRoot).NotTo(BeNil())
-			Expect(*podSC.RunAsNonRoot).To(BeTrue())
+			Expect(podSC.RunAsUser).NotTo(BeNil())
+			Expect(*podSC.RunAsUser).To(Equal(int64(0)))
 
 			By("Verifying container security context")
 			containerSC := ds.Spec.Template.Spec.Containers[0].SecurityContext

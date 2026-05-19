@@ -12,8 +12,11 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	appsv1 "k8s.io/api/apps/v1"
+
 	buildsv1alpha1 "stackdome.io/cluster-agent/api/builds/v1alpha1"
 	corev1alpha1 "stackdome.io/cluster-agent/api/core/v1alpha1"
+	registryv1alpha1 "stackdome.io/cluster-agent/api/registry/v1alpha1"
 )
 
 // WaitForImageBuildCreated polls until an ImageBuild CR with the given prefix exists.
@@ -246,6 +249,41 @@ func DumpBuildDiagnostics(ctx context.Context, c client.Client, kubeClient kuber
 
 			if strings.Contains(p.Name, "build") {
 				out += fetchPodLogs(ctx, kubeClient, namespace, p.Name, 50)
+			}
+		}
+	}
+
+	// ClusterRegistry status
+	registries := &registryv1alpha1.ClusterRegistryList{}
+	if err := c.List(ctx, registries); err != nil {
+		out += fmt.Sprintf("\nfailed to list ClusterRegistries: %v\n", err)
+	} else {
+		for _, r := range registries.Items {
+			out += fmt.Sprintf("\nClusterRegistry: %s\n  Phase: %s\n  InternalURL: %s\n  ServiceIP: %s\n  Conditions:\n",
+				r.Name, r.Status.Phase, r.Status.InternalURL, r.Status.ServiceIP)
+			for _, cond := range r.Status.Conditions {
+				out += fmt.Sprintf("    %s=%s (reason=%s, message=%s)\n", cond.Type, cond.Status, cond.Reason, cond.Message)
+			}
+		}
+	}
+
+	// Registry config reconciler DaemonSet status
+	ds := &appsv1.DaemonSet{}
+	dsKey := client.ObjectKey{Name: "registry-config-reconciler", Namespace: "stackdome-registry"}
+	if err := c.Get(ctx, dsKey, ds); err != nil {
+		out += fmt.Sprintf("\nfailed to get registry-config-reconciler DaemonSet: %v\n", err)
+	} else {
+		out += fmt.Sprintf("\nDaemonSet: %s/%s\n  Desired=%d Available=%d Ready=%d\n",
+			ds.Namespace, ds.Name, ds.Status.DesiredNumberScheduled, ds.Status.NumberAvailable, ds.Status.NumberReady)
+		// DaemonSet pod logs
+		dsPods := &corev1.PodList{}
+		if err := c.List(ctx, dsPods, client.InNamespace("stackdome-registry"), client.MatchingLabels{"daemonset-for": "registry-config-reconciler"}); err == nil {
+			for _, p := range dsPods.Items {
+				out += fmt.Sprintf("  Pod %s (node=%s): phase=%s\n", p.Name, p.Spec.NodeName, p.Status.Phase)
+				for _, cs := range p.Status.ContainerStatuses {
+					out += fmt.Sprintf("    Container %s: ready=%v restarts=%d\n", cs.Name, cs.Ready, cs.RestartCount)
+				}
+				out += fetchPodLogs(ctx, kubeClient, "stackdome-registry", p.Name, 20)
 			}
 		}
 	}
