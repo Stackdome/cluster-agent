@@ -340,9 +340,9 @@ func (z *zotRegistry) BuildRegistryConfigReconcilerDaemonset(ctx context.Context
 					},
 				},
 				Spec: corev1.PodSpec{
+					HostPID: true,
 					SecurityContext: &corev1.PodSecurityContext{
-						RunAsNonRoot: ptr.To(true),
-						RunAsUser:    ptr.To(int64(65534)),
+						RunAsUser: ptr.To(int64(0)),
 					},
 					Volumes: []corev1.Volume{
 						{

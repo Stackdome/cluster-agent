@@ -71,17 +71,14 @@ func TestBuildRegistryConfigReconcilerDaemonset_Security(t *testing.T) {
 	ds := builder.BuildRegistryConfigReconcilerDaemonset(context.Background(), reg, "test-cm", "registries.json")
 
 	podSpec := ds.Spec.Template.Spec
-	if podSpec.HostPID {
-		t.Error("DaemonSet should not have HostPID=true")
+	if !podSpec.HostPID {
+		t.Error("DaemonSet must have HostPID=true to find and SIGHUP containerd on the host")
 	}
 	if podSpec.SecurityContext == nil {
 		t.Fatal("pod SecurityContext should not be nil")
 	}
-	if podSpec.SecurityContext.RunAsNonRoot == nil || !*podSpec.SecurityContext.RunAsNonRoot {
-		t.Error("pod SecurityContext.RunAsNonRoot should be true")
-	}
-	if podSpec.SecurityContext.RunAsUser == nil || *podSpec.SecurityContext.RunAsUser != 65534 {
-		t.Errorf("pod SecurityContext.RunAsUser should be 65534, got %v", podSpec.SecurityContext.RunAsUser)
+	if podSpec.SecurityContext.RunAsUser == nil || *podSpec.SecurityContext.RunAsUser != 0 {
+		t.Errorf("pod SecurityContext.RunAsUser should be 0 (root required to write host containerd config), got %v", podSpec.SecurityContext.RunAsUser)
 	}
 
 	container := podSpec.Containers[0]
