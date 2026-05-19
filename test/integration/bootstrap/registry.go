@@ -3,17 +3,21 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"io"
 	"os/exec"
 	"time"
 
 	"github.com/go-logr/logr"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	corev1alpha1 "stackdome.io/cluster-agent/api/core/v1alpha1"
 	registryv1alpha1 "stackdome.io/cluster-agent/api/registry/v1alpha1"
 	"stackdome.io/cluster-agent/pkg/config"
+	reg "stackdome.io/cluster-agent/pkg/registry"
 )
 
 const (
@@ -26,12 +30,13 @@ const (
 )
 
 type RegistryManager struct {
-	client client.Client
-	logger logr.Logger
+	client     client.Client
+	kubeClient kubernetes.Interface
+	logger     logr.Logger
 }
 
-func NewRegistryManager(c client.Client, logger logr.Logger) *RegistryManager {
-	return &RegistryManager{client: c, logger: logger}
+func NewRegistryManager(c client.Client, kubeClient kubernetes.Interface, logger logr.Logger) *RegistryManager {
+	return &RegistryManager{client: c, kubeClient: kubeClient, logger: logger}
 }
 
 // Setup creates the registry namespace, credentials secret, and ClusterRegistry CR,
@@ -135,16 +140,81 @@ func (rm *RegistryManager) waitForRegistryReady(ctx context.Context) error {
 	for {
 		select {
 		case <-timeout:
-			return fmt.Errorf("timed out waiting for registry to become Running")
+			return fmt.Errorf("timed out waiting for registry to become Running\n%s", rm.dumpRegistryDiagnostics(ctx))
 		case <-tick.C:
-			reg := &registryv1alpha1.ClusterRegistry{}
-			if err := rm.client.Get(ctx, client.ObjectKey{Name: registryName}, reg); err != nil {
+			cr := &registryv1alpha1.ClusterRegistry{}
+			if err := rm.client.Get(ctx, client.ObjectKey{Name: registryName}, cr); err != nil {
 				continue
 			}
-			if reg.Status.Phase == registryv1alpha1.RegistryPhaseRunning {
-				rm.logger.Info("Registry is running", "internalURL", reg.Status.InternalURL)
+			if cr.Status.Phase == registryv1alpha1.RegistryPhaseRunning {
+				rm.logger.Info("Registry is running", "internalURL", cr.Status.InternalURL)
 				return nil
 			}
 		}
 	}
+}
+
+func (rm *RegistryManager) dumpRegistryDiagnostics(ctx context.Context) string {
+	out := "\n=== Registry Bootstrap Diagnostics ===\n"
+
+	cr := &registryv1alpha1.ClusterRegistry{}
+	if err := rm.client.Get(ctx, client.ObjectKey{Name: registryName}, cr); err != nil {
+		out += fmt.Sprintf("failed to get ClusterRegistry: %v\n", err)
+	} else {
+		out += fmt.Sprintf("ClusterRegistry: %s\n  Phase: %s\n  InternalURL: %s\n  ServiceIP: %s\n", cr.Name, cr.Status.Phase, cr.Status.InternalURL, cr.Status.ServiceIP)
+		for _, cond := range cr.Status.Conditions {
+			out += fmt.Sprintf("  Condition %s=%s (reason=%s, message=%s)\n", cond.Type, cond.Status, cond.Reason, cond.Message)
+		}
+	}
+
+	dep := &appsv1.Deployment{}
+	if err := rm.client.Get(ctx, client.ObjectKey{Name: registryName, Namespace: registryNamespace}, dep); err != nil {
+		out += fmt.Sprintf("\nfailed to get registry Deployment: %v\n", err)
+	} else {
+		out += fmt.Sprintf("\nDeployment: %s/%s\n  Ready: %d/%d\n", dep.Namespace, dep.Name, dep.Status.ReadyReplicas, dep.Status.Replicas)
+	}
+
+	ds := &appsv1.DaemonSet{}
+	if err := rm.client.Get(ctx, client.ObjectKey{Name: reg.RegistryConfigReconcilerDaemonSetName, Namespace: registryNamespace}, ds); err != nil {
+		out += fmt.Sprintf("\nfailed to get DaemonSet: %v\n", err)
+	} else {
+		out += fmt.Sprintf("\nDaemonSet: %s/%s\n  Desired=%d Available=%d Ready=%d\n", ds.Namespace, ds.Name, ds.Status.DesiredNumberScheduled, ds.Status.NumberAvailable, ds.Status.NumberReady)
+	}
+
+	pods := &corev1.PodList{}
+	if err := rm.client.List(ctx, pods, client.InNamespace(registryNamespace)); err != nil {
+		out += fmt.Sprintf("\nfailed to list pods: %v\n", err)
+	} else {
+		for _, p := range pods.Items {
+			out += fmt.Sprintf("\nPod: %s (node=%s) phase=%s\n", p.Name, p.Spec.NodeName, p.Status.Phase)
+			for _, cs := range p.Status.ContainerStatuses {
+				out += fmt.Sprintf("  Container %s: ready=%v restarts=%d\n", cs.Name, cs.Ready, cs.RestartCount)
+				if cs.State.Waiting != nil {
+					out += fmt.Sprintf("    waiting: reason=%s message=%s\n", cs.State.Waiting.Reason, cs.State.Waiting.Message)
+				}
+			}
+			if rm.kubeClient != nil {
+				out += rm.fetchPodLogs(ctx, p.Name, 30)
+			}
+		}
+	}
+
+	out += "=== End Registry Bootstrap Diagnostics ===\n"
+	return out
+}
+
+func (rm *RegistryManager) fetchPodLogs(ctx context.Context, podName string, tailLines int64) string {
+	out := fmt.Sprintf("  Logs (last %d lines):\n", tailLines)
+	req := rm.kubeClient.CoreV1().Pods(registryNamespace).GetLogs(podName, &corev1.PodLogOptions{TailLines: &tailLines})
+	stream, err := req.Stream(ctx)
+	if err != nil {
+		return out + fmt.Sprintf("    <failed to fetch logs: %v>\n", err)
+	}
+	defer stream.Close()
+	data, err := io.ReadAll(stream)
+	if err != nil {
+		return out + fmt.Sprintf("    <failed to read logs: %v>\n", err)
+	}
+	out += fmt.Sprintf("    %s\n", string(data))
+	return out
 }

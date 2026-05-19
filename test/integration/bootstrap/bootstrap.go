@@ -80,7 +80,7 @@ func Setup(env *Environment, ctx context.Context) error {
 	}
 
 	// Pre-load images needed for registry and builds into Kind
-	rm := NewRegistryManager(c, logger)
+	rm := NewRegistryManager(c, kubeClient, logger)
 	if err := rm.PreloadImages(ctx); err != nil {
 		return fmt.Errorf("preloading images: %w", err)
 	}
