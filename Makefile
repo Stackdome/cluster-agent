@@ -72,12 +72,13 @@ docker-push: ## Push container images via mage.
 	go run ./cmd/mage build:pushImages
 
 RECONCILER_IMAGE ?= $(IMAGE_REPOSITORY)/registry-config-reconciler
-RECONCILER_TAG ?= v0.0.5
+RECONCILER_TAG ?= v0.0.7
+RECONCILER_ARCH ?= $(shell go env GOARCH)
 
 .PHONY: docker-build-config-reconciler
-docker-build-config-reconciler: ## Build containerd-config-reconciler image.
-	GOOS=linux GOARCH=amd64 go build -o .cache/image/containerd-config-reconciler/containerd-config-reconciler ./cmd/containerd-config-reconciler/
-	$(CONTAINER_TOOL) build -t $(RECONCILER_IMAGE):$(RECONCILER_TAG) .cache/image/containerd-config-reconciler/
+docker-build-config-reconciler: ## Build containerd-config-reconciler image. Use RECONCILER_ARCH=amd64 for CI.
+	GOOS=linux GOARCH=$(RECONCILER_ARCH) go build -o .cache/image/containerd-config-reconciler/containerd-config-reconciler ./cmd/containerd-config-reconciler/
+	$(CONTAINER_TOOL) build --platform linux/$(RECONCILER_ARCH) -t $(RECONCILER_IMAGE):$(RECONCILER_TAG) .cache/image/containerd-config-reconciler/
 
 .PHONY: docker-push-config-reconciler
 docker-push-config-reconciler: ## Push containerd-config-reconciler image.
