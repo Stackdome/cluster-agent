@@ -46,8 +46,8 @@ test: manifests generate fmt vet envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
 .PHONY: test-integration
-test-integration: ## Run integration tests (requires Docker for Kind cluster).
-	go run github.com/onsi/ginkgo/v2/ginkgo -v --timeout 1h ./test/integration/... 2>&1 | tee test/integration/last-run.log
+test-integration: ## Run integration tests (requires Docker for Kind cluster). Use FOCUS="pattern" to run specific tests.
+	go run github.com/onsi/ginkgo/v2/ginkgo -v --timeout 1h $(if $(FOCUS),--focus "$(FOCUS)") ./test/integration/... 2>&1 | tee test/integration/last-run.log
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter.
@@ -70,6 +70,19 @@ docker-build: ## Build container images via mage.
 .PHONY: docker-push
 docker-push: ## Push container images via mage.
 	go run ./cmd/mage build:pushImages
+
+RECONCILER_IMAGE ?= $(IMAGE_REPOSITORY)/registry-config-reconciler
+RECONCILER_TAG ?= v0.0.7
+RECONCILER_ARCH ?= $(shell go env GOARCH)
+
+.PHONY: docker-build-config-reconciler
+docker-build-config-reconciler: ## Build containerd-config-reconciler image. Use RECONCILER_ARCH=amd64 for CI.
+	GOOS=linux GOARCH=$(RECONCILER_ARCH) go build -o .cache/image/containerd-config-reconciler/containerd-config-reconciler ./cmd/containerd-config-reconciler/
+	$(CONTAINER_TOOL) build --platform linux/$(RECONCILER_ARCH) -t $(RECONCILER_IMAGE):$(RECONCILER_TAG) .cache/image/containerd-config-reconciler/
+
+.PHONY: docker-push-config-reconciler
+docker-push-config-reconciler: ## Push containerd-config-reconciler image.
+	$(CONTAINER_TOOL) push $(RECONCILER_IMAGE):$(RECONCILER_TAG)
 
 .PHONY: docker-build-sync-tools
 docker-build-sync-tools: ## Build sync-tools image.

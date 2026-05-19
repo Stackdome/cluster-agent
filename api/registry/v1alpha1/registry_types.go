@@ -1,6 +1,8 @@
 package v1alpha1
 
 import (
+	"strings"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	corev1alpha1 "stackdome.io/cluster-agent/api/core/v1alpha1"
 )
@@ -141,36 +143,27 @@ type ClusterRegistry struct {
 	Status RegistryStatus      `json:"status,omitempty"`
 }
 
-func (c *ClusterRegistry) RegistryConfigMapName() string {
-	res := c.Name + "-config"
-	if len(res) > 63 {
-		return res[len(res)-63:]
+func truncateK8sName(name string) string {
+	if len(name) <= 63 {
+		return name
 	}
-	return res
+	return strings.TrimRight(name[:63], "-")
+}
+
+func (c *ClusterRegistry) RegistryConfigMapName() string {
+	return truncateK8sName(c.Name + "-config")
 }
 
 func (c *ClusterRegistry) RegistryPVCName() string {
-	res := c.Name + "-storage"
-	if len(res) > 63 {
-		return res[len(res)-63:]
-	}
-	return res
+	return truncateK8sName(c.Name + "-storage")
 }
 
 func (c *ClusterRegistry) RegistryDeploymentName() string {
-	res := c.Name + "-deployment"
-	if len(res) > 63 {
-		return res[len(res)-63:]
-	}
-	return res
+	return truncateK8sName(c.Name + "-deployment")
 }
 
 func (c *ClusterRegistry) RegistryAuthSecretName() string {
-	res := c.Name + "-auth"
-	if len(res) > 63 {
-		return res[len(res)-63:]
-	}
-	return res
+	return truncateK8sName(c.Name + "-auth")
 }
 
 // +kubebuilder:object:root=true
