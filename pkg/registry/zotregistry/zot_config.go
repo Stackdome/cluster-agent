@@ -14,10 +14,10 @@ type LogConfig struct {
 
 // HTTPConfig represents the "http" section of the Zot configuration.
 type HTTPConfig struct {
-	Compat  []string   `json:"compat"`
-	Address string     `json:"address"`
-	Port    string     `json:"port"`
-	Auth    AuthConfig `json:"auth"`
+	Compat  []string    `json:"compat"`
+	Address string      `json:"address"`
+	Port    string      `json:"port"`
+	Auth    *AuthConfig `json:"auth,omitempty"`
 }
 
 // AuthConfig represents the "auth" section within "http".

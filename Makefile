@@ -46,8 +46,8 @@ test: manifests generate fmt vet envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
 .PHONY: test-integration
-test-integration: ## Run integration tests (requires Docker for Kind cluster).
-	go run github.com/onsi/ginkgo/v2/ginkgo -v --timeout 1h ./test/integration/... 2>&1 | tee test/integration/last-run.log
+test-integration: ## Run integration tests (requires Docker for Kind cluster). Use FOCUS="pattern" to run specific tests.
+	go run github.com/onsi/ginkgo/v2/ginkgo -v --timeout 1h $(if $(FOCUS),--focus "$(FOCUS)") ./test/integration/... 2>&1 | tee test/integration/last-run.log
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter.

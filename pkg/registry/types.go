@@ -9,6 +9,10 @@ import (
 	registryv1alpha1 "stackdome.io/cluster-agent/api/registry/v1alpha1"
 )
 
+const (
+	RegistryConfigReconcilerDaemonSetName = "registry-config-reconciler"
+)
+
 type RegistryBuilder interface {
 	Initialize(opts RegistryBuilderOpts) error
 	BuildConfigurationConfigMap(ctx context.Context, registry *registryv1alpha1.ClusterRegistry) (*corev1.ConfigMap, error)

@@ -10,6 +10,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
@@ -117,7 +118,7 @@ func (z *zotRegistry) BuildConfigurationConfigMap(ctx context.Context, registry 
 	}
 
 	if registry.Spec.Auth != nil && registry.Spec.Auth.HtPasswordCredentials != nil {
-		config.HTTP.Auth = AuthConfig{
+		config.HTTP.Auth = &AuthConfig{
 			Htpasswd: HtpasswdConfig{
 				Path: z.opts.Auth.Htpasswd.Path,
 			},
@@ -192,6 +193,24 @@ func (z *zotRegistry) BuildDeployment(ctx context.Context, registry *registryv1a
 									ContainerPort: registry.Spec.Port,
 								},
 							},
+							ReadinessProbe: &corev1.Probe{
+								ProbeHandler: corev1.ProbeHandler{
+									TCPSocket: &corev1.TCPSocketAction{
+										Port: intstr.FromInt32(registry.Spec.Port),
+									},
+								},
+								InitialDelaySeconds: 5,
+								PeriodSeconds:       10,
+							},
+							LivenessProbe: &corev1.Probe{
+								ProbeHandler: corev1.ProbeHandler{
+									TCPSocket: &corev1.TCPSocketAction{
+										Port: intstr.FromInt32(registry.Spec.Port),
+									},
+								},
+								InitialDelaySeconds: 15,
+								PeriodSeconds:       20,
+							},
 							VolumeMounts: []corev1.VolumeMount{
 								{
 									Name:      "config",
@@ -259,10 +278,20 @@ func (z *zotRegistry) BuildDeployment(ctx context.Context, registry *registryv1a
 
 	}
 
-	// Set resource requirements.
-	if z.opts.Resources != nil {
-		deployment.Spec.Template.Spec.Containers[0].Resources = *z.opts.Resources
+	resources := corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("100m"),
+			corev1.ResourceMemory: resource.MustParse("256Mi"),
+		},
+		Limits: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("500m"),
+			corev1.ResourceMemory: resource.MustParse("512Mi"),
+		},
 	}
+	if z.opts.Resources != nil {
+		resources = *z.opts.Resources
+	}
+	deployment.Spec.Template.Spec.Containers[0].Resources = resources
 	return deployment, nil
 }
 
@@ -292,26 +321,29 @@ func (z *zotRegistry) BuildService(ctx context.Context, registry *registryv1alph
 	return service, registryURL, nil
 }
 
-func (z *zotRegistry) BuildRegistryConfigReconcilerDaemonset(ctx context.Context, registry *registryv1alpha1.ClusterRegistry, registryConfigCMName string, registryConfigKey string) *appsv1.DaemonSet {
+func (z *zotRegistry) BuildRegistryConfigReconcilerDaemonset(ctx context.Context, reg *registryv1alpha1.ClusterRegistry, registryConfigCMName string, registryConfigKey string) *appsv1.DaemonSet {
 	desiredDaemonset := appsv1.DaemonSet{
 		ObjectMeta: v1.ObjectMeta{
-			Name:      "registry-config-reconciler",
+			Name:      registry.RegistryConfigReconcilerDaemonSetName,
 			Namespace: z.opts.Namespace,
 		},
 		Spec: appsv1.DaemonSetSpec{
 			Selector: &v1.LabelSelector{
 				MatchLabels: map[string]string{
-					"demonset-for": "registry-config-reconciler",
+					"daemonset-for": "registry-config-reconciler",
 				},
 			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: v1.ObjectMeta{
 					Labels: map[string]string{
-						"demonset-for": "registry-config-reconciler",
+						"daemonset-for": "registry-config-reconciler",
 					},
 				},
 				Spec: corev1.PodSpec{
-					HostPID: true,
+					SecurityContext: &corev1.PodSecurityContext{
+						RunAsNonRoot: ptr.To(true),
+						RunAsUser:    ptr.To(int64(65534)),
+					},
 					Volumes: []corev1.Volume{
 						{
 							Name: "registry-config",
@@ -348,6 +380,23 @@ func (z *zotRegistry) BuildRegistryConfigReconcilerDaemonset(ctx context.Context
 								"--config-file=config.toml",
 								"--registry-config=/config/registries.json",
 							},
+							SecurityContext: &corev1.SecurityContext{
+								AllowPrivilegeEscalation: ptr.To(false),
+								ReadOnlyRootFilesystem:   ptr.To(true),
+								Capabilities: &corev1.Capabilities{
+									Drop: []corev1.Capability{"ALL"},
+								},
+							},
+							Resources: corev1.ResourceRequirements{
+								Requests: corev1.ResourceList{
+									corev1.ResourceCPU:    resource.MustParse("10m"),
+									corev1.ResourceMemory: resource.MustParse("32Mi"),
+								},
+								Limits: corev1.ResourceList{
+									corev1.ResourceCPU:    resource.MustParse("50m"),
+									corev1.ResourceMemory: resource.MustParse("64Mi"),
+								},
+							},
 							VolumeMounts: []corev1.VolumeMount{
 								{
 									Name:      "containerd-config",
@@ -373,7 +422,7 @@ func (z *zotRegistry) BuildHTPasswordSecret(ctx context.Context, registry *regis
 		return nil, "", fmt.Errorf("htpasswd credentials not provided")
 	}
 
-	htpasswdHash, err := bcrypt.GenerateFromPassword([]byte(password), 5)
+	htpasswdHash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to generate bcrypt hash for htpasswd: %w", err)
 	}

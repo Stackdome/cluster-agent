@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -85,6 +87,7 @@ func NewRegistryReconciler(client client.Client, scheme *runtime.Scheme, registr
 	}))
 
 	r.subReconcilers = []namedSubReconciler{
+		{"ValidationReconciler", r.reconcileValidation},
 		{"NamespaceReconciler", r.reconcileRegistryNamespace},
 		{"RegistryAuthReconciler", r.reconcileRegistryAuth},
 		{"RegistryStorageReconciler", r.reconcileRegistryStorage},
@@ -237,7 +240,9 @@ func (r *RegistryReconciler) reconcileSharedRegistryConfigDaemonSet(ctx context.
 		})
 		registry.Status.Phase = registryv1alpha1.RegistryPhaseRunning
 		registry.Status.ObservedGeneration = registry.Generation
-		return resultNil, nil
+		// Periodic requeue to detect credential rotation in the source secret.
+		// We can't watch it directly without caching all Secrets cluster-wide.
+		return resultRequeueAfter(5 * time.Minute), nil
 	}
 	meta.SetStatusCondition(&registry.Status.Conditions, metav1.Condition{
 		Type:               string(registryv1alpha1.RegistryReady),
@@ -251,7 +256,6 @@ func (r *RegistryReconciler) reconcileSharedRegistryConfigDaemonSet(ctx context.
 	return resultRequeue, nil
 }
 
-// TODO: Handle removal of hosts from CM and finally delete the daemonset if required.
 func (r *RegistryReconciler) reconcileDelete(ctx context.Context, registry *registryv1alpha1.ClusterRegistry) error {
 	meta.SetStatusCondition(&registry.Status.Conditions, metav1.Condition{
 		Type:               string(registryv1alpha1.RegistryReady),
@@ -260,10 +264,64 @@ func (r *RegistryReconciler) reconcileDelete(ctx context.Context, registry *regi
 		Message:            "Registry is being deleted",
 		ObservedGeneration: registry.Generation,
 	})
-	registry.Status.InternalURL = ""
 	registry.Status.Phase = registryv1alpha1.RegistryPhasePending
 	registry.Status.ObservedGeneration = registry.Generation
+
+	if err := r.cleanupSharedRegistryConfig(ctx, registry); err != nil {
+		return err
+	}
+
+	registry.Status.InternalURL = ""
 	return nil
+}
+
+func (r *RegistryReconciler) cleanupSharedRegistryConfig(ctx context.Context, registry *registryv1alpha1.ClusterRegistry) error {
+	logger := log.FromContext(ctx)
+	if registry.Status.InternalURL == "" {
+		return nil
+	}
+
+	existingCM := &corev1.ConfigMap{}
+	if err := r.Client.Get(ctx, types.NamespacedName{
+		Name:      nodeRegistryAccessConfigMapName,
+		Namespace: registryNamespace,
+	}, existingCM); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to get shared registry ConfigMap: %w", err)
+	}
+
+	registryConfig, err := unmarshalRegistryConfig(existingCM.Data["registries.json"])
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal registry config: %w", err)
+	}
+
+	registryConfig.RemoveRegistryEndpointEntry(registry.Status.InternalURL)
+
+	if len(registryConfig.ValidRegistries()) == 0 {
+		logger.Info("no registries remaining, cleaning up shared ConfigMap and DaemonSet")
+		if err := r.Client.Delete(ctx, existingCM); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("failed to delete shared registry ConfigMap: %w", err)
+		}
+		ds := &appsv1.DaemonSet{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      reg.RegistryConfigReconcilerDaemonSetName,
+				Namespace: registryNamespace,
+			},
+		}
+		if err := r.Client.Delete(ctx, ds); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("failed to delete registry config reconciler DaemonSet: %w", err)
+		}
+		return nil
+	}
+
+	updatedJSON, err := marshalRegistryConfig(registryConfig)
+	if err != nil {
+		return fmt.Errorf("failed to marshal updated registry config: %w", err)
+	}
+	existingCM.Data["registries.json"] = updatedJSON
+	return r.Client.Update(ctx, existingCM)
 }
 
 func (r *RegistryReconciler) reconcile(ctx context.Context, registry *registryv1alpha1.ClusterRegistry) (ctrl.Result, error) {
@@ -286,11 +344,25 @@ func (r *RegistryReconciler) reconcile(ctx context.Context, registry *registryv1
 	return ctrl.Result{}, nil
 }
 
-// Reconcile registry namespace
+func (r *RegistryReconciler) reconcileValidation(ctx context.Context, registry *registryv1alpha1.ClusterRegistry) (subReconcilerResult, error) {
+	if err := r.registryBuilder.ValidateConfiguration(ctx, registry); err != nil {
+		meta.SetStatusCondition(&registry.Status.Conditions, metav1.Condition{
+			Type:               string(registryv1alpha1.RegistryReady),
+			Status:             metav1.ConditionFalse,
+			Reason:             "InvalidConfiguration",
+			Message:            err.Error(),
+			ObservedGeneration: registry.Generation,
+		})
+		registry.Status.Phase = registryv1alpha1.RegistryPhaseFailed
+		registry.Status.ObservedGeneration = registry.Generation
+		return resultStop, nil
+	}
+	return resultNil, nil
+}
+
 func (r *RegistryReconciler) reconcileRegistryNamespace(ctx context.Context, registry *registryv1alpha1.ClusterRegistry) (subReconcilerResult, error) {
 	desiredNamespace := corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{Name: registryNamespace},
-		Spec:       corev1.NamespaceSpec{Finalizers: []corev1.FinalizerName{cacheFinalizer}},
 	}
 	existingNamespace := &corev1.Namespace{}
 	if err := r.Client.Get(ctx, client.ObjectKeyFromObject(&desiredNamespace), existingNamespace); err != nil {
@@ -354,7 +426,7 @@ func (r *RegistryReconciler) reconcileRegistryService(ctx context.Context, regis
 		return resultNil, err
 	}
 
-	if err := controllerutil.SetOwnerReference(registry, desiredService, r.Scheme); err != nil {
+	if err := controllerutil.SetControllerReference(registry, desiredService, r.Scheme); err != nil {
 		return resultNil, err
 	}
 
@@ -494,7 +566,9 @@ func (r *RegistryReconciler) reconcileHtPasswordAuthSecret(ctx context.Context, 
 	if err != nil {
 		return resultNil, err
 	}
-	controllerutil.SetOwnerReference(registry, desiredSecret, r.Scheme)
+	if err := controllerutil.SetOwnerReference(registry, desiredSecret, r.Scheme); err != nil {
+		return resultNil, err
+	}
 	existingSecret := &corev1.Secret{}
 	if err := r.Client.Get(ctx, client.ObjectKeyFromObject(desiredSecret), existingSecret); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -503,14 +577,27 @@ func (r *RegistryReconciler) reconcileHtPasswordAuthSecret(ctx context.Context, 
 		return resultNil, err
 	}
 
-	if desiredSecret.StringData[secretKey] != existingSecret.StringData[secretKey] {
-		existingSecret.StringData = desiredSecret.StringData
+	if !htpasswdCredentialsMatch(existingSecret.Data[secretKey], username, password) {
+		existingSecret.Data = desiredSecret.Data
 		if err := r.Client.Update(ctx, existingSecret); err != nil {
 			return resultNil, err
 		}
 	}
 
 	return resultNil, nil
+}
+
+// htpasswdCredentialsMatch checks whether the stored htpasswd entry (format "username:bcrypt_hash")
+// matches the given username and plaintext password without regenerating the bcrypt hash.
+func htpasswdCredentialsMatch(storedEntry []byte, username, password string) bool {
+	parts := strings.SplitN(string(storedEntry), ":", 2)
+	if len(parts) != 2 {
+		return false
+	}
+	if parts[0] != username {
+		return false
+	}
+	return bcrypt.CompareHashAndPassword([]byte(parts[1]), []byte(password)) == nil
 }
 
 func (r *RegistryReconciler) reconcileRegistryConfig(ctx context.Context, registry *registryv1alpha1.ClusterRegistry) (subReconcilerResult, error) {
