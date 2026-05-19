@@ -46,6 +46,7 @@ type ContainerdConfigReconciler struct {
 	Logger        *log.Logger
 	IsLastSuccess bool
 	LastError     string
+	pendingReload bool
 }
 
 // NewContainerdConfigReconciler creates a new reconciler instance
@@ -60,6 +61,9 @@ func NewContainerdConfigReconciler(configDir, configFile, registryPath string, i
 
 // Start begins the reconciliation process and health server
 func (c *ContainerdConfigReconciler) Start(ctx context.Context) {
+	// Start health server before reconciliation so readiness probe is reachable
+	go c.StartHealthServer(ctx)
+
 	// Initial reconciliation
 	if err := c.Reconcile(); err != nil {
 		c.Logger.Printf("Error in initial configuration: %v", err)
@@ -67,9 +71,6 @@ func (c *ContainerdConfigReconciler) Start(ctx context.Context) {
 	} else {
 		c.setHealth(true, "")
 	}
-
-	// Start health server
-	go c.StartHealthServer(ctx)
 
 	// Begin monitoring
 	ticker := time.NewTicker(c.Interval)
@@ -156,17 +157,22 @@ func (c *ContainerdConfigReconciler) Reconcile() error {
 	}
 
 	// Update containerd config
-	needsRestart, err := c.updateContainerdConfig(registries)
+	configChanged, err := c.updateContainerdConfig(registries)
 	if err != nil {
 		return fmt.Errorf("failed to update containerd config: %w", err)
+	}
+	if configChanged {
+		c.pendingReload = true
 	}
 
 	c.Logger.Printf("Updated containerd configuration successfully")
 
-	// Restart containerd if needed
-	if needsRestart {
-		c.Logger.Printf("restarting containerd as config file changed")
-		return c.reloadContainerd()
+	if c.pendingReload {
+		c.Logger.Printf("sending SIGHUP to containerd to reload config")
+		if err := c.reloadContainerd(); err != nil {
+			return err
+		}
+		c.pendingReload = false
 	}
 	return nil
 }
