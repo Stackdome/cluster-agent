@@ -395,6 +395,10 @@ func (z *zotRegistry) BuildRegistryConfigReconcilerDaemonset(ctx context.Context
 								ReadOnlyRootFilesystem:   ptr.To(true),
 								Capabilities: &corev1.Capabilities{
 									Drop: []corev1.Capability{"ALL"},
+									Add: []corev1.Capability{
+										"DAC_OVERRIDE",
+										"KILL",
+									},
 								},
 							},
 							Resources: corev1.ResourceRequirements{
