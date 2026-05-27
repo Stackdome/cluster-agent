@@ -213,10 +213,32 @@ func marshalRegistryConfig(registryConfig *internaltypes.RegistryConfig) (string
 	return string(resBytes), nil
 }
 
+func (r *RegistryReconciler) detectContainerRuntime(ctx context.Context) (reg.RuntimeType, error) {
+	var nodes corev1.NodeList
+	if err := r.Client.List(ctx, &nodes, client.Limit(1)); err != nil {
+		return reg.RuntimeContainerd, fmt.Errorf("failed to list nodes for runtime detection: %w", err)
+	}
+	if len(nodes.Items) == 0 {
+		return reg.RuntimeContainerd, nil
+	}
+	kubeletVersion := nodes.Items[0].Status.NodeInfo.KubeletVersion
+	if strings.Contains(kubeletVersion, "+k3s") {
+		return reg.RuntimeK3s, nil
+	}
+	return reg.RuntimeContainerd, nil
+}
+
 func (r *RegistryReconciler) reconcileSharedRegistryConfigDaemonSet(ctx context.Context, registry *registryv1alpha1.ClusterRegistry) (subReconcilerResult, error) {
 	logger := log.FromContext(ctx)
 	logger.Info("reconciling shared registry config daemonset")
-	desiredDaemonSet := r.registryBuilder.BuildRegistryConfigReconcilerDaemonset(ctx, registry, nodeRegistryAccessConfigMapName, "registries.json")
+
+	runtime, err := r.detectContainerRuntime(ctx)
+	if err != nil {
+		return resultNil, err
+	}
+	logger.Info("detected container runtime", "runtime", runtime)
+
+	desiredDaemonSet := r.registryBuilder.BuildRegistryConfigReconcilerDaemonset(ctx, registry, nodeRegistryAccessConfigMapName, "registries.json", runtime)
 	existingDaemonSet := &appsv1.DaemonSet{}
 	if err := r.Client.Get(ctx, client.ObjectKeyFromObject(desiredDaemonSet), existingDaemonSet); err != nil {
 		if apierrors.IsNotFound(err) {

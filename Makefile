@@ -72,7 +72,7 @@ docker-push: ## Push container images via mage.
 	go run ./cmd/mage build:pushImages
 
 RECONCILER_IMAGE ?= $(IMAGE_REPOSITORY)/registry-config-reconciler
-RECONCILER_TAG ?= v0.0.7
+RECONCILER_TAG ?= v0.0.8
 RECONCILER_ARCH ?= $(shell go env GOARCH)
 
 .PHONY: docker-build-config-reconciler
