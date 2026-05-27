@@ -68,7 +68,7 @@ func newTestRegistry(name string, port int32) *registryv1alpha1.ClusterRegistry 
 func TestBuildRegistryConfigReconcilerDaemonset_Security(t *testing.T) {
 	builder := newTestBuilder(t)
 	reg := newTestRegistry("test-reg", 5000)
-	ds := builder.BuildRegistryConfigReconcilerDaemonset(context.Background(), reg, "test-cm", "registries.json")
+	ds := builder.BuildRegistryConfigReconcilerDaemonset(context.Background(), reg, "test-cm", "registries.json", registry.RuntimeContainerd)
 
 	podSpec := ds.Spec.Template.Spec
 	if !podSpec.HostPID {
@@ -102,7 +102,7 @@ func TestBuildRegistryConfigReconcilerDaemonset_Security(t *testing.T) {
 func TestBuildRegistryConfigReconcilerDaemonset_Labels(t *testing.T) {
 	builder := newTestBuilder(t)
 	reg := newTestRegistry("test-reg", 5000)
-	ds := builder.BuildRegistryConfigReconcilerDaemonset(context.Background(), reg, "test-cm", "registries.json")
+	ds := builder.BuildRegistryConfigReconcilerDaemonset(context.Background(), reg, "test-cm", "registries.json", registry.RuntimeContainerd)
 
 	selectorLabels := ds.Spec.Selector.MatchLabels
 	if _, ok := selectorLabels["demonset-for"]; ok {
@@ -121,7 +121,7 @@ func TestBuildRegistryConfigReconcilerDaemonset_Labels(t *testing.T) {
 func TestBuildRegistryConfigReconcilerDaemonset_Name(t *testing.T) {
 	builder := newTestBuilder(t)
 	reg := newTestRegistry("test-reg", 5000)
-	ds := builder.BuildRegistryConfigReconcilerDaemonset(context.Background(), reg, "test-cm", "registries.json")
+	ds := builder.BuildRegistryConfigReconcilerDaemonset(context.Background(), reg, "test-cm", "registries.json", registry.RuntimeContainerd)
 
 	if ds.Name != registry.RegistryConfigReconcilerDaemonSetName {
 		t.Errorf("DaemonSet name should be %q, got %q", registry.RegistryConfigReconcilerDaemonSetName, ds.Name)
@@ -187,5 +187,127 @@ func TestBuildService(t *testing.T) {
 	}
 	if !strings.Contains(url, "stackdome-registry") {
 		t.Errorf("URL should contain namespace, got %q", url)
+	}
+}
+
+func TestBuildRegistryConfigReconcilerDaemonset_ContainerdRuntime(t *testing.T) {
+	builder := newTestBuilder(t)
+	reg := newTestRegistry("test-reg", 5000)
+	ds := builder.BuildRegistryConfigReconcilerDaemonset(context.Background(), reg, "test-cm", "registries.json", registry.RuntimeContainerd)
+
+	podSpec := ds.Spec.Template.Spec
+
+	var hostPathVolume *corev1.HostPathVolumeSource
+	for _, v := range podSpec.Volumes {
+		if v.HostPath != nil {
+			hostPathVolume = v.HostPath
+			break
+		}
+	}
+	if hostPathVolume == nil {
+		t.Fatal("expected a hostPath volume")
+	}
+	if hostPathVolume.Path != "/etc/containerd" {
+		t.Errorf("hostPath should be /etc/containerd for containerd runtime, got %s", hostPathVolume.Path)
+	}
+	if hostPathVolume.Type == nil || *hostPathVolume.Type != corev1.HostPathDirectory {
+		t.Errorf("hostPath type should be Directory for containerd runtime, got %v", hostPathVolume.Type)
+	}
+
+	container := podSpec.Containers[0]
+	argsStr := strings.Join(container.Args, " ")
+	if !strings.Contains(argsStr, "--runtime=containerd") {
+		t.Errorf("container args should include --runtime=containerd, got %v", container.Args)
+	}
+	if !strings.Contains(argsStr, "--config-dir=/etc/containerd") {
+		t.Errorf("container args should include --config-dir=/etc/containerd, got %v", container.Args)
+	}
+	if !strings.Contains(argsStr, "--config-file=config.toml") {
+		t.Error("container args should include --config-file=config.toml for containerd runtime")
+	}
+
+	var configMount *corev1.VolumeMount
+	for i, vm := range container.VolumeMounts {
+		if vm.Name == "containerd-config" {
+			configMount = &container.VolumeMounts[i]
+			break
+		}
+	}
+	if configMount == nil {
+		t.Fatal("expected containerd-config volume mount")
+	}
+	if configMount.MountPath != "/etc/containerd" {
+		t.Errorf("volumeMount MountPath should be /etc/containerd, got %s", configMount.MountPath)
+	}
+}
+
+func TestBuildRegistryConfigReconcilerDaemonset_K3sRuntime(t *testing.T) {
+	builder := newTestBuilder(t)
+	reg := newTestRegistry("test-reg", 5000)
+	ds := builder.BuildRegistryConfigReconcilerDaemonset(context.Background(), reg, "test-cm", "registries.json", registry.RuntimeK3s)
+
+	podSpec := ds.Spec.Template.Spec
+
+	// Verify hostPath volume points to k3s config directory
+	var hostPathVolume *corev1.HostPathVolumeSource
+	for _, v := range podSpec.Volumes {
+		if v.HostPath != nil {
+			hostPathVolume = v.HostPath
+			break
+		}
+	}
+	if hostPathVolume == nil {
+		t.Fatal("expected a hostPath volume")
+	}
+	if hostPathVolume.Path != "/etc/rancher/k3s" {
+		t.Errorf("hostPath should be /etc/rancher/k3s for k3s runtime, got %s", hostPathVolume.Path)
+	}
+	if hostPathVolume.Type == nil || *hostPathVolume.Type != corev1.HostPathDirectoryOrCreate {
+		t.Errorf("hostPath type should be DirectoryOrCreate for k3s runtime, got %v", hostPathVolume.Type)
+	}
+
+	// Verify container args include k3s runtime flag
+	container := podSpec.Containers[0]
+	argsStr := strings.Join(container.Args, " ")
+	if !strings.Contains(argsStr, "--runtime=k3s") {
+		t.Errorf("container args should include --runtime=k3s, got %v", container.Args)
+	}
+	if !strings.Contains(argsStr, "--config-dir=/etc/rancher/k3s") {
+		t.Errorf("container args should include --config-dir=/etc/rancher/k3s, got %v", container.Args)
+	}
+	if strings.Contains(argsStr, "--config-file=config.toml") {
+		t.Error("container args should NOT include --config-file=config.toml for k3s runtime")
+	}
+
+	// Verify volumeMount points to k3s directory
+	var configMount *corev1.VolumeMount
+	for i, vm := range container.VolumeMounts {
+		if vm.Name == "containerd-config" {
+			configMount = &container.VolumeMounts[i]
+			break
+		}
+	}
+	if configMount == nil {
+		t.Fatal("expected containerd-config volume mount")
+	}
+	if configMount.MountPath != "/etc/rancher/k3s" {
+		t.Errorf("volumeMount MountPath should be /etc/rancher/k3s, got %s", configMount.MountPath)
+	}
+
+	// Security settings should be identical to containerd variant
+	if !podSpec.HostPID {
+		t.Error("HostPID should be true for k3s runtime")
+	}
+	if container.SecurityContext.Capabilities == nil {
+		t.Fatal("capabilities should not be nil")
+	}
+	hasKill := false
+	for _, cap := range container.SecurityContext.Capabilities.Add {
+		if cap == "KILL" {
+			hasKill = true
+		}
+	}
+	if !hasKill {
+		t.Error("KILL capability should be present for k3s runtime")
 	}
 }

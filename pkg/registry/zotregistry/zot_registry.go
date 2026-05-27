@@ -321,7 +321,26 @@ func (z *zotRegistry) BuildService(ctx context.Context, registry *registryv1alph
 	return service, registryURL, nil
 }
 
-func (z *zotRegistry) BuildRegistryConfigReconcilerDaemonset(ctx context.Context, reg *registryv1alpha1.ClusterRegistry, registryConfigCMName string, registryConfigKey string) *appsv1.DaemonSet {
+func (z *zotRegistry) BuildRegistryConfigReconcilerDaemonset(ctx context.Context, reg *registryv1alpha1.ClusterRegistry, registryConfigCMName string, registryConfigKey string, rt registry.RuntimeType) *appsv1.DaemonSet {
+	hostPath := "/etc/containerd"
+	hostPathType := corev1.HostPathDirectory
+	args := []string{
+		"--runtime=containerd",
+		"--config-dir=/etc/containerd",
+		"--config-file=config.toml",
+		"--registry-config=/config/registries.json",
+	}
+
+	if rt == registry.RuntimeK3s {
+		hostPath = "/etc/rancher/k3s"
+		hostPathType = corev1.HostPathDirectoryOrCreate
+		args = []string{
+			"--runtime=k3s",
+			"--config-dir=/etc/rancher/k3s",
+			"--registry-config=/config/registries.json",
+		}
+	}
+
 	desiredDaemonset := appsv1.DaemonSet{
 		ObjectMeta: v1.ObjectMeta{
 			Name:      registry.RegistryConfigReconcilerDaemonSetName,
@@ -365,8 +384,8 @@ func (z *zotRegistry) BuildRegistryConfigReconcilerDaemonset(ctx context.Context
 							Name: "containerd-config",
 							VolumeSource: corev1.VolumeSource{
 								HostPath: &corev1.HostPathVolumeSource{
-									Path: "/etc/containerd",
-									Type: ptr.To(corev1.HostPathDirectory),
+									Path: hostPath,
+									Type: ptr.To(hostPathType),
 								},
 							},
 						},
@@ -375,11 +394,7 @@ func (z *zotRegistry) BuildRegistryConfigReconcilerDaemonset(ctx context.Context
 						{
 							Name:  "containerd-registry-config-reconciler",
 							Image: z.RegistryConfigReconcilerImage,
-							Args: []string{
-								"--config-dir=/etc/containerd",
-								"--config-file=config.toml",
-								"--registry-config=/config/registries.json",
-							},
+							Args: args,
 							ReadinessProbe: &corev1.Probe{
 								ProbeHandler: corev1.ProbeHandler{
 									HTTPGet: &corev1.HTTPGetAction{
@@ -414,7 +429,7 @@ func (z *zotRegistry) BuildRegistryConfigReconcilerDaemonset(ctx context.Context
 							VolumeMounts: []corev1.VolumeMount{
 								{
 									Name:      "containerd-config",
-									MountPath: "/etc/containerd",
+									MountPath: hostPath,
 								},
 								{
 									Name:      "registry-config",

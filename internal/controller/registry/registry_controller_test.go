@@ -240,3 +240,94 @@ var _ = Describe("reconcileRegistryNamespace", func() {
 		Expect(result.resultRequeue).To(BeTrue())
 	})
 })
+
+var _ = Describe("detectContainerRuntime", func() {
+	var (
+		mockCtrl   *gomock.Controller
+		mockClient *mocks.MockClient
+		reconciler *RegistryReconciler
+		ctx        context.Context
+	)
+
+	BeforeEach(func() {
+		mockCtrl = gomock.NewController(GinkgoT())
+		mockClient = mocks.NewMockClient(mockCtrl)
+		ctx = context.Background()
+		reconciler = &RegistryReconciler{
+			Client: mockClient,
+		}
+	})
+
+	AfterEach(func() {
+		mockCtrl.Finish()
+	})
+
+	It("returns RuntimeContainerd for standard kubelet version", func() {
+		mockClient.EXPECT().
+			List(ctx, gomock.AssignableToTypeOf(&corev1.NodeList{}), gomock.Any()).
+			DoAndReturn(func(_ context.Context, list client.ObjectList, _ ...client.ListOption) error {
+				nodeList := list.(*corev1.NodeList)
+				nodeList.Items = []corev1.Node{
+					{
+						Status: corev1.NodeStatus{
+							NodeInfo: corev1.NodeSystemInfo{
+								KubeletVersion: "v1.31.5",
+							},
+						},
+					},
+				}
+				return nil
+			})
+
+		runtime, err := reconciler.detectContainerRuntime(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(runtime).To(Equal(reg.RuntimeContainerd))
+	})
+
+	It("returns RuntimeK3s for k3s kubelet version", func() {
+		mockClient.EXPECT().
+			List(ctx, gomock.AssignableToTypeOf(&corev1.NodeList{}), gomock.Any()).
+			DoAndReturn(func(_ context.Context, list client.ObjectList, _ ...client.ListOption) error {
+				nodeList := list.(*corev1.NodeList)
+				nodeList.Items = []corev1.Node{
+					{
+						Status: corev1.NodeStatus{
+							NodeInfo: corev1.NodeSystemInfo{
+								KubeletVersion: "v1.31.5+k3s1",
+							},
+						},
+					},
+				}
+				return nil
+			})
+
+		runtime, err := reconciler.detectContainerRuntime(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(runtime).To(Equal(reg.RuntimeK3s))
+	})
+
+	It("returns RuntimeContainerd when no nodes exist", func() {
+		mockClient.EXPECT().
+			List(ctx, gomock.AssignableToTypeOf(&corev1.NodeList{}), gomock.Any()).
+			DoAndReturn(func(_ context.Context, list client.ObjectList, _ ...client.ListOption) error {
+				nodeList := list.(*corev1.NodeList)
+				nodeList.Items = []corev1.Node{}
+				return nil
+			})
+
+		runtime, err := reconciler.detectContainerRuntime(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(runtime).To(Equal(reg.RuntimeContainerd))
+	})
+
+	It("returns RuntimeContainerd with error when List fails", func() {
+		mockClient.EXPECT().
+			List(ctx, gomock.AssignableToTypeOf(&corev1.NodeList{}), gomock.Any()).
+			Return(fmt.Errorf("connection refused"))
+
+		runtime, err := reconciler.detectContainerRuntime(ctx)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("failed to list nodes"))
+		Expect(runtime).To(Equal(reg.RuntimeContainerd))
+	})
+})
