@@ -78,6 +78,7 @@ type InitSpec struct {
 // 	WorkspaceStorageName string `json:"workspaceStorageName"`
 // }
 
+// +kubebuilder:validation:XValidation:rule="!self.exposeToPublic || self.fqdn != ''",message="fqdn is required when exposeToPublic is true"
 type Port struct {
 	// +required
 	Number int32 `json:"number"`
@@ -87,8 +88,8 @@ type Port struct {
 	// +optional
 	// +kubebuilder:default=true
 	IsHttp bool `json:"isHttp"`
-	// +required
-	FQDN string `json:"fqdn"`
+	// +optional
+	FQDN string `json:"fqdn,omitempty"`
 }
 
 type EnvironmentVariables struct {
@@ -283,6 +284,9 @@ type ImageSpec struct {
 	// Image reference (e.g., docker.io/myorg/myimage:tag)
 	// +required
 	Image string `json:"image"`
+	// +optional
+	// +kubebuilder:validation:Enum=Always;IfNotPresent;Never
+	ImagePullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
 	// Registry authentication for pulling the image
 	// +optional
 	PullAuth *RegistryAuth `json:"pullAuth,omitempty"`

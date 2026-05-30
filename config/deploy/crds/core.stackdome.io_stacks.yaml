@@ -327,6 +327,14 @@ spec:
                             image:
                               description: Image reference (e.g., docker.io/myorg/myimage:tag)
                               type: string
+                            imagePullPolicy:
+                              description: PullPolicy describes a policy for if/when
+                                to pull a container image
+                              enum:
+                              - Always
+                              - IfNotPresent
+                              - Never
+                              type: string
                             pullAuth:
                               description: Registry authentication for pulling the
                                 image
@@ -380,6 +388,14 @@ spec:
                               properties:
                                 image:
                                   description: Image reference (e.g., docker.io/myorg/myimage:tag)
+                                  type: string
+                                imagePullPolicy:
+                                  description: PullPolicy describes a policy for if/when
+                                    to pull a container image
+                                  enum:
+                                  - Always
+                                  - IfNotPresent
+                                  - Never
                                   type: string
                                 pullAuth:
                                   description: Registry authentication for pulling
@@ -435,9 +451,11 @@ spec:
                                 format: int32
                                 type: integer
                             required:
-                            - fqdn
                             - number
                             type: object
+                            x-kubernetes-validations:
+                            - message: fqdn is required when exposeToPublic is true
+                              rule: '!self.exposeToPublic || self.fqdn != '''''
                           type: array
                         restartRequest:
                           format: date-time

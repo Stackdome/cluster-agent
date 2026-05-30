@@ -156,7 +156,7 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.S
 		c := &deployment.Spec.Template.Spec.Containers[0]
 		c.Name = resource.Name
 		c.Image = *image
-		c.ImagePullPolicy = corev1.PullIfNotPresent
+		c.ImagePullPolicy = resolveImagePullPolicy(resource, *image)
 		c.TerminationMessagePolicy = corev1.TerminationMessageFallbackToLogsOnError
 		c.Command = nilIfEmpty(resource.Spec.Command)
 		c.Args = nilIfEmpty(resource.Spec.Args)
@@ -420,6 +420,22 @@ func (r *workloadReconciler) GetSiblings(ctx context.Context, resource *v1alpha1
 		res[i] = &srList.Items[i]
 	}
 	return res, nil
+}
+
+func resolveImagePullPolicy(resource *v1alpha1.StackResource, image string) corev1.PullPolicy {
+	if resource.Spec.ImageSpec != nil && resource.Spec.ImageSpec.ImagePullPolicy != "" {
+		return resource.Spec.ImageSpec.ImagePullPolicy
+	}
+	ref := image
+	if i := strings.LastIndex(ref, ":"); i >= 0 {
+		tag := ref[i+1:]
+		if tag == "latest" {
+			return corev1.PullAlways
+		}
+	} else {
+		return corev1.PullAlways
+	}
+	return corev1.PullIfNotPresent
 }
 
 func nilIfEmpty[T any](s []T) []T {
