@@ -25,6 +25,7 @@ const (
 
 const (
 	StackdomeServerObjectRevisionAnnotationKey = "stackdome.stackdome.io/stackdome-server-object-revision"
+	StackdomeClusterIssuerAnnotationKey        = "stackdome.io/cluster-issuer"
 )
 
 // StackSpec defines the desired state of a Stack

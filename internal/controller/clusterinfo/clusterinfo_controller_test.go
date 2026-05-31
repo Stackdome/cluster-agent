@@ -29,32 +29,19 @@ func TestClusterInfoController(t *testing.T) {
 	RunSpecs(t, "ClusterInfo Controller Suite")
 }
 
-// mockSubResourceWriter is a manual mock for client.SubResourceWriter.
-type mockSubResourceWriter struct {
-	patchErr error
-}
-
-func (m *mockSubResourceWriter) Create(_ context.Context, _ client.Object, _ client.Object, _ ...client.SubResourceCreateOption) error {
-	return nil
-}
-func (m *mockSubResourceWriter) Update(_ context.Context, _ client.Object, _ ...client.SubResourceUpdateOption) error {
-	return nil
-}
-func (m *mockSubResourceWriter) Patch(_ context.Context, _ client.Object, _ client.Patch, _ ...client.SubResourcePatchOption) error {
-	return m.patchErr
-}
-
 var _ = Describe("ClusterInfoReconciler", func() {
 	var (
-		mockCtrl   *gomock.Controller
-		mockClient *mocks.MockClient
-		reconciler *clusterinfo.ClusterInfoReconciler
-		ctx        context.Context
+		mockCtrl              *gomock.Controller
+		mockClient            *mocks.MockClient
+		mockStatusWriter      *mocks.MockSubResourceWriter
+		reconciler            *clusterinfo.ClusterInfoReconciler
+		ctx                   context.Context
 	)
 
 	BeforeEach(func() {
 		mockCtrl = gomock.NewController(GinkgoT())
 		mockClient = mocks.NewMockClient(mockCtrl)
+		mockStatusWriter = mocks.NewMockSubResourceWriter(mockCtrl)
 		ctx = context.Background()
 		reconciler = &clusterinfo.ClusterInfoReconciler{
 			Client:         mockClient,
@@ -125,7 +112,8 @@ var _ = Describe("ClusterInfoReconciler", func() {
 					List(ctx, gomock.AssignableToTypeOf(&networkv1.IngressClassList{}), gomock.Any()).
 					Return(nil)
 
-				mockClient.EXPECT().Status().Return(&mockSubResourceWriter{})
+				mockStatusWriter.EXPECT().Patch(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil)
+				mockClient.EXPECT().Status().Return(mockStatusWriter)
 
 				_, err := reconciler.Reconcile(ctx, ctrl.Request{
 					NamespacedName: types.NamespacedName{Name: corev1alpha1.ClusterInfoSingletonName},

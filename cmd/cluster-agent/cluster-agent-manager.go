@@ -13,6 +13,7 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 	"k8s.io/utils/ptr"
 
+	cmv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	cnpgv1 "github.com/cloudnative-pg/cloudnative-pg/api/v1"
 	barmancloudv1 "github.com/cloudnative-pg/plugin-barman-cloud/api/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -63,6 +64,7 @@ func init() {
 	utilruntime.Must(cnpgv1.AddToScheme(scheme))
 	utilruntime.Must(barmancloudv1.AddToScheme(scheme))
 	utilruntime.Must(addonsv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(cmv1.AddToScheme(scheme))
 	//+kubebuilder:scaffold:scheme
 }
 
