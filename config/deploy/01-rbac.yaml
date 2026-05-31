@@ -302,6 +302,12 @@ rules:
   - patch
   - delete
 - apiGroups:
+  - cert-manager.io
+  resources:
+  - clusterissuers
+  verbs:
+  - get
+- apiGroups:
   - "barmancloud.cnpg.io"
   resources:
   - objectstores

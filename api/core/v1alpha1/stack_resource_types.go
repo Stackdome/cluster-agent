@@ -31,6 +31,7 @@ type StackResourceStatusCondition string
 
 const (
 	StackResourceStatusAvailable StackResourceStatusCondition = "Available"
+	StackResourceTLSConfigured   StackResourceStatusCondition = "TLSConfigured"
 )
 
 const (
@@ -90,6 +91,8 @@ type Port struct {
 	IsHttp bool `json:"isHttp"`
 	// +optional
 	FQDN string `json:"fqdn,omitempty"`
+	// +optional
+	TLS bool `json:"tls"`
 }
 
 type EnvironmentVariables struct {

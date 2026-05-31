@@ -450,6 +450,8 @@ spec:
                               number:
                                 format: int32
                                 type: integer
+                              tls:
+                                type: boolean
                             required:
                             - number
                             type: object
