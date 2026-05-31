@@ -351,7 +351,7 @@ var _ = Describe("workloadReconciler", func() {
 								{
 									Name:                     "test-resource",
 									Image:                    "busybox:latest",
-									ImagePullPolicy:          corev1.PullIfNotPresent,
+									ImagePullPolicy:          corev1.PullAlways,
 									TerminationMessagePolicy: corev1.TerminationMessageFallbackToLogsOnError,
 									Ports:                    []corev1.ContainerPort{{ContainerPort: 8080}},
 								},
@@ -411,7 +411,7 @@ var _ = Describe("workloadReconciler", func() {
 								{
 									Name:                     "test-resource",
 									Image:                    "old-image:v1",
-									ImagePullPolicy:          corev1.PullIfNotPresent,
+									ImagePullPolicy:          corev1.PullAlways,
 									TerminationMessagePolicy: corev1.TerminationMessageFallbackToLogsOnError,
 									Ports:                    []corev1.ContainerPort{{ContainerPort: 8080}},
 								},
@@ -679,6 +679,41 @@ var _ = Describe("workloadReconciler", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result).To(Equal(resultStop))
 		})
+	})
+
+	Context("resolveImagePullPolicy", func() {
+		DescribeTable("returns the correct pull policy",
+			func(imageSpec *v1alpha1.ImageSpec, image string, expected corev1.PullPolicy) {
+				r := &v1alpha1.StackResource{
+					Spec: v1alpha1.StackResourceSpec{ImageSpec: imageSpec},
+				}
+				Expect(resolveImagePullPolicy(r, image)).To(Equal(expected))
+			},
+			Entry("explicit Always overrides tag",
+				&v1alpha1.ImageSpec{Image: "app:v1.0", ImagePullPolicy: corev1.PullAlways},
+				"app:v1.0", corev1.PullAlways),
+			Entry("explicit Never overrides latest",
+				&v1alpha1.ImageSpec{Image: "app:latest", ImagePullPolicy: corev1.PullNever},
+				"app:latest", corev1.PullNever),
+			Entry("latest tag defaults to Always",
+				&v1alpha1.ImageSpec{Image: "app:latest"},
+				"app:latest", corev1.PullAlways),
+			Entry("no tag defaults to Always",
+				&v1alpha1.ImageSpec{Image: "nginx"},
+				"nginx", corev1.PullAlways),
+			Entry("specific tag defaults to IfNotPresent",
+				&v1alpha1.ImageSpec{Image: "app:v1.2.3"},
+				"app:v1.2.3", corev1.PullIfNotPresent),
+			Entry("sha digest defaults to IfNotPresent",
+				&v1alpha1.ImageSpec{Image: "app:sha-abc123"},
+				"app:sha-abc123", corev1.PullIfNotPresent),
+			Entry("nil imageSpec (build spec) defaults to IfNotPresent for tagged",
+				nil,
+				"registry.local/app:build-abc", corev1.PullIfNotPresent),
+			Entry("nil imageSpec with no tag defaults to Always",
+				nil,
+				"registry.local/app", corev1.PullAlways),
+		)
 	})
 
 	Context("sanitization of failure messages", func() {
