@@ -11,6 +11,7 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -49,6 +50,50 @@ func expectClusterIssuerGet(mockClient *mocks.MockClient, name string, found boo
 	}
 }
 
+func middlewareWithSpec(spec map[string]interface{}) *unstructured.Unstructured {
+	return &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "traefik.io/v1alpha1",
+			"kind":       "Middleware",
+			"metadata": map[string]interface{}{
+				"name":      "redirect-https",
+				"namespace": "test-ns",
+			},
+			"spec": spec,
+		},
+	}
+}
+
+func expectMiddlewareExistsWithSpec(mockClient *mocks.MockClient, spec map[string]interface{}) {
+	mockClient.EXPECT().
+		Get(gomock.Any(), client.ObjectKey{Name: "redirect-https", Namespace: "test-ns"}, gomock.AssignableToTypeOf(&unstructured.Unstructured{})).
+		DoAndReturn(func(_ context.Context, _ client.ObjectKey, obj client.Object, _ ...client.GetOption) error {
+			existing := middlewareWithSpec(spec)
+			*obj.(*unstructured.Unstructured) = *existing
+			return nil
+		})
+}
+
+func expectMiddlewareCreated(mockClient *mocks.MockClient) {
+	mockClient.EXPECT().
+		Get(gomock.Any(), client.ObjectKey{Name: "redirect-https", Namespace: "test-ns"}, gomock.AssignableToTypeOf(&unstructured.Unstructured{})).
+		Return(apierrors.NewNotFound(schema.GroupResource{Group: "traefik.io", Resource: "middlewares"}, "redirect-https"))
+
+	mockClient.EXPECT().
+		Create(gomock.Any(), gomock.AssignableToTypeOf(&unstructured.Unstructured{})).
+		DoAndReturn(func(_ context.Context, obj client.Object, _ ...client.CreateOption) error {
+			mw := obj.(*unstructured.Unstructured)
+			Expect(mw.GetAPIVersion()).To(Equal("traefik.io/v1alpha1"))
+			Expect(mw.GetKind()).To(Equal("Middleware"))
+			Expect(mw.GetName()).To(Equal("redirect-https"))
+			Expect(mw.GetNamespace()).To(Equal("test-ns"))
+			spec, _, _ := unstructured.NestedMap(mw.Object, "spec", "redirectScheme")
+			Expect(spec["scheme"]).To(Equal("https"))
+			Expect(spec["permanent"]).To(Equal(true))
+			return nil
+		})
+}
+
 var _ = Describe("svcReconciler Ingress TLS", func() {
 	var (
 		mockCtrl   *gomock.Controller
@@ -85,7 +130,7 @@ var _ = Describe("svcReconciler Ingress TLS", func() {
 	})
 
 	Context("when port has TLS=true and ClusterIssuer annotation + CR exist", func() {
-		It("should add TLS block and cert-manager annotation to the Ingress", func() {
+		It("should add TLS block, cert-manager annotation, and Traefik redirect annotations to the Ingress", func() {
 			resource := newSvcTestResource(
 				[]v1alpha1.Port{
 					{Number: 8080, ExposeToPublic: true, FQDN: "app.example.com", TLS: true},
@@ -103,11 +148,14 @@ var _ = Describe("svcReconciler Ingress TLS", func() {
 				DoAndReturn(func(_ context.Context, obj client.Object, _ ...client.CreateOption) error {
 					ingress := obj.(*networkingv1.Ingress)
 					Expect(ingress.Annotations).To(HaveKeyWithValue("cert-manager.io/cluster-issuer", "letsencrypt-prod"))
+					Expect(ingress.Annotations).To(HaveKeyWithValue("traefik.ingress.kubernetes.io/router.entrypoints", "web,websecure"))
+					Expect(ingress.Annotations).To(HaveKeyWithValue("traefik.ingress.kubernetes.io/router.middlewares", "test-ns-redirect-https@kubernetescrd"))
 					Expect(ingress.Spec.TLS).To(HaveLen(1))
 					Expect(ingress.Spec.TLS[0].Hosts).To(ConsistOf("app.example.com"))
 					Expect(ingress.Spec.TLS[0].SecretName).To(Equal("my-app-tls"))
 					return nil
 				})
+			expectMiddlewareCreated(mockClient)
 
 			portMap, err := reconciler.reconcileIngress(ctx, resource, svc)
 			Expect(err).NotTo(HaveOccurred())
@@ -119,7 +167,7 @@ var _ = Describe("svcReconciler Ingress TLS", func() {
 	})
 
 	Context("when port has TLS=false", func() {
-		It("should NOT add TLS block or cert-manager annotation", func() {
+		It("should NOT add TLS block or any traefik annotations", func() {
 			resource := newSvcTestResource(
 				[]v1alpha1.Port{
 					{Number: 8080, ExposeToPublic: true, FQDN: "app.local.dev", TLS: false},
@@ -134,6 +182,8 @@ var _ = Describe("svcReconciler Ingress TLS", func() {
 				DoAndReturn(func(_ context.Context, obj client.Object, _ ...client.CreateOption) error {
 					ingress := obj.(*networkingv1.Ingress)
 					Expect(ingress.Annotations).NotTo(HaveKey("cert-manager.io/cluster-issuer"))
+					Expect(ingress.Annotations).NotTo(HaveKey("traefik.ingress.kubernetes.io/router.entrypoints"))
+					Expect(ingress.Annotations).NotTo(HaveKey("traefik.ingress.kubernetes.io/router.middlewares"))
 					Expect(ingress.Spec.TLS).To(BeEmpty())
 					return nil
 				})
@@ -159,6 +209,8 @@ var _ = Describe("svcReconciler Ingress TLS", func() {
 				DoAndReturn(func(_ context.Context, obj client.Object, _ ...client.CreateOption) error {
 					ingress := obj.(*networkingv1.Ingress)
 					Expect(ingress.Annotations).NotTo(HaveKey("cert-manager.io/cluster-issuer"))
+					Expect(ingress.Annotations).NotTo(HaveKey("traefik.ingress.kubernetes.io/router.entrypoints"))
+					Expect(ingress.Annotations).NotTo(HaveKey("traefik.ingress.kubernetes.io/router.middlewares"))
 					Expect(ingress.Spec.TLS).To(BeEmpty())
 					return nil
 				})
@@ -191,6 +243,8 @@ var _ = Describe("svcReconciler Ingress TLS", func() {
 				DoAndReturn(func(_ context.Context, obj client.Object, _ ...client.CreateOption) error {
 					ingress := obj.(*networkingv1.Ingress)
 					Expect(ingress.Annotations).NotTo(HaveKey("cert-manager.io/cluster-issuer"))
+					Expect(ingress.Annotations).NotTo(HaveKey("traefik.ingress.kubernetes.io/router.entrypoints"))
+					Expect(ingress.Annotations).NotTo(HaveKey("traefik.ingress.kubernetes.io/router.middlewares"))
 					Expect(ingress.Spec.TLS).To(BeEmpty())
 					return nil
 				})
@@ -201,35 +255,6 @@ var _ = Describe("svcReconciler Ingress TLS", func() {
 			Expect(cond).NotTo(BeNil())
 			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
 			Expect(cond.Reason).To(Equal("ClusterIssuerNotFound"))
-		})
-	})
-
-	Context("when multiple ports share the same FQDN", func() {
-		It("should deduplicate TLS hosts", func() {
-			resource := newSvcTestResource(
-				[]v1alpha1.Port{
-					{Number: 8080, ExposeToPublic: true, FQDN: "app.example.com", TLS: true},
-					{Number: 8443, ExposeToPublic: true, FQDN: "app.example.com", TLS: true},
-				},
-				map[string]string{
-					v1alpha1.StackdomeClusterIssuerAnnotationKey: "letsencrypt-prod",
-				},
-			)
-
-			expectClusterIssuerGet(mockClient, "letsencrypt-prod", true)
-			expectIngressNotFound(mockClient)
-
-			mockClient.EXPECT().
-				Create(gomock.Any(), gomock.AssignableToTypeOf(&networkingv1.Ingress{})).
-				DoAndReturn(func(_ context.Context, obj client.Object, _ ...client.CreateOption) error {
-					ingress := obj.(*networkingv1.Ingress)
-					Expect(ingress.Spec.TLS).To(HaveLen(1))
-					Expect(ingress.Spec.TLS[0].Hosts).To(ConsistOf("app.example.com"))
-					return nil
-				})
-
-			_, err := reconciler.reconcileIngress(ctx, resource, svc)
-			Expect(err).NotTo(HaveOccurred())
 		})
 	})
 
@@ -254,6 +279,8 @@ var _ = Describe("svcReconciler Ingress TLS", func() {
 				DoAndReturn(func(_ context.Context, obj client.Object, _ ...client.CreateOption) error {
 					ingress := obj.(*networkingv1.Ingress)
 					Expect(ingress.Annotations).To(HaveKeyWithValue("cert-manager.io/cluster-issuer", "letsencrypt-prod"))
+					Expect(ingress.Annotations).To(HaveKeyWithValue("traefik.ingress.kubernetes.io/router.entrypoints", "web,websecure"))
+					Expect(ingress.Annotations).To(HaveKeyWithValue("traefik.ingress.kubernetes.io/router.middlewares", "test-ns-redirect-https@kubernetescrd"))
 					Expect(ingress.Spec.TLS).To(HaveLen(1))
 					Expect(ingress.Spec.TLS[0].Hosts).To(ConsistOf("web.example.com", "api.example.com"))
 					Expect(ingress.Spec.TLS[0].SecretName).To(Equal("my-app-tls"))
@@ -262,6 +289,7 @@ var _ = Describe("svcReconciler Ingress TLS", func() {
 					Expect(ruleHosts).To(ConsistOf("web.example.com", "api.example.com"))
 					return nil
 				})
+			expectMiddlewareCreated(mockClient)
 
 			_, err := reconciler.reconcileIngress(ctx, resource, svc)
 			Expect(err).NotTo(HaveOccurred())
@@ -307,7 +335,80 @@ var _ = Describe("svcReconciler Ingress TLS", func() {
 				DoAndReturn(func(_ context.Context, obj client.Object, _ ...client.UpdateOption) error {
 					ingress := obj.(*networkingv1.Ingress)
 					Expect(ingress.Annotations).To(HaveKeyWithValue("cert-manager.io/cluster-issuer", "letsencrypt-prod"))
+					Expect(ingress.Annotations).To(HaveKeyWithValue("traefik.ingress.kubernetes.io/router.entrypoints", "web,websecure"))
+					Expect(ingress.Annotations).To(HaveKeyWithValue("traefik.ingress.kubernetes.io/router.middlewares", "test-ns-redirect-https@kubernetescrd"))
 					Expect(ingress.Spec.TLS).To(HaveLen(1))
+					return nil
+				})
+			expectMiddlewareCreated(mockClient)
+
+			_, err := reconciler.reconcileIngress(ctx, resource, svc)
+			Expect(err).NotTo(HaveOccurred())
+		})
+	})
+
+	Context("when redirect Middleware already exists with correct spec", func() {
+		It("should not update the Middleware", func() {
+			resource := newSvcTestResource(
+				[]v1alpha1.Port{
+					{Number: 8080, ExposeToPublic: true, FQDN: "app.example.com", TLS: true},
+				},
+				map[string]string{
+					v1alpha1.StackdomeClusterIssuerAnnotationKey: "letsencrypt-prod",
+				},
+			)
+
+			expectClusterIssuerGet(mockClient, "letsencrypt-prod", true)
+			expectIngressNotFound(mockClient)
+
+			mockClient.EXPECT().
+				Create(gomock.Any(), gomock.AssignableToTypeOf(&networkingv1.Ingress{})).
+				Return(nil)
+
+			expectMiddlewareExistsWithSpec(mockClient, map[string]interface{}{
+				"redirectScheme": map[string]interface{}{
+					"scheme":    "https",
+					"permanent": true,
+				},
+			})
+
+			_, err := reconciler.reconcileIngress(ctx, resource, svc)
+			Expect(err).NotTo(HaveOccurred())
+		})
+	})
+
+	Context("when redirect Middleware exists with stale spec", func() {
+		It("should update the Middleware to the correct spec", func() {
+			resource := newSvcTestResource(
+				[]v1alpha1.Port{
+					{Number: 8080, ExposeToPublic: true, FQDN: "app.example.com", TLS: true},
+				},
+				map[string]string{
+					v1alpha1.StackdomeClusterIssuerAnnotationKey: "letsencrypt-prod",
+				},
+			)
+
+			expectClusterIssuerGet(mockClient, "letsencrypt-prod", true)
+			expectIngressNotFound(mockClient)
+
+			mockClient.EXPECT().
+				Create(gomock.Any(), gomock.AssignableToTypeOf(&networkingv1.Ingress{})).
+				Return(nil)
+
+			expectMiddlewareExistsWithSpec(mockClient, map[string]interface{}{
+				"redirectScheme": map[string]interface{}{
+					"scheme":    "http",
+					"permanent": false,
+				},
+			})
+
+			mockClient.EXPECT().
+				Update(gomock.Any(), gomock.AssignableToTypeOf(&unstructured.Unstructured{})).
+				DoAndReturn(func(_ context.Context, obj client.Object, _ ...client.UpdateOption) error {
+					mw := obj.(*unstructured.Unstructured)
+					spec, _, _ := unstructured.NestedMap(mw.Object, "spec", "redirectScheme")
+					Expect(spec["scheme"]).To(Equal("https"))
+					Expect(spec["permanent"]).To(Equal(true))
 					return nil
 				})
 

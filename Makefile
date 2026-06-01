@@ -47,7 +47,7 @@ test: manifests generate fmt vet envtest ## Run tests.
 
 .PHONY: test-unit
 test-unit: ## Run unit tests only (no codegen, no envtest).
-	go test $$(go list ./... | grep -v /e2e | grep -v /test/) -coverprofile cover.out
+	go test $$(go list ./... | grep -v /e2e | grep -v /test/)
 
 .PHONY: test-integration
 test-integration: ## Run integration tests (requires Docker for Kind cluster). Use FOCUS="pattern" to run specific tests.

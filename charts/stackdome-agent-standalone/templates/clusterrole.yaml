@@ -120,6 +120,17 @@ rules:
     - patch
     - create
 - apiGroups:
+    - traefik.io
+  resources:
+    - middlewares
+  verbs:
+    - get
+    - watch
+    - update
+    - list
+    - patch
+    - create
+- apiGroups:
     - apps
   resources:
     - deployments
