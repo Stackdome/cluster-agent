@@ -273,3 +273,17 @@ rules:
     - update
     - patch
     - delete
+- apiGroups:
+    - cert-manager.io
+  resources:
+    - clusterissuers
+    - certificates
+    - certificaterequests
+  verbs:
+    - get
+    - list
+    - watch
+    - create
+    - update
+    - patch
+    - delete

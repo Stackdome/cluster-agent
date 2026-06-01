@@ -305,8 +305,16 @@ rules:
   - cert-manager.io
   resources:
   - clusterissuers
+  - certificates
+  - certificaterequests
   verbs:
   - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
 - apiGroups:
   - "barmancloud.cnpg.io"
   resources:
