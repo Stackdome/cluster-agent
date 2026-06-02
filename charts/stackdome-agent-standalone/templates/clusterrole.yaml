@@ -120,6 +120,17 @@ rules:
     - patch
     - create
 - apiGroups:
+    - traefik.io
+  resources:
+    - middlewares
+  verbs:
+    - get
+    - watch
+    - update
+    - list
+    - patch
+    - create
+- apiGroups:
     - apps
   resources:
     - deployments
@@ -265,6 +276,20 @@ rules:
     - objectstores
     - objectstores/status
     - objectstores/finalizers
+  verbs:
+    - get
+    - list
+    - watch
+    - create
+    - update
+    - patch
+    - delete
+- apiGroups:
+    - cert-manager.io
+  resources:
+    - clusterissuers
+    - certificates
+    - certificaterequests
   verbs:
     - get
     - list

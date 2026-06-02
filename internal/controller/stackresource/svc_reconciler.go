@@ -12,6 +12,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -23,7 +24,20 @@ import (
 	"stackdome.io/cluster-agent/internal/controller"
 )
 
-const certManagerClusterIssuerAnnotation = "cert-manager.io/cluster-issuer"
+const (
+	certManagerClusterIssuerAnnotation = "cert-manager.io/cluster-issuer"
+	traefikEntrypointsAnnotation       = "traefik.ingress.kubernetes.io/router.entrypoints"
+	traefikMiddlewaresAnnotation       = "traefik.ingress.kubernetes.io/router.middlewares"
+	traefikRedirectMiddlewareName      = "redirect-https"
+)
+
+var (
+	managedIngressAnnotations = []string{
+		certManagerClusterIssuerAnnotation,
+		traefikEntrypointsAnnotation,
+		traefikMiddlewaresAnnotation,
+	}
+)
 
 type svcReconciler struct {
 	client.Client
@@ -112,6 +126,11 @@ func (r *svcReconciler) reconcileIngress(
 			if err := r.Client.Create(ctx, desired); err != nil {
 				return nil, err
 			}
+			if len(tls) > 0 {
+				if err := r.ensureRedirectMiddleware(ctx, resource.Namespace); err != nil {
+					return nil, err
+				}
+			}
 			r.setTLSConfiguredIfEnabled(resource, annotations)
 			return nil, nil
 		}
@@ -120,14 +139,17 @@ func (r *svcReconciler) reconcileIngress(
 
 	if r.ingressNeedsUpdate(desired, existing) {
 		existing.Spec = desired.Spec
-		r.syncIssuerAnnotation(existing, annotations[certManagerClusterIssuerAnnotation])
+		r.syncManagedIngressAnnotations(existing, annotations)
 		if err := r.Client.Update(ctx, existing); err != nil {
 			return nil, err
 		}
-		r.setTLSConfiguredIfEnabled(resource, annotations)
-		return nil, nil
 	}
 
+	if len(tls) > 0 {
+		if err := r.ensureRedirectMiddleware(ctx, resource.Namespace); err != nil {
+			return nil, err
+		}
+	}
 	r.setTLSConfiguredIfEnabled(resource, annotations)
 	return portFqdnMap, nil
 }
@@ -162,6 +184,8 @@ func (r *svcReconciler) buildTLSConfig(
 	}
 
 	annotations[certManagerClusterIssuerAnnotation] = issuerName
+	annotations[traefikEntrypointsAnnotation] = "web,websecure"
+	annotations[traefikMiddlewaresAnnotation] = fmt.Sprintf("%s-%s@kubernetescrd", resource.Namespace, traefikRedirectMiddlewareName)
 	tls = []networkingv1.IngressTLS{{
 		Hosts:      lo.Uniq(tlsHosts),
 		SecretName: fmt.Sprintf("%s-tls", resource.Name),
@@ -197,18 +221,63 @@ func (r *svcReconciler) ingressNeedsUpdate(desired, existing *networkingv1.Ingre
 	if !equality.Semantic.DeepEqual(desired.Spec, existing.Spec) {
 		return true
 	}
-	return desired.Annotations[certManagerClusterIssuerAnnotation] != existing.Annotations[certManagerClusterIssuerAnnotation]
+	for _, key := range managedIngressAnnotations {
+		if desired.Annotations[key] != existing.Annotations[key] {
+			return true
+		}
+	}
+	return false
 }
 
-func (r *svcReconciler) syncIssuerAnnotation(ingress *networkingv1.Ingress, issuer string) {
+func (r *svcReconciler) syncManagedIngressAnnotations(ingress *networkingv1.Ingress, desired map[string]string) {
 	if ingress.Annotations == nil {
 		ingress.Annotations = map[string]string{}
 	}
-	if issuer != "" {
-		ingress.Annotations[certManagerClusterIssuerAnnotation] = issuer
-	} else {
-		delete(ingress.Annotations, certManagerClusterIssuerAnnotation)
+	for _, key := range managedIngressAnnotations {
+		if value := desired[key]; value != "" {
+			ingress.Annotations[key] = value
+		} else {
+			delete(ingress.Annotations, key)
+		}
 	}
+}
+
+func (r *svcReconciler) ensureRedirectMiddleware(ctx context.Context, namespace string) error {
+	desired := buildRedirectMiddleware(namespace)
+	existing := &unstructured.Unstructured{}
+	existing.SetGroupVersionKind(desired.GroupVersionKind())
+	key := types.NamespacedName{Name: desired.GetName(), Namespace: desired.GetNamespace()}
+	if err := r.Client.Get(ctx, key, existing); err != nil {
+		if apierrors.IsNotFound(err) {
+			return r.Client.Create(ctx, desired)
+		}
+		return err
+	}
+	if !equality.Semantic.DeepEqual(desired.Object["spec"], existing.Object["spec"]) {
+		existing.Object["spec"] = desired.Object["spec"]
+		return r.Client.Update(ctx, existing)
+	}
+	return nil
+}
+
+func buildRedirectMiddleware(namespace string) *unstructured.Unstructured {
+	mw := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "traefik.io/v1alpha1",
+			"kind":       "Middleware",
+			"metadata": map[string]interface{}{
+				"name":      traefikRedirectMiddlewareName,
+				"namespace": namespace,
+			},
+			"spec": map[string]interface{}{
+				"redirectScheme": map[string]interface{}{
+					"scheme":    "https",
+					"permanent": true,
+				},
+			},
+		},
+	}
+	return mw
 }
 
 func (r *svcReconciler) setTLSConfiguredIfEnabled(resource *v1alpha1.StackResource, annotations map[string]string) {
