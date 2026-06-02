@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
-	"sigs.k8s.io/yaml"
 	"stackdome.io/cluster-agent/internal/types"
 )
 
@@ -37,6 +36,7 @@ var (
 	registryConfig  = flag.String("registry-config", "/config/registries", "Path to registry configuration")
 	monitorInterval = flag.Int("interval", 30, "Monitoring interval in seconds")
 	runtimeType     = flag.String("runtime", "containerd", "Container runtime type (containerd or k3s)")
+	k3sHostsDir     = flag.String("k3s-hosts-dir", "/var/lib/rancher/k3s/agent/etc", "Directory for containerd hosts.toml files (k3s only)")
 )
 
 // ContainerdConfigReconciler manages containerd configuration updates
@@ -357,7 +357,7 @@ func (c *ContainerdConfigReconciler) reconcileHostsConfig(hostsConfigDir string,
 		}
 		currentHostsFilePath := filepath.Join(currentHostDir, "hosts.toml")
 
-		if err := c.createHostsConfig(currentHostsFilePath, registry); err != nil {
+		if err := c.ensureHostsConfig(currentHostsFilePath, registry); err != nil {
 			return err
 		}
 	}
@@ -365,7 +365,7 @@ func (c *ContainerdConfigReconciler) reconcileHostsConfig(hostsConfigDir string,
 }
 
 // createHostsConfig creates a new hosts config file
-func (c *ContainerdConfigReconciler) createHostsConfig(path string, registry Registry) error {
+func (c *ContainerdConfigReconciler) ensureHostsConfig(path string, registry Registry) error {
 	hostsConfig := make(map[string]interface{})
 
 	hostsConfig[fmt.Sprintf("http://%s", registry.ServiceIp)] = map[string]interface{}{
@@ -378,42 +378,14 @@ func (c *ContainerdConfigReconciler) createHostsConfig(path string, registry Reg
 		"host":   hostsConfig,
 	}
 
-	return c.writeConfigTOML(path, config)
-}
-
-// updateExistingHostsConfig updates an existing hosts config file
-func (c *ContainerdConfigReconciler) updateExistingHostsConfig(path string, registries []Registry) error {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return fmt.Errorf("failed to read hosts config: %w", err)
+	var buf strings.Builder
+	if err := toml.NewEncoder(&buf).Encode(config); err != nil {
+		return fmt.Errorf("failed to encode hosts config: %w", err)
 	}
+	desired := buf.String()
 
-	var config map[string]interface{}
-	meta, err := toml.Decode(string(data), &config)
-	if err != nil {
-		return fmt.Errorf("failed to parse hosts config: %w", err)
-	}
-
-	// Check if updates are needed
-	updatesNeeded := false
-	for _, registry := range registries {
-		if !meta.IsDefined("host", registry.Endpoint) {
-			updatesNeeded = true
-			break
-		}
-	}
-
-	if !updatesNeeded {
+	if existing, err := os.ReadFile(path); err == nil && string(existing) == desired {
 		return nil
-	}
-
-	// Update hosts config
-	hostsConfig, _ := c.ensureMapExists(config, "host")
-
-	for _, registry := range registries {
-		hostsConfig[registry.Endpoint] = map[string]interface{}{
-			"capabilities": []string{"pull", "resolve"},
-		}
 	}
 
 	return c.writeConfigTOML(path, config)
@@ -480,76 +452,9 @@ func (c *ContainerdConfigReconciler) reloadContainerd() error {
 	return lastErr
 }
 
-// k3s registry configuration types
-type k3sRegistriesConfig struct {
-	Mirrors map[string]k3sMirror       `json:"mirrors,omitempty"`
-	Configs map[string]k3sRegistryConf `json:"configs,omitempty"`
-}
-
-type k3sMirror struct {
-	Endpoint []string `json:"endpoint,omitempty"`
-}
-
-type k3sRegistryConf struct {
-	TLS k3sTLSConf `json:"tls,omitempty"`
-}
-
-type k3sTLSConf struct {
-	InsecureSkipVerify bool `json:"insecure_skip_verify,omitempty"`
-}
-
 func (c *ContainerdConfigReconciler) reconcileK3sRegistries(registries []Registry) error {
-	registriesYamlPath := filepath.Join(*configDir, "registries.yaml")
-
-	existing := k3sRegistriesConfig{
-		Mirrors: make(map[string]k3sMirror),
-		Configs: make(map[string]k3sRegistryConf),
-	}
-
-	if data, err := os.ReadFile(registriesYamlPath); err == nil {
-		if err := yaml.Unmarshal(data, &existing); err != nil {
-			return fmt.Errorf("failed to parse existing registries.yaml: %w", err)
-		}
-		if existing.Mirrors == nil {
-			existing.Mirrors = make(map[string]k3sMirror)
-		}
-		if existing.Configs == nil {
-			existing.Configs = make(map[string]k3sRegistryConf)
-		}
-	}
-
-	// Build set of managed mirror keys from current registries
-	managedKeys := make(map[string]bool)
-	for _, reg := range registries {
-		u, err := url.Parse(reg.Endpoint)
-		if err != nil {
-			return fmt.Errorf("failed to parse endpoint %s: %w", reg.Endpoint, err)
-		}
-		mirrorKey := u.Host
-		managedKeys[mirrorKey] = true
-		existing.Mirrors[mirrorKey] = k3sMirror{
-			Endpoint: []string{fmt.Sprintf("http://%s", reg.ServiceIp)},
-		}
-		existing.Configs[mirrorKey] = k3sRegistryConf{
-			TLS: k3sTLSConf{InsecureSkipVerify: true},
-		}
-	}
-
-	data, err := yaml.Marshal(existing)
-	if err != nil {
-		return fmt.Errorf("failed to marshal registries.yaml: %w", err)
-	}
-
-	tmpPath := registriesYamlPath + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
-		return fmt.Errorf("failed to write temporary registries.yaml: %w", err)
-	}
-	if err := os.Rename(tmpPath, registriesYamlPath); err != nil {
-		return fmt.Errorf("failed to rename temporary registries.yaml: %w", err)
-	}
-
-	c.Logger.Printf("Updated k3s registries.yaml at %s", registriesYamlPath)
-	return nil
+	hostsTomlDir := filepath.Join(*k3sHostsDir, "containerd", "certs.d")
+	return c.reconcileHostsConfig(hostsTomlDir, registries)
 }
 
 func main() {

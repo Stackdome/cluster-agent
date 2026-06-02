@@ -294,6 +294,39 @@ func TestBuildRegistryConfigReconcilerDaemonset_K3sRuntime(t *testing.T) {
 		t.Errorf("volumeMount MountPath should be /etc/rancher/k3s, got %s", configMount.MountPath)
 	}
 
+	// Verify k3s-agent-certs volume and mount
+	var k3sAgentCertsVolume *corev1.HostPathVolumeSource
+	for _, v := range podSpec.Volumes {
+		if v.Name == "k3s-agent-certs" {
+			k3sAgentCertsVolume = v.HostPath
+			break
+		}
+	}
+	if k3sAgentCertsVolume == nil {
+		t.Fatal("expected k3s-agent-certs hostPath volume")
+	}
+	if k3sAgentCertsVolume.Path != "/var/lib/rancher/k3s/agent/etc" {
+		t.Errorf("k3s-agent-certs hostPath should be /var/lib/rancher/k3s/agent/etc, got %s", k3sAgentCertsVolume.Path)
+	}
+
+	var k3sAgentCertsMount *corev1.VolumeMount
+	for i, vm := range container.VolumeMounts {
+		if vm.Name == "k3s-agent-certs" {
+			k3sAgentCertsMount = &container.VolumeMounts[i]
+			break
+		}
+	}
+	if k3sAgentCertsMount == nil {
+		t.Fatal("expected k3s-agent-certs volume mount")
+	}
+	if k3sAgentCertsMount.MountPath != "/var/lib/rancher/k3s/agent/etc" {
+		t.Errorf("k3s-agent-certs mount path should be /var/lib/rancher/k3s/agent/etc, got %s", k3sAgentCertsMount.MountPath)
+	}
+
+	if !strings.Contains(argsStr, "--k3s-hosts-dir=/var/lib/rancher/k3s/agent/etc") {
+		t.Errorf("container args should include --k3s-hosts-dir=/var/lib/rancher/k3s/agent/etc, got %v", container.Args)
+	}
+
 	// Security settings should be identical to containerd variant
 	if !podSpec.HostPID {
 		t.Error("HostPID should be true for k3s runtime")

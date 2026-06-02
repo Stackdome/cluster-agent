@@ -338,6 +338,7 @@ func (z *zotRegistry) BuildRegistryConfigReconcilerDaemonset(ctx context.Context
 			"--runtime=k3s",
 			"--config-dir=/etc/rancher/k3s",
 			"--registry-config=/config/registries.json",
+			"--k3s-hosts-dir=/var/lib/rancher/k3s/agent/etc",
 		}
 	}
 
@@ -394,7 +395,7 @@ func (z *zotRegistry) BuildRegistryConfigReconcilerDaemonset(ctx context.Context
 						{
 							Name:  "containerd-registry-config-reconciler",
 							Image: z.RegistryConfigReconcilerImage,
-							Args: args,
+							Args:  args,
 							ReadinessProbe: &corev1.Probe{
 								ProbeHandler: corev1.ProbeHandler{
 									HTTPGet: &corev1.HTTPGetAction{
@@ -441,6 +442,25 @@ func (z *zotRegistry) BuildRegistryConfigReconcilerDaemonset(ctx context.Context
 				},
 			},
 		},
+	}
+
+	if rt == registry.RuntimeK3s {
+		hostCertdPath := "/var/lib/rancher/k3s/agent/etc"
+		// add volume and volume mount for k3s agent certs
+		desiredDaemonset.Spec.Template.Spec.Volumes = append(desiredDaemonset.Spec.Template.Spec.Volumes, corev1.Volume{
+			Name: "k3s-agent-certs",
+			VolumeSource: corev1.VolumeSource{
+				HostPath: &corev1.HostPathVolumeSource{
+					Path: hostCertdPath,
+					Type: ptr.To(hostPathType),
+				},
+			},
+		})
+
+		desiredDaemonset.Spec.Template.Spec.Containers[0].VolumeMounts = append(desiredDaemonset.Spec.Template.Spec.Containers[0].VolumeMounts, corev1.VolumeMount{
+			Name:      "k3s-agent-certs",
+			MountPath: hostCertdPath,
+		})
 	}
 
 	return &desiredDaemonset
