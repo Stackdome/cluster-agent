@@ -4,13 +4,14 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
-	"sigs.k8s.io/yaml"
+	"github.com/BurntSushi/toml"
 )
 
-func TestReconcileK3sRegistries_CreatesFromScratch(t *testing.T) {
+func TestReconcileK3sRegistries_CreatesHostsToml(t *testing.T) {
 	tmpDir := t.TempDir()
-	configDir = &tmpDir
+	k3sHostsDir = &tmpDir
 
 	reconciler := NewContainerdConfigReconciler(tmpDir, "config.toml", "/dev/null", 30)
 
@@ -22,54 +23,46 @@ func TestReconcileK3sRegistries_CreatesFromScratch(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	data, err := os.ReadFile(filepath.Join(tmpDir, "registries.yaml"))
+	hostsTomlPath := filepath.Join(tmpDir, "containerd", "certs.d", "zot-registry.stackdome-registry.svc.cluster.local", "hosts.toml")
+	data, err := os.ReadFile(hostsTomlPath)
 	if err != nil {
-		t.Fatalf("failed to read registries.yaml: %v", err)
+		t.Fatalf("expected hosts.toml at %s: %v", hostsTomlPath, err)
 	}
 
-	var config k3sRegistriesConfig
-	if err := yaml.Unmarshal(data, &config); err != nil {
-		t.Fatalf("failed to parse registries.yaml: %v", err)
+	var config map[string]interface{}
+	if _, err := toml.Decode(string(data), &config); err != nil {
+		t.Fatalf("failed to parse hosts.toml: %v", err)
 	}
 
-	mirrorKey := "zot-registry.stackdome-registry.svc.cluster.local"
-	mirror, ok := config.Mirrors[mirrorKey]
+	server, ok := config["server"].(string)
+	if !ok || server != "http://zot-registry.stackdome-registry.svc.cluster.local" {
+		t.Errorf("expected server = registry endpoint, got %v", config["server"])
+	}
+
+	hosts, ok := config["host"].(map[string]interface{})
 	if !ok {
-		t.Fatalf("expected mirror key %q, got keys: %v", mirrorKey, config.Mirrors)
-	}
-	if len(mirror.Endpoint) != 1 || mirror.Endpoint[0] != "http://10.43.1.5" {
-		t.Errorf("expected endpoint [http://10.43.1.5], got %v", mirror.Endpoint)
+		t.Fatal("expected [host] section in hosts.toml")
 	}
 
-	// Verify configs section marks registry as insecure
-	regConf, ok := config.Configs[mirrorKey]
+	hostEntry, ok := hosts["http://10.43.1.5"].(map[string]interface{})
 	if !ok {
-		t.Fatalf("expected configs entry for %q", mirrorKey)
+		t.Fatalf("expected host entry for http://10.43.1.5, got keys: %v", hosts)
 	}
-	if !regConf.TLS.InsecureSkipVerify {
-		t.Error("insecure_skip_verify should be true")
+
+	caps, ok := hostEntry["capabilities"].([]interface{})
+	if !ok || len(caps) != 2 {
+		t.Errorf("expected capabilities [pull, resolve], got %v", hostEntry["capabilities"])
+	}
+
+	skipVerify, ok := hostEntry["skip_verify"].(bool)
+	if !ok || !skipVerify {
+		t.Errorf("expected skip_verify = true, got %v", hostEntry["skip_verify"])
 	}
 }
 
-func TestReconcileK3sRegistries_PreservesUserEntries(t *testing.T) {
+func TestReconcileK3sRegistries_NoopWhenUnchanged(t *testing.T) {
 	tmpDir := t.TempDir()
-	configDir = &tmpDir
-
-	// Write existing registries.yaml with a user-configured mirror
-	existing := k3sRegistriesConfig{
-		Mirrors: map[string]k3sMirror{
-			"docker.io": {
-				Endpoint: []string{"https://my-mirror.example.com"},
-			},
-		},
-	}
-	data, err := yaml.Marshal(existing)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(tmpDir, "registries.yaml"), data, 0644); err != nil {
-		t.Fatal(err)
-	}
+	k3sHostsDir = &tmpDir
 
 	reconciler := NewContainerdConfigReconciler(tmpDir, "config.toml", "/dev/null", 30)
 
@@ -78,27 +71,97 @@ func TestReconcileK3sRegistries_PreservesUserEntries(t *testing.T) {
 	}
 
 	if err := reconciler.reconcileK3sRegistries(registries); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("unexpected error on first call: %v", err)
 	}
 
-	data, err = os.ReadFile(filepath.Join(tmpDir, "registries.yaml"))
+	hostsTomlPath := filepath.Join(tmpDir, "containerd", "certs.d", "zot-registry.stackdome-registry.svc.cluster.local", "hosts.toml")
+	info1, err := os.Stat(hostsTomlPath)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("expected hosts.toml after first call: %v", err)
 	}
 
-	var config k3sRegistriesConfig
-	if err := yaml.Unmarshal(data, &config); err != nil {
-		t.Fatal(err)
+	time.Sleep(1 * time.Second)
+
+	if err := reconciler.reconcileK3sRegistries(registries); err != nil {
+		t.Fatalf("unexpected error on second call: %v", err)
 	}
 
-	// User entry should be preserved
-	if _, ok := config.Mirrors["docker.io"]; !ok {
-		t.Error("user-configured docker.io mirror should be preserved")
+	info2, err := os.Stat(hostsTomlPath)
+	if err != nil {
+		t.Fatalf("expected hosts.toml after second call: %v", err)
 	}
 
-	// Stackdome entry should be added
-	if _, ok := config.Mirrors["zot-registry.stackdome-registry.svc.cluster.local"]; !ok {
-		t.Error("stackdome mirror entry should be added")
+	if info2.ModTime() != info1.ModTime() {
+		t.Error("hosts.toml was rewritten despite no changes — expected noop")
 	}
 }
 
+func TestReconcileK3sRegistries_RewritesOnChange(t *testing.T) {
+	tmpDir := t.TempDir()
+	k3sHostsDir = &tmpDir
+
+	reconciler := NewContainerdConfigReconciler(tmpDir, "config.toml", "/dev/null", 30)
+
+	registries := []Registry{
+		{ServiceIp: "10.43.1.5", Endpoint: "http://zot-registry.stackdome-registry.svc.cluster.local"},
+	}
+
+	if err := reconciler.reconcileK3sRegistries(registries); err != nil {
+		t.Fatalf("unexpected error on first call: %v", err)
+	}
+
+	hostsTomlPath := filepath.Join(tmpDir, "containerd", "certs.d", "zot-registry.stackdome-registry.svc.cluster.local", "hosts.toml")
+	original, err := os.ReadFile(hostsTomlPath)
+	if err != nil {
+		t.Fatalf("expected hosts.toml after first call: %v", err)
+	}
+
+	registries[0].ServiceIp = "10.43.1.99"
+	if err := reconciler.reconcileK3sRegistries(registries); err != nil {
+		t.Fatalf("unexpected error on second call: %v", err)
+	}
+
+	updated, err := os.ReadFile(hostsTomlPath)
+	if err != nil {
+		t.Fatalf("expected hosts.toml after second call: %v", err)
+	}
+
+	if string(updated) == string(original) {
+		t.Error("hosts.toml should have been rewritten after ServiceIp change")
+	}
+
+	var config map[string]interface{}
+	if _, err := toml.Decode(string(updated), &config); err != nil {
+		t.Fatalf("failed to parse updated hosts.toml: %v", err)
+	}
+	hosts := config["host"].(map[string]interface{})
+	if _, ok := hosts["http://10.43.1.99"]; !ok {
+		t.Errorf("expected host entry for new ServiceIp, got keys: %v", hosts)
+	}
+}
+
+func TestReconcileK3sRegistries_MultipleRegistries(t *testing.T) {
+	tmpDir := t.TempDir()
+	k3sHostsDir = &tmpDir
+
+	reconciler := NewContainerdConfigReconciler(tmpDir, "config.toml", "/dev/null", 30)
+
+	registries := []Registry{
+		{ServiceIp: "10.43.1.5", Endpoint: "http://zot-registry.stackdome-registry.svc.cluster.local"},
+		{ServiceIp: "10.43.2.10", Endpoint: "http://second-registry.stackdome-registry.svc.cluster.local"},
+	}
+
+	if err := reconciler.reconcileK3sRegistries(registries); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	for _, reg := range registries {
+		hostsTomlPath := filepath.Join(tmpDir, "containerd", "certs.d", "zot-registry.stackdome-registry.svc.cluster.local", "hosts.toml")
+		if reg.ServiceIp == "10.43.2.10" {
+			hostsTomlPath = filepath.Join(tmpDir, "containerd", "certs.d", "second-registry.stackdome-registry.svc.cluster.local", "hosts.toml")
+		}
+		if _, err := os.Stat(hostsTomlPath); err != nil {
+			t.Errorf("expected hosts.toml for %s at %s: %v", reg.Endpoint, hostsTomlPath, err)
+		}
+	}
+}
