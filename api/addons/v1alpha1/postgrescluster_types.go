@@ -59,6 +59,7 @@ const (
 )
 
 // PostgresClusterSpec defines the desired state of PostgresCluster.
+// +kubebuilder:validation:XValidation:rule="self.replicasSpec.numSynchronousReplicas == 0 || self.replicasSpec.numSynchronousReplicas < self.instances",message="numSynchronousReplicas must be less than the number of instances"
 type PostgresClusterSpec struct {
 	// Size is the number of Postgres instances in the cluster.
 	// +kubebuilder:validation:Minimum=1

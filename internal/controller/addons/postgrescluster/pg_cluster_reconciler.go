@@ -238,7 +238,7 @@ func buildAffinityConfiguration(resource *addonsv1alpha1.PostgresCluster) cnpgv1
 
 func buildPostgresConfiguration(resource *addonsv1alpha1.PostgresCluster) cnpgv1.PostgresConfiguration {
 	pgConfig := cnpgv1.PostgresConfiguration{}
-	if resource.Spec.ReplicasSpec.NumSynchronousReplicas > 0 {
+	if resource.Spec.ReplicasSpec.NumSynchronousReplicas > 0 && resource.Spec.Instances > 1 {
 		pgConfig.Synchronous = &cnpgv1.SynchronousReplicaConfiguration{
 			Method:         cnpgv1.SynchronousReplicaConfigurationMethodAny,
 			Number:         resource.Spec.ReplicasSpec.NumSynchronousReplicas,
