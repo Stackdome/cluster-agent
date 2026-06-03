@@ -314,9 +314,10 @@ spec:
                         operator:
                           description: |-
                             Operator represents a key's relationship to the value.
-                            Valid operators are Exists and Equal. Defaults to Equal.
+                            Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
                             Exists is equivalent to wildcard for value, so that a pod can
                             tolerate all taints of a particular category.
+                            Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
                           type: string
                         tolerationSeconds:
                           description: |-
@@ -430,7 +431,7 @@ spec:
                       Claims lists the names of resources, defined in spec.resourceClaims,
                       that are used by this container.
 
-                      This is an alpha field and requires enabling the
+                      This field depends on the
                       DynamicResourceAllocation feature gate.
 
                       This field is immutable. It can only be set for containers.
@@ -506,6 +507,10 @@ spec:
             - postgreSQLSpec
             - storageSpec
             type: object
+            x-kubernetes-validations:
+            - message: numSynchronousReplicas must be less than the number of instances
+              rule: self.replicasSpec.numSynchronousReplicas == 0 || self.replicasSpec.numSynchronousReplicas
+                < self.instances
           status:
             description: PostgresClusterStatus defines the observed state of PostgresCluster.
             properties:
