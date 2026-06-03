@@ -67,7 +67,7 @@ type PostgresClusterSpec struct {
 	Instances int `json:"instances"`
 	// ReplicasSpec defines the number of synchronous replicas and their configuration.
 	// +optional
-	ReplicasSpec ReplicasSpec `json:"replicasSpec"`
+	ReplicasSpec *ReplicasSpec `json:"replicasSpec,omitempty"`
 	// PostgreSQL version and image configuration
 	// +kubebuilder:validation:Required
 	PostgreSQLSpec *PostgreSQLSpec `json:"postgreSQLSpec"`
