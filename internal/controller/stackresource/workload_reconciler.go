@@ -177,7 +177,7 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.S
 			ic := &deployment.Spec.Template.Spec.InitContainers[0]
 			ic.Name = resource.InitContainerName()
 			ic.Image = initImage
-			ic.ImagePullPolicy = corev1.PullIfNotPresent
+			ic.ImagePullPolicy = resolveImagePullPolicy(resource, initImage)
 			ic.TerminationMessagePolicy = corev1.TerminationMessageFallbackToLogsOnError
 			ic.Command = nilIfEmpty(resource.Spec.Init.Command)
 			ic.Args = nilIfEmpty(resource.Spec.Init.Args)
@@ -422,17 +422,15 @@ func (r *workloadReconciler) GetSiblings(ctx context.Context, resource *v1alpha1
 	return res, nil
 }
 
+// resolveImagePullPolicy returns the pull policy for a container image.
+// Precedence: explicit ImageSpec policy > tag-based inference.
+// Untagged refs and "latest" use PullAlways; all other tags use PullIfNotPresent.
 func resolveImagePullPolicy(resource *v1alpha1.StackResource, image string) corev1.PullPolicy {
 	if resource.Spec.ImageSpec != nil && resource.Spec.ImageSpec.ImagePullPolicy != "" {
 		return resource.Spec.ImageSpec.ImagePullPolicy
 	}
-	ref := image
-	if i := strings.LastIndex(ref, ":"); i >= 0 {
-		tag := ref[i+1:]
-		if tag == "latest" {
-			return corev1.PullAlways
-		}
-	} else {
+
+	if i := strings.LastIndex(image, ":"); i < 0 || image[i+1:] == "latest" {
 		return corev1.PullAlways
 	}
 	return corev1.PullIfNotPresent
