@@ -24,7 +24,7 @@ func SimplePostgresCluster(name string) *addonsv1alpha1.PostgresCluster {
 		},
 		Spec: addonsv1alpha1.PostgresClusterSpec{
 			Instances: 2,
-			ReplicasSpec: addonsv1alpha1.ReplicasSpec{
+			ReplicasSpec: &addonsv1alpha1.ReplicasSpec{
 				NumSynchronousReplicas:           1,
 				SynchronousReplicaDataDurability: addonsv1alpha1.PreferredDataDurability,
 			},
