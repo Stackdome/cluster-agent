@@ -12,9 +12,11 @@ import (
 type StackPhase string
 
 const (
-	StackReady   StackPhase = "Ready"
-	StackPending StackPhase = "Pending"
-	StackFailed  StackPhase = "Failed"
+	StackReady       StackPhase = "Ready"
+	StackPending     StackPhase = "Pending"
+	StackFailed      StackPhase = "Failed"
+	StackDegraded    StackPhase = "Degraded"
+	StackProgressing StackPhase = "Progressing"
 )
 
 type StackCondition string
@@ -23,6 +25,8 @@ const (
 	StackConditionAvailable      StackCondition = "Available"
 	StackConditionResourcesReady StackCondition = "ResourcesReady"
 	StackConditionStalled        StackCondition = "Stalled"
+	StackConditionDegraded       StackCondition = "Degraded"
+	StackConditionProgressing    StackCondition = "Progressing"
 )
 
 type StackSpec struct {

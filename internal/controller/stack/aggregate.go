@@ -72,6 +72,7 @@ func aggregateStackStatus(stack *v1alpha1.Stack, children []v1alpha1.StackResour
 	var missingChildren []string
 	var stalledChildren []string
 	convergedCount := 0
+	availableCount := 0
 
 	for _, name := range stack.Spec.ResourceNames {
 		child, exists := childMap[name]
@@ -124,6 +125,10 @@ func aggregateStackStatus(stack *v1alpha1.Stack, children []v1alpha1.StackResour
 			}
 		}
 
+		if availableCond != nil && availableCond.Status == metav1.ConditionTrue {
+			availableCount++
+		}
+
 		if isStalled(child) {
 			stalledChildren = append(stalledChildren, name)
 		}
@@ -144,12 +149,10 @@ func aggregateStackStatus(stack *v1alpha1.Stack, children []v1alpha1.StackResour
 	status.Resources = summaries
 	status.OrphanedResources = orphanedChildren
 
-	// Every desired resource must be converged. Missing children are never
-	// counted (they don't exist) and stalled children are never converged
-	// (Available=False), so both naturally fail this check without needing
-	// separate guards here — missingChildren/stalledChildren drive the reason
-	// and message in the switch below, not readiness itself.
 	resourcesConverged := convergedCount == len(stack.Spec.ResourceNames)
+	existingDesired := len(stack.Spec.ResourceNames) - len(missingChildren)
+	allDesiredServing := existingDesired > 0 && availableCount == existingDesired && len(missingChildren) == 0
+
 	available := resourcesConverged && len(orphanedChildren) == 0
 
 	// Write lastConverged with a write-once-per-target guard.
@@ -164,41 +167,84 @@ func aggregateStackStatus(stack *v1alpha1.Stack, children []v1alpha1.StackResour
 		}
 	}
 
-	// Derive conditions and the display phase. Exactly one case fires; each sets
-	// all three remaining conditions so they can never drift out of sync. Order
-	// encodes severity: terminal failure first, then full health, then the
-	// specific not-ready reasons.
+	// Compute each condition as an independent boolean. Phase is then derived
+	// by priority: Failed > Progressing > Degraded > Ready > Pending.
+	lc := status.LastConverged
+
+	// Stalled: at least one desired child has a terminal failure (e.g.
+	// unsupported workload type). Always wins for phase (Failed).
+	stalled := len(stalledChildren) > 0
+
+	// Progressing: children exist but aren't converged, and we believe a
+	// rollout is in progress (not stuck). Guards:
+	//   - len(missingChildren) == 0: if CRs haven't been created yet, that's
+	//     Pending, not Progressing — we can't progress what doesn't exist.
+	//   - !stalled: a terminal failure is Failed, not Progressing.
+	//   - The revision check distinguishes "active rollout" from "stuck on the
+	//     same version." In managed mode (!managed is false), we check whether
+	//     the target revision differs from the last converged one:
+	//       lc == nil              → first deploy, nothing has converged yet
+	//       lc.Revision != rootRev → new revision applied since last convergence
+	//     In standalone mode (!managed is true), we skip the revision check
+	//     entirely — there are no revisions to compare, so any non-converged
+	//     non-stalled state is treated as progressing.
+	progressing := !resourcesConverged && len(missingChildren) == 0 && !stalled &&
+		(!managed || lc == nil || lc.Revision != rootRev)
+
+	// Degraded: all children are serving traffic (Available=True) but not all
+	// are fully converged — e.g. a pod restarting within maxUnavailable
+	// tolerance, or a scale-up in progress on the same revision.
+	// Requires lc != nil (has previously converged): a first deploy where pods
+	// are partially up is Progressing, not Degraded. Since LastConverged is
+	// only written for managed stacks, Degraded is effectively managed-only;
+	// standalone pod blips show as Progressing instead.
+	degraded := allDesiredServing && !resourcesConverged && !stalled && lc != nil
+
+	// Compute context-aware reason/message for the not-ready path.
+	notReadyReason, notReadyMsg := "ResourcesNotReady", "not all resources are converged"
+	if len(missingChildren) > 0 {
+		notReadyReason = "MissingResources"
+		notReadyMsg = fmt.Sprintf("missing resources: %s", strings.Join(missingChildren, ", "))
+	} else if stalled {
+		notReadyReason = "ResourceStalled"
+		notReadyMsg = fmt.Sprintf("stalled resources: %s", strings.Join(stalledChildren, ", "))
+	}
+
+	notAvailableReason, notAvailableMsg := notReadyReason, notReadyMsg
+	if len(orphanedChildren) > 0 && resourcesConverged {
+		notAvailableReason = "OrphanedResources"
+		notAvailableMsg = fmt.Sprintf("orphaned resources not in spec.resourceNames: %s", strings.Join(orphanedChildren, ", "))
+	}
+
+	// Set each condition once.
+	setStackCondition(&status, stack.Generation, v1alpha1.StackConditionStalled, stalled, boolStr(stalled, "ResourceStalled", "NotStalled"), boolStr(stalled, notReadyMsg, "no stalled resources"))
+	setStackCondition(&status, stack.Generation, v1alpha1.StackConditionResourcesReady, resourcesConverged, boolStr(resourcesConverged, "AllResourcesReady", notReadyReason), boolStr(resourcesConverged, "all resources converged", notReadyMsg))
+	setStackCondition(&status, stack.Generation, v1alpha1.StackConditionAvailable, available, boolStr(available, "AllResourcesReady", notAvailableReason), boolStr(available, "all resources converged and no orphaned resources", notAvailableMsg))
+	setStackCondition(&status, stack.Generation, v1alpha1.StackConditionDegraded, degraded, boolStr(degraded, "ServingButNotConverged", "NotDegraded"), boolStr(degraded, "all children serving traffic but not all fully converged", "not degraded"))
+	setStackCondition(&status, stack.Generation, v1alpha1.StackConditionProgressing, progressing, boolStr(progressing, "RolloutInProgress", "NotProgressing"), boolStr(progressing, "rollout in progress", "no active rollout"))
+
+	// Phase = highest-priority active state.
 	switch {
-	case len(stalledChildren) > 0:
-		msg := fmt.Sprintf("stalled resources: %s", strings.Join(stalledChildren, ", "))
+	case stalled:
 		status.Phase = v1alpha1.StackFailed
-		setStackCondition(&status, stack.Generation, v1alpha1.StackConditionStalled, true, "ResourceStalled", msg)
-		setStackCondition(&status, stack.Generation, v1alpha1.StackConditionResourcesReady, false, "ResourceStalled", msg)
-		setStackCondition(&status, stack.Generation, v1alpha1.StackConditionAvailable, false, "ResourceStalled", msg)
+	case progressing:
+		status.Phase = v1alpha1.StackProgressing
+	case degraded:
+		status.Phase = v1alpha1.StackDegraded
 	case available:
 		status.Phase = v1alpha1.StackReady
-		setStackCondition(&status, stack.Generation, v1alpha1.StackConditionStalled, false, "NotStalled", "no stalled resources")
-		setStackCondition(&status, stack.Generation, v1alpha1.StackConditionResourcesReady, true, "AllResourcesReady", "all resources converged")
-		setStackCondition(&status, stack.Generation, v1alpha1.StackConditionAvailable, true, "AllResourcesReady", "all resources converged and no orphaned resources")
-	case len(missingChildren) > 0:
-		msg := fmt.Sprintf("missing resources: %s", strings.Join(missingChildren, ", "))
-		status.Phase = v1alpha1.StackPending
-		setStackCondition(&status, stack.Generation, v1alpha1.StackConditionStalled, false, "NotStalled", "no stalled resources")
-		setStackCondition(&status, stack.Generation, v1alpha1.StackConditionResourcesReady, false, "MissingResources", msg)
-		setStackCondition(&status, stack.Generation, v1alpha1.StackConditionAvailable, false, "MissingResources", msg)
-	case len(orphanedChildren) > 0 && resourcesConverged:
-		msg := fmt.Sprintf("orphaned resources not in spec.resourceNames: %s", strings.Join(orphanedChildren, ", "))
-		status.Phase = v1alpha1.StackPending
-		setStackCondition(&status, stack.Generation, v1alpha1.StackConditionStalled, false, "NotStalled", "no stalled resources")
-		setStackCondition(&status, stack.Generation, v1alpha1.StackConditionResourcesReady, true, "AllResourcesReady", "all resources converged")
-		setStackCondition(&status, stack.Generation, v1alpha1.StackConditionAvailable, false, "OrphanedResources", msg)
 	default:
 		status.Phase = v1alpha1.StackPending
-		setStackCondition(&status, stack.Generation, v1alpha1.StackConditionStalled, false, "NotStalled", "no stalled resources")
-		setStackCondition(&status, stack.Generation, v1alpha1.StackConditionResourcesReady, false, "ResourcesNotReady", "not all resources are converged")
-		setStackCondition(&status, stack.Generation, v1alpha1.StackConditionAvailable, false, "ResourcesNotReady", "not all resources are converged")
 	}
+
 	return status
+}
+
+func boolStr(b bool, whenTrue, whenFalse string) string {
+	if b {
+		return whenTrue
+	}
+	return whenFalse
 }
 
 func setStackCondition(status *v1alpha1.StackStatus, generation int64, condType v1alpha1.StackCondition, ready bool, reason, msg string) {

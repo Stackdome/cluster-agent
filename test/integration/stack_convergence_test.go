@@ -184,8 +184,8 @@ var _ = Describe("Stack convergence", func() {
 					return ""
 				}
 				return s.Status.Phase
-			}, readyTimeout, "5s").Should(Equal(corev1alpha1.StackPending),
-				"Stack must stay Pending while child C cannot converge")
+			}, readyTimeout, "5s").Should(Equal(corev1alpha1.StackProgressing),
+				"Stack must be Progressing while child C cannot converge (new revision rolling out)")
 
 			By("Verifying Stack lastConverged still shows root-1 (sticky)")
 			s := &corev1alpha1.Stack{}
@@ -321,10 +321,10 @@ var _ = Describe("Stack convergence", func() {
 				return ""
 			}, readyTimeout, "5s").Should(Equal("no revision annotation (required for release-managed stacks)"))
 
-			By("Verifying Stack is Pending")
+			By("Verifying Stack is Progressing (first deploy, child not converged)")
 			s := &corev1alpha1.Stack{}
 			Expect(c.Get(ctx, client.ObjectKeyFromObject(swr.Stack), s)).To(Succeed())
-			Expect(s.Status.Phase).To(Equal(corev1alpha1.StackPending))
+			Expect(s.Status.Phase).To(Equal(corev1alpha1.StackProgressing))
 
 			By("Cleanup")
 			helpers.CleanupStack(ctx, c, swr.Stack)
@@ -549,10 +549,10 @@ var _ = Describe("Stack convergence", func() {
 			Expect(srA.Status.Replicas).To(BeNumerically(">", srA.Status.AvailableReplicas),
 				"Total replicas should exceed available — the broken new pod exists but isn't serving")
 
-			By("Verifying Stack is Pending with lastConverged still at root-1")
+			By("Verifying Stack is Progressing with lastConverged still at root-1")
 			s := &corev1alpha1.Stack{}
 			Expect(c.Get(ctx, client.ObjectKeyFromObject(stack), s)).To(Succeed())
-			Expect(s.Status.Phase).To(Equal(corev1alpha1.StackPending))
+			Expect(s.Status.Phase).To(Equal(corev1alpha1.StackProgressing))
 			Expect(s.Status.LastConverged).NotTo(BeNil())
 			Expect(s.Status.LastConverged.Revision).To(Equal(root1),
 				"Stack lastConverged must remain at root-1 since SR-A never converged at rev2")
@@ -584,7 +584,7 @@ var _ = Describe("Stack convergence", func() {
 				}
 			}
 
-			By("Verifying Available=False and ResourcesReady=False on the Stack")
+			By("Verifying conditions: Available=False, ResourcesReady=False, Progressing=True, Degraded=True")
 			available := meta.FindStatusCondition(s.Status.Conditions, string(corev1alpha1.StackConditionAvailable))
 			Expect(available).NotTo(BeNil())
 			Expect(available.Status).To(Equal(metav1.ConditionFalse))
@@ -592,6 +592,16 @@ var _ = Describe("Stack convergence", func() {
 			resourcesReady := meta.FindStatusCondition(s.Status.Conditions, string(corev1alpha1.StackConditionResourcesReady))
 			Expect(resourcesReady).NotTo(BeNil())
 			Expect(resourcesReady.Status).To(Equal(metav1.ConditionFalse))
+
+			progressing := meta.FindStatusCondition(s.Status.Conditions, string(corev1alpha1.StackConditionProgressing))
+			Expect(progressing).NotTo(BeNil())
+			Expect(progressing.Status).To(Equal(metav1.ConditionTrue),
+				"Progressing must be True — new revision is being rolled out")
+
+			degraded := meta.FindStatusCondition(s.Status.Conditions, string(corev1alpha1.StackConditionDegraded))
+			Expect(degraded).NotTo(BeNil())
+			Expect(degraded.Status).To(Equal(metav1.ConditionTrue),
+				"Degraded must be True — all children are serving traffic (old pods) but not all are converged")
 		})
 
 		AfterAll(func() {

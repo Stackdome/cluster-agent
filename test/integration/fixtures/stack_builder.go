@@ -61,6 +61,11 @@ func NewResource(stackName, resourceName string, opts ...ResourceOption) *corev1
 // Resource options
 // ---------------------------------------------------------------------------
 
+// WithReplicas sets the replica count for the resource.
+func WithReplicas(n int32) ResourceOption {
+	return func(sr *corev1alpha1.StackResource) { sr.Spec.Replicas = ptr.To(n) }
+}
+
 // WithImage overrides the default container image.
 func WithImage(image string) ResourceOption {
 	return func(sr *corev1alpha1.StackResource) {
