@@ -2,15 +2,13 @@ package stack
 
 import (
 	"context"
-	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/meta"
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -19,40 +17,17 @@ import (
 	"stackdome.io/cluster-agent/internal/controller"
 )
 
-const (
-	ownerKey = ".metadata.owner"
-)
-
-type subReconcilerResult struct {
-	resultNil          bool
-	resultStop         bool
-	resultRequeue      bool
-	resultRequeueAfter *time.Duration
-}
-
-var (
-	resultNil          = subReconcilerResult{resultNil: true}
-	resultStop         = subReconcilerResult{resultStop: true}
-	resultRequeue      = subReconcilerResult{resultRequeue: true}
-	resultRequeueAfter = func(t time.Duration) subReconcilerResult {
-		return subReconcilerResult{resultRequeueAfter: &t}
-	}
-)
-
-type subReconciler func(context.Context, *v1alpha1.Stack) (subReconcilerResult, error)
-
-// StackReconciler reconciles a Stack object
 type StackReconciler struct {
 	client.Client
-	Scheme             *runtime.Scheme
-	subReconcilers     []subReconciler
-	stackResourceQueue chan event.GenericEvent
+	Scheme *runtime.Scheme
+}
+
+func NewStackReconciler(client client.Client, scheme *runtime.Scheme) *StackReconciler {
+	return &StackReconciler{Client: client, Scheme: scheme}
 }
 
 func (r *StackReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	logger := log.FromContext(ctx)
-	logger.WithValues("stack", req.NamespacedName.String())
-	logger.Info("In stack reconciler")
+	logger := log.FromContext(ctx).WithValues("stack", req.NamespacedName.String())
 	ctx = controller.ContextWithLogger(ctx, logger)
 
 	stack := &v1alpha1.Stack{}
@@ -63,88 +38,53 @@ func (r *StackReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, err
 	}
 
-	res, err := r.reconcile(ctx, stack)
-	if err != nil {
-		return res, err
-	}
-
-	// Enqueue child resources.
-	childResources := &v1alpha1.StackResourceList{}
-	if err := r.Client.List(ctx, childResources, client.MatchingFields{ownerKey: req.Name}); err != nil {
+	children := &v1alpha1.StackResourceList{}
+	if err := r.Client.List(ctx, children,
+		client.InNamespace(stack.Namespace),
+		client.MatchingLabels{v1alpha1.LabelStackName: stack.Name},
+	); err != nil {
 		return ctrl.Result{}, err
 	}
 
-	for i := range childResources.Items {
-		r.stackResourceQueue <- event.GenericEvent{Object: &childResources.Items[i]}
+	if adopted, err := r.ensureChildOwnership(ctx, stack, children.Items); err != nil {
+		return ctrl.Result{}, err
+	} else if adopted {
+		return ctrl.Result{Requeue: true}, nil
 	}
-	return res, r.Client.Status().Update(ctx, stack)
-}
 
-func (r *StackReconciler) reconcile(ctx context.Context, stack *v1alpha1.Stack) (ctrl.Result, error) {
-	for _, reconciler := range r.subReconcilers {
-		subReconcilerRes, err := reconciler(ctx, stack)
-		if err != nil {
-			return ctrl.Result{}, err
-		}
-		switch {
-		case subReconcilerRes == resultStop:
-			return ctrl.Result{}, nil
-		case subReconcilerRes == resultRequeue:
-			return ctrl.Result{Requeue: true}, nil
-		case subReconcilerRes.resultRequeueAfter != nil:
-			return ctrl.Result{RequeueAfter: *subReconcilerRes.resultRequeueAfter}, nil
-		}
-	}
-	return ctrl.Result{}, nil
-}
-
-func reportStackNotReady(stack *v1alpha1.Stack, reason string, msg string) {
-	objectRevision, ok := stack.Annotations[v1alpha1.StackdomeServerObjectRevisionAnnotationKey]
-	if ok {
-		stack.Status.ObservedStackdomeServerObjectRevision = objectRevision
-	}
-	stack.Status.ObservedGeneration = stack.Generation
-	stack.Status.Phase = v1alpha1.StackPending
-	meta.SetStatusCondition(&stack.Status.Conditions, v1.Condition{
-		Type:               string(v1alpha1.StackAvailable),
-		Status:             v1.ConditionFalse,
-		ObservedGeneration: stack.Generation,
-		Reason:             reason,
-		Message:            msg,
-	})
+	previousHash := stack.Status.StatusHash
+	stack.Status = aggregateStackStatus(stack, children.Items)
 	stack.Status.StatusHash = stack.StatusHash()
+
+	if stack.Status.StatusHash == previousHash {
+		return ctrl.Result{}, nil
+	}
+	return ctrl.Result{}, r.Client.Status().Update(ctx, stack)
 }
 
-func reportStackReady(stack *v1alpha1.Stack) {
-	objectRevision, ok := stack.Annotations[v1alpha1.StackdomeServerObjectRevisionAnnotationKey]
-	if ok {
-		stack.Status.ObservedStackdomeServerObjectRevision = objectRevision
+// ensureChildOwnership adopts StackResources that match by label but are not
+// owned by this Stack. Returns true if any child was adopted, signalling the
+// caller to requeue so the watch picks up future changes.
+func (r *StackReconciler) ensureChildOwnership(ctx context.Context, stack *v1alpha1.Stack, children []v1alpha1.StackResource) (bool, error) {
+	logger := controller.LoggerFromContext(ctx)
+	adopted := false
+	for i := range children {
+		child := &children[i]
+		if metav1.IsControlledBy(child, stack) {
+			continue
+		}
+		if err := controllerutil.SetControllerReference(stack, child, r.Scheme); err != nil {
+			return adopted, err
+		}
+		if err := r.Client.Update(ctx, child); err != nil {
+			return adopted, err
+		}
+		logger.Info("adopted child StackResource", "stackResource", child.Name)
+		adopted = true
 	}
-	stack.Status.ObservedGeneration = stack.Generation
-	stack.Status.Phase = v1alpha1.StackReady
-	meta.SetStatusCondition(&stack.Status.Conditions, v1.Condition{
-		Type:               string(v1alpha1.StackAvailable),
-		Status:             v1.ConditionTrue,
-		ObservedGeneration: stack.Generation,
-		Reason:             "StackReady",
-		Message:            "All stack resources ready",
-	})
-	stack.Status.StatusHash = stack.StatusHash()
+	return adopted, nil
 }
 
-func NewStackReconciler(client client.Client, scheme *runtime.Scheme, stackResourceQueue chan event.GenericEvent) *StackReconciler {
-	r := &StackReconciler{
-		Client:             client,
-		Scheme:             scheme,
-		stackResourceQueue: stackResourceQueue,
-	}
-	r.subReconcilers = []subReconciler{
-		r.ReconcileStackResources,
-	}
-	return r
-}
-
-// SetupWithManager sets up the controller with the Manager.
 func (r *StackReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.Stack{}).
