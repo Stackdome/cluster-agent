@@ -102,8 +102,8 @@ type EnvVarSource struct {
 }
 
 // +kubebuilder:validation:XValidation:rule="has(self.buildSpec) != has(self.imageSpec)",message="exactly one of buildSpec or imageSpec must be set"
-// +kubebuilder:validation:XValidation:rule="self.workloadType != 'CronJob' || (has(self.schedule) && self.schedule != ”)",message="schedule is required for CronJob workloads"
-// +kubebuilder:validation:XValidation:rule="self.workloadType == 'CronJob' || !has(self.schedule) || self.schedule == ”",message="schedule is only valid for CronJob workloads"
+// +kubebuilder:validation:XValidation:rule="self.workloadType != 'CronJob' || (has(self.schedule) && size(self.schedule) > 0)",message="schedule is required for CronJob workloads"
+// +kubebuilder:validation:XValidation:rule="self.workloadType == 'CronJob' || !has(self.schedule) || size(self.schedule) == 0",message="schedule is only valid for CronJob workloads"
 // +kubebuilder:validation:XValidation:rule="!(self.workloadType in ['Worker','Job','CronJob']) || !has(self.ports) || size(self.ports) == 0",message="Worker, Job, and CronJob workloads cannot declare ports"
 // +kubebuilder:validation:XValidation:rule="self.workloadType in ['Service','StatefulService'] || !has(self.preDeployCommand)",message="preDeployCommand is only valid for Service and StatefulService workloads"
 // +kubebuilder:validation:XValidation:rule="self.workloadType in ['Service','StatefulService'] || !has(self.healthChecks)",message="healthChecks are only valid for Service and StatefulService workloads"
@@ -165,7 +165,7 @@ type InitSpec struct {
 	ImageSpec *ImageSpec `json:"imageSpec"`
 }
 
-// +kubebuilder:validation:XValidation:rule="!self.exposeToPublic || self.fqdn != ”",message="fqdn is required when exposeToPublic is true"
+// +kubebuilder:validation:XValidation:rule="!self.exposeToPublic || size(self.fqdn) > 0",message="fqdn is required when exposeToPublic is true"
 // +kubebuilder:validation:XValidation:rule="self.protocol == 'http' || !self.exposeToPublic",message="only http ports can be exposed to public"
 type Port struct {
 	// +required

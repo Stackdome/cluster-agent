@@ -460,11 +460,6 @@ var _ = Describe("Stack convergence", func() {
 			Expect(readyStack.Status.LastConverged).NotTo(BeNil())
 			Expect(readyStack.Status.LastConverged.Revision).To(Equal(root1))
 
-			By("Verifying AvailableOnce=True at rev1 (first convergence)")
-			availableOnce := meta.FindStatusCondition(readyStack.Status.Conditions, string(corev1alpha1.StackConditionAvailableOnce))
-			Expect(availableOnce).NotTo(BeNil())
-			Expect(availableOnce.Status).To(Equal(metav1.ConditionTrue))
-
 			By("Verifying both SRs converged at their rev1 tokens")
 			for _, name := range []string{resA, resB} {
 				sr := &corev1alpha1.StackResource{}
@@ -527,7 +522,7 @@ var _ = Describe("Stack convergence", func() {
 			Expect(srB.Status.LastConverged).NotTo(BeNil())
 			Expect(srB.Status.LastConverged.Revision).To(Equal(revB2))
 
-			By("Verifying SR-A observed rev2 but is NOT Available")
+			By("Verifying SR-A observed rev2, stays Available on old pods, but is NOT Converged")
 			Eventually(func() string {
 				sr := &corev1alpha1.StackResource{}
 				if err := c.Get(ctx, client.ObjectKey{Name: resA, Namespace: stack.Namespace}, sr); err != nil {
@@ -538,7 +533,12 @@ var _ = Describe("Stack convergence", func() {
 
 			srA := &corev1alpha1.StackResource{}
 			Expect(c.Get(ctx, client.ObjectKey{Name: resA, Namespace: stack.Namespace}, srA)).To(Succeed())
-			Expect(helpers.StackResourceIsAvailable(srA)).To(BeFalse(), "SR-A should NOT be Available (broken image)")
+			Expect(helpers.StackResourceIsAvailable(srA)).To(BeTrue(),
+				"SR-A stays Available — the old rev1 ReplicaSet keeps serving while the broken rev2 image can't pull (tolerant availability)")
+			convergedA := meta.FindStatusCondition(srA.Status.Conditions, string(corev1alpha1.StackResourceConverged))
+			Expect(convergedA).NotTo(BeNil())
+			Expect(convergedA.Status).To(Equal(metav1.ConditionFalse),
+				"SR-A must NOT be Converged — it never rolled out at rev2")
 			Expect(srA.Status.LastConverged).NotTo(BeNil())
 			Expect(srA.Status.LastConverged.Revision).To(Equal(revA1),
 				"SR-A lastConverged must be sticky at rev1 — it never became Ready at rev2")
@@ -592,12 +592,6 @@ var _ = Describe("Stack convergence", func() {
 			resourcesReady := meta.FindStatusCondition(s.Status.Conditions, string(corev1alpha1.StackConditionResourcesReady))
 			Expect(resourcesReady).NotTo(BeNil())
 			Expect(resourcesReady.Status).To(Equal(metav1.ConditionFalse))
-
-			By("Verifying AvailableOnce=True (was converged at root-1, still True even though not available)")
-			availableOnce := meta.FindStatusCondition(s.Status.Conditions, string(corev1alpha1.StackConditionAvailableOnce))
-			Expect(availableOnce).NotTo(BeNil())
-			Expect(availableOnce.Status).To(Equal(metav1.ConditionTrue),
-				"Stack was converged at root-1 — AvailableOnce must remain True")
 		})
 
 		AfterAll(func() {

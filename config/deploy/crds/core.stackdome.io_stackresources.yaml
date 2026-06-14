@@ -625,7 +625,7 @@ spec:
                   type: object
                   x-kubernetes-validations:
                   - message: fqdn is required when exposeToPublic is true
-                    rule: '!self.exposeToPublic || self.fqdn != ”'
+                    rule: '!self.exposeToPublic || size(self.fqdn) > 0'
                   - message: only http ports can be exposed to public
                     rule: self.protocol == 'http' || !self.exposeToPublic
                 type: array
@@ -737,11 +737,11 @@ spec:
             - message: exactly one of buildSpec or imageSpec must be set
               rule: has(self.buildSpec) != has(self.imageSpec)
             - message: schedule is required for CronJob workloads
-              rule: self.workloadType != 'CronJob' || (has(self.schedule) && self.schedule
-                != ”)
+              rule: self.workloadType != 'CronJob' || (has(self.schedule) && size(self.schedule)
+                > 0)
             - message: schedule is only valid for CronJob workloads
-              rule: self.workloadType == 'CronJob' || !has(self.schedule) || self.schedule
-                == ”
+              rule: self.workloadType == 'CronJob' || !has(self.schedule) || size(self.schedule)
+                == 0
             - message: Worker, Job, and CronJob workloads cannot declare ports
               rule: '!(self.workloadType in [''Worker'',''Job'',''CronJob'']) || !has(self.ports)
                 || size(self.ports) == 0'

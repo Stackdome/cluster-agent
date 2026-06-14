@@ -164,10 +164,6 @@ func aggregateStackStatus(stack *v1alpha1.Stack, children []v1alpha1.StackResour
 		}
 	}
 
-	if status.LastConverged != nil {
-		setStackCondition(&status, stack.Generation, v1alpha1.StackConditionAvailableOnce, true, "AvailableOnce", "stack has previously converged")
-	}
-
 	// Derive conditions and the display phase. Exactly one case fires; each sets
 	// all three remaining conditions so they can never drift out of sync. Order
 	// encodes severity: terminal failure first, then full health, then the

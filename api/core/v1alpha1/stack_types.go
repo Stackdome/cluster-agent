@@ -23,7 +23,6 @@ const (
 	StackConditionAvailable      StackCondition = "Available"
 	StackConditionResourcesReady StackCondition = "ResourcesReady"
 	StackConditionStalled        StackCondition = "Stalled"
-	StackConditionAvailableOnce  StackCondition = "AvailableOnce"
 )
 
 type StackSpec struct {
