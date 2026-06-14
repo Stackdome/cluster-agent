@@ -21,7 +21,6 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: Workspace is the Schema for the workspaces API
         properties:
           apiVersion:
             description: |-
@@ -41,458 +40,19 @@ spec:
           metadata:
             type: object
           spec:
-            description: StackSpec defines the desired state of a Stack
             properties:
-              stackResources:
+              resourceNames:
                 items:
-                  properties:
-                    name:
-                      type: string
-                    spec:
-                      description: StackResourceSpec defines the desired state of
-                        a StackResource
-                      properties:
-                        args:
-                          items:
-                            type: string
-                          type: array
-                        buildSpec:
-                          description: Only one of the following fields should be
-                            specified
-                          properties:
-                            buildArgs:
-                              description: Build arguments passed to the Docker build
-                                as --build-arg flags.
-                              items:
-                                properties:
-                                  name:
-                                    type: string
-                                  value:
-                                    type: string
-                                  valueFrom:
-                                    properties:
-                                      secretKeyRef:
-                                        description: SecretKeySelector selects a key
-                                          of a Secret.
-                                        properties:
-                                          key:
-                                            description: The key of the secret to
-                                              select from.  Must be a valid secret
-                                              key.
-                                            type: string
-                                          name:
-                                            default: ""
-                                            description: |-
-                                              Name of the referent.
-                                              This field is effectively required, but due to backwards compatibility is
-                                              allowed to be empty. Instances of this type with an empty value here are
-                                              almost certainly wrong.
-                                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-                                            type: string
-                                          optional:
-                                            description: Specify whether the Secret
-                                              or its key must be defined
-                                            type: boolean
-                                        required:
-                                        - key
-                                        type: object
-                                        x-kubernetes-map-type: atomic
-                                    required:
-                                    - secretKeyRef
-                                    type: object
-                                required:
-                                - name
-                                type: object
-                                x-kubernetes-validations:
-                                - message: exactly one of value or valueFrom must
-                                    be set
-                                  rule: has(self.value) != has(self.valueFrom)
-                              type: array
-                            buildContext:
-                              description: Build Context within the context source.
-                              type: string
-                            dockerFilePath:
-                              description: Path to the docker file within the source
-                                volume.
-                              type: string
-                            registry:
-                              description: Registry specification for pushing the
-                                built image.
-                              properties:
-                                auth:
-                                  properties:
-                                    dockerConfigAuth:
-                                      properties:
-                                        secretKey:
-                                          description: Key inside the secret that
-                                            contains the Docker config JSON
-                                          type: string
-                                        secretRef:
-                                          description: Reference to the secret containing
-                                            the Docker config JSONs
-                                          properties:
-                                            name:
-                                              description: name is unique within a
-                                                namespace to reference a secret resource.
-                                              type: string
-                                            namespace:
-                                              description: namespace defines the space
-                                                within which the secret name must
-                                                be unique.
-                                              type: string
-                                          type: object
-                                          x-kubernetes-map-type: atomic
-                                      required:
-                                      - secretKey
-                                      - secretRef
-                                      type: object
-                                    type:
-                                      type: string
-                                  required:
-                                  - dockerConfigAuth
-                                  - type
-                                  type: object
-                                insecure:
-                                  default: false
-                                  description: Is the registry insecure
-                                  type: boolean
-                                repositoryUrl:
-                                  description: Repository URL for constructing the
-                                    image tag (e.g., docker.io/myorg)
-                                  minLength: 3
-                                  type: string
-                              required:
-                              - repositoryUrl
-                              type: object
-                            sourceContext:
-                              description: Source context where the build context
-                                is present.
-                              properties:
-                                git:
-                                  properties:
-                                    auth:
-                                      properties:
-                                        personalAccessTokenRef:
-                                          description: CredentialSecretKeyPair selects
-                                            username and password keys from a Secret
-                                          properties:
-                                            passwordKey:
-                                              description: PasswordKey is the key
-                                                in the secret for the password
-                                              type: string
-                                            secretRef:
-                                              description: |-
-                                                SecretReference represents a Secret Reference. It has enough information to retrieve secret
-                                                in any namespace
-                                              properties:
-                                                name:
-                                                  description: name is unique within
-                                                    a namespace to reference a secret
-                                                    resource.
-                                                  type: string
-                                                namespace:
-                                                  description: namespace defines the
-                                                    space within which the secret
-                                                    name must be unique.
-                                                  type: string
-                                              type: object
-                                              x-kubernetes-map-type: atomic
-                                            usernameKey:
-                                              description: UsernameKey is the key
-                                                in the secret for the username
-                                              type: string
-                                          required:
-                                          - passwordKey
-                                          - secretRef
-                                          - usernameKey
-                                          type: object
-                                        usernamePasswordAuthRef:
-                                          description: CredentialSecretKeyPair selects
-                                            username and password keys from a Secret
-                                          properties:
-                                            passwordKey:
-                                              description: PasswordKey is the key
-                                                in the secret for the password
-                                              type: string
-                                            secretRef:
-                                              description: |-
-                                                SecretReference represents a Secret Reference. It has enough information to retrieve secret
-                                                in any namespace
-                                              properties:
-                                                name:
-                                                  description: name is unique within
-                                                    a namespace to reference a secret
-                                                    resource.
-                                                  type: string
-                                                namespace:
-                                                  description: namespace defines the
-                                                    space within which the secret
-                                                    name must be unique.
-                                                  type: string
-                                              type: object
-                                              x-kubernetes-map-type: atomic
-                                            usernameKey:
-                                              description: UsernameKey is the key
-                                                in the secret for the username
-                                              type: string
-                                          required:
-                                          - passwordKey
-                                          - secretRef
-                                          - usernameKey
-                                          type: object
-                                      type: object
-                                    repoUrl:
-                                      type: string
-                                  required:
-                                  - repoUrl
-                                  type: object
-                                volume:
-                                  properties:
-                                    name:
-                                      type: string
-                                  required:
-                                  - name
-                                  type: object
-                              type: object
-                            sourceRevision:
-                              description: Current source revision for the build context.
-                              properties:
-                                gitRepo:
-                                  description: |-
-                                    Can be one of the following:
-                                    - git commit hash
-                                    - git branch name
-                                    - git tag name
-                                  properties:
-                                    branch:
-                                      properties:
-                                        HeadSha:
-                                          default: HEAD
-                                          description: |-
-                                            Current commit hash of the branch head.
-                                            default is head
-                                          type: string
-                                        name:
-                                          description: Name of the branch
-                                          type: string
-                                      required:
-                                      - HeadSha
-                                      - name
-                                      type: object
-                                    commit:
-                                      type: string
-                                    tag:
-                                      type: string
-                                  type: object
-                                volume:
-                                  properties:
-                                    currentVolumeHash:
-                                      description: Hash of the contents of the volume.
-                                      type: string
-                                  required:
-                                  - currentVolumeHash
-                                  type: object
-                              type: object
-                          required:
-                          - buildContext
-                          - dockerFilePath
-                          - registry
-                          - sourceContext
-                          - sourceRevision
-                          type: object
-                        command:
-                          items:
-                            type: string
-                          type: array
-                        dependsOn:
-                          description: Other resources this workspace resource depends
-                            on.
-                          items:
-                            type: string
-                          type: array
-                        environmentVariables:
-                          items:
-                            properties:
-                              name:
-                                type: string
-                              value:
-                                type: string
-                            required:
-                            - name
-                            - value
-                            type: object
-                          type: array
-                        imageSpec:
-                          properties:
-                            image:
-                              description: Image reference (e.g., docker.io/myorg/myimage:tag)
-                              type: string
-                            imagePullPolicy:
-                              description: PullPolicy describes a policy for if/when
-                                to pull a container image
-                              enum:
-                              - Always
-                              - IfNotPresent
-                              - Never
-                              type: string
-                            pullAuth:
-                              description: Registry authentication for pulling the
-                                image
-                              properties:
-                                dockerConfigAuth:
-                                  properties:
-                                    secretKey:
-                                      description: Key inside the secret that contains
-                                        the Docker config JSON
-                                      type: string
-                                    secretRef:
-                                      description: Reference to the secret containing
-                                        the Docker config JSONs
-                                      properties:
-                                        name:
-                                          description: name is unique within a namespace
-                                            to reference a secret resource.
-                                          type: string
-                                        namespace:
-                                          description: namespace defines the space
-                                            within which the secret name must be unique.
-                                          type: string
-                                      type: object
-                                      x-kubernetes-map-type: atomic
-                                  required:
-                                  - secretKey
-                                  - secretRef
-                                  type: object
-                                type:
-                                  type: string
-                              required:
-                              - dockerConfigAuth
-                              - type
-                              type: object
-                          required:
-                          - image
-                          type: object
-                        init:
-                          properties:
-                            args:
-                              items:
-                                type: string
-                              type: array
-                            command:
-                              items:
-                                type: string
-                              type: array
-                            imageSpec:
-                              description: If the init step should run a different
-                                image.
-                              properties:
-                                image:
-                                  description: Image reference (e.g., docker.io/myorg/myimage:tag)
-                                  type: string
-                                imagePullPolicy:
-                                  description: PullPolicy describes a policy for if/when
-                                    to pull a container image
-                                  enum:
-                                  - Always
-                                  - IfNotPresent
-                                  - Never
-                                  type: string
-                                pullAuth:
-                                  description: Registry authentication for pulling
-                                    the image
-                                  properties:
-                                    dockerConfigAuth:
-                                      properties:
-                                        secretKey:
-                                          description: Key inside the secret that
-                                            contains the Docker config JSON
-                                          type: string
-                                        secretRef:
-                                          description: Reference to the secret containing
-                                            the Docker config JSONs
-                                          properties:
-                                            name:
-                                              description: name is unique within a
-                                                namespace to reference a secret resource.
-                                              type: string
-                                            namespace:
-                                              description: namespace defines the space
-                                                within which the secret name must
-                                                be unique.
-                                              type: string
-                                          type: object
-                                          x-kubernetes-map-type: atomic
-                                      required:
-                                      - secretKey
-                                      - secretRef
-                                      type: object
-                                    type:
-                                      type: string
-                                  required:
-                                  - dockerConfigAuth
-                                  - type
-                                  type: object
-                              required:
-                              - image
-                              type: object
-                          type: object
-                        ports:
-                          items:
-                            properties:
-                              exposeToPublic:
-                                default: false
-                                type: boolean
-                              fqdn:
-                                type: string
-                              isHttp:
-                                default: true
-                                type: boolean
-                              number:
-                                format: int32
-                                type: integer
-                              tls:
-                                type: boolean
-                            required:
-                            - number
-                            type: object
-                            x-kubernetes-validations:
-                            - message: fqdn is required when exposeToPublic is true
-                              rule: '!self.exposeToPublic || self.fqdn != '''''
-                          type: array
-                        restartRequest:
-                          format: date-time
-                          type: string
-                        stateFul:
-                          type: boolean
-                        volumeMounts:
-                          items:
-                            properties:
-                              destination:
-                                type: string
-                              sourceSubPath:
-                                type: string
-                              sourceVolume:
-                                type: string
-                            required:
-                            - destination
-                            - sourceVolume
-                            type: object
-                          type: array
-                      type: object
-                  required:
-                  - name
-                  - spec
-                  type: object
+                  pattern: ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$
+                  type: string
                 type: array
+                x-kubernetes-list-type: set
             required:
-            - stackResources
+            - resourceNames
             type: object
           status:
-            description: StackStatus defines the observed state of Stack
             properties:
               conditions:
-                description: Conditions is a list of status conditions ths object
-                  is in.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -548,16 +108,71 @@ spec:
                   - type
                   type: object
                 type: array
+              lastConverged:
+                properties:
+                  at:
+                    format: date-time
+                    type: string
+                  releaseId:
+                    type: string
+                  revision:
+                    type: string
+                required:
+                - at
+                - revision
+                type: object
               observedGeneration:
                 format: int64
                 type: integer
-              observedStackdomeServerObjectRevision:
-                description: The most recent generation observed by the controller.
-                type: string
+              orphanedResources:
+                items:
+                  type: string
+                type: array
               phase:
                 default: Pending
                 type: string
+              resources:
+                items:
+                  properties:
+                    availableReplicas:
+                      format: int32
+                      type: integer
+                    convergedRevision:
+                      type: string
+                    lastConverged:
+                      properties:
+                        at:
+                          format: date-time
+                          type: string
+                        revision:
+                          type: string
+                      required:
+                      - at
+                      - revision
+                      type: object
+                    message:
+                      type: string
+                    missing:
+                      type: boolean
+                    name:
+                      type: string
+                    observedRevision:
+                      type: string
+                    phase:
+                      type: string
+                    replicas:
+                      format: int32
+                      type: integer
+                    updatedReplicas:
+                      format: int32
+                      type: integer
+                  required:
+                  - name
+                  type: object
+                type: array
               statusHash:
+                type: string
+              targetRevision:
                 type: string
             type: object
         type: object

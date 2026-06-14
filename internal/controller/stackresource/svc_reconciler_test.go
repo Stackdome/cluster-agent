@@ -133,10 +133,10 @@ var _ = Describe("svcReconciler Ingress TLS", func() {
 		It("should add TLS block, cert-manager annotation, and Traefik redirect annotations to the Ingress", func() {
 			resource := newSvcTestResource(
 				[]v1alpha1.Port{
-					{Number: 8080, ExposeToPublic: true, FQDN: "app.example.com", TLS: true},
+					{Name: "http", Number: 8080, Protocol: "http", ExposeToPublic: true, FQDN: "app.example.com", TLS: true},
 				},
 				map[string]string{
-					v1alpha1.StackdomeClusterIssuerAnnotationKey: "letsencrypt-prod",
+					v1alpha1.ClusterIssuerAnnotation: "letsencrypt-prod",
 				},
 			)
 
@@ -170,7 +170,7 @@ var _ = Describe("svcReconciler Ingress TLS", func() {
 		It("should NOT add TLS block or any traefik annotations", func() {
 			resource := newSvcTestResource(
 				[]v1alpha1.Port{
-					{Number: 8080, ExposeToPublic: true, FQDN: "app.local.dev", TLS: false},
+					{Name: "http", Number: 8080, Protocol: "http", ExposeToPublic: true, FQDN: "app.local.dev", TLS: false},
 				},
 				nil,
 			)
@@ -197,7 +197,7 @@ var _ = Describe("svcReconciler Ingress TLS", func() {
 		It("should skip TLS and set TLSReady=False", func() {
 			resource := newSvcTestResource(
 				[]v1alpha1.Port{
-					{Number: 8080, ExposeToPublic: true, FQDN: "app.example.com", TLS: true},
+					{Name: "http", Number: 8080, Protocol: "http", ExposeToPublic: true, FQDN: "app.example.com", TLS: true},
 				},
 				map[string]string{},
 			)
@@ -228,10 +228,10 @@ var _ = Describe("svcReconciler Ingress TLS", func() {
 		It("should skip TLS and set TLSReady=False", func() {
 			resource := newSvcTestResource(
 				[]v1alpha1.Port{
-					{Number: 8080, ExposeToPublic: true, FQDN: "app.example.com", TLS: true},
+					{Name: "http", Number: 8080, Protocol: "http", ExposeToPublic: true, FQDN: "app.example.com", TLS: true},
 				},
 				map[string]string{
-					v1alpha1.StackdomeClusterIssuerAnnotationKey: "letsencrypt-prod",
+					v1alpha1.ClusterIssuerAnnotation: "letsencrypt-prod",
 				},
 			)
 
@@ -262,12 +262,12 @@ var _ = Describe("svcReconciler Ingress TLS", func() {
 		It("should include all FQDNs in the TLS hosts and create rules for each", func() {
 			resource := newSvcTestResource(
 				[]v1alpha1.Port{
-					{Number: 8080, ExposeToPublic: true, FQDN: "web.example.com", TLS: true},
-					{Number: 9090, ExposeToPublic: true, FQDN: "api.example.com", TLS: true},
-					{Number: 3000, ExposeToPublic: false},
+					{Name: "http", Number: 8080, Protocol: "http", ExposeToPublic: true, FQDN: "web.example.com", TLS: true},
+					{Name: "api", Number: 9090, Protocol: "http", ExposeToPublic: true, FQDN: "api.example.com", TLS: true},
+					{Name: "internal", Number: 3000, Protocol: "http", ExposeToPublic: false},
 				},
 				map[string]string{
-					v1alpha1.StackdomeClusterIssuerAnnotationKey: "letsencrypt-prod",
+					v1alpha1.ClusterIssuerAnnotation: "letsencrypt-prod",
 				},
 			)
 
@@ -303,10 +303,10 @@ var _ = Describe("svcReconciler Ingress TLS", func() {
 		It("should update Ingress when TLS annotation is added", func() {
 			resource := newSvcTestResource(
 				[]v1alpha1.Port{
-					{Number: 8080, ExposeToPublic: true, FQDN: "app.example.com", TLS: true},
+					{Name: "http", Number: 8080, Protocol: "http", ExposeToPublic: true, FQDN: "app.example.com", TLS: true},
 				},
 				map[string]string{
-					v1alpha1.StackdomeClusterIssuerAnnotationKey: "letsencrypt-prod",
+					v1alpha1.ClusterIssuerAnnotation: "letsencrypt-prod",
 				},
 			)
 
@@ -351,10 +351,10 @@ var _ = Describe("svcReconciler Ingress TLS", func() {
 		It("should not update the Middleware", func() {
 			resource := newSvcTestResource(
 				[]v1alpha1.Port{
-					{Number: 8080, ExposeToPublic: true, FQDN: "app.example.com", TLS: true},
+					{Name: "http", Number: 8080, Protocol: "http", ExposeToPublic: true, FQDN: "app.example.com", TLS: true},
 				},
 				map[string]string{
-					v1alpha1.StackdomeClusterIssuerAnnotationKey: "letsencrypt-prod",
+					v1alpha1.ClusterIssuerAnnotation: "letsencrypt-prod",
 				},
 			)
 
@@ -381,10 +381,10 @@ var _ = Describe("svcReconciler Ingress TLS", func() {
 		It("should update the Middleware to the correct spec", func() {
 			resource := newSvcTestResource(
 				[]v1alpha1.Port{
-					{Number: 8080, ExposeToPublic: true, FQDN: "app.example.com", TLS: true},
+					{Name: "http", Number: 8080, Protocol: "http", ExposeToPublic: true, FQDN: "app.example.com", TLS: true},
 				},
 				map[string]string{
-					v1alpha1.StackdomeClusterIssuerAnnotationKey: "letsencrypt-prod",
+					v1alpha1.ClusterIssuerAnnotation: "letsencrypt-prod",
 				},
 			)
 

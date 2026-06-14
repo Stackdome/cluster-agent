@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	TestNamespace    = "pg-integration-test"
+	TestNamespace    = "stackdome-cluster-agent-integration-test"
 	ImageCatalogName = "postgres-catalog"
 	PostgreSQLImage  = "ghcr.io/cloudnative-pg/postgresql:16"
 	PostgreSQLMajor  = 16

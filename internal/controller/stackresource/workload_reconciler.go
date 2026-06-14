@@ -12,6 +12,7 @@ import (
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -19,11 +20,12 @@ import (
 	"stackdome.io/cluster-agent/api/core/v1alpha1"
 	storagev1alpha1 "stackdome.io/cluster-agent/api/storage/v1alpha1"
 	"stackdome.io/cluster-agent/internal/controller"
-	"stackdome.io/cluster-agent/pkg/interpolation"
 )
 
 const (
-	deploymentRevisionAnnotation                     = "deployment.kubernetes.io/revision"
+	deploymentRevisionAnnotation = "deployment.kubernetes.io/revision"
+	// After a new ReplicaSet becomes available, wait this long before declaring the
+	// rollout settled. Gives pods time to crash so we can capture failure details.
 	deploymentGracePeriodAfterNewReplicaSetAvailable = 3 * time.Minute
 )
 
@@ -39,6 +41,10 @@ type workloadReconciler struct {
 	uncachedClient    client.Client
 }
 
+// ---------------------------------------------------------------------------
+// Labels and naming
+// ---------------------------------------------------------------------------
+
 func GetDeploymentNameForResource(resource *v1alpha1.StackResource) string {
 	return resource.Name
 }
@@ -48,6 +54,40 @@ func GetDeploymentLabelForResource(resource *v1alpha1.StackResource) map[string]
 		"resource": GetDeploymentNameForResource(resource),
 	}
 }
+
+// identityLabels copies the Stackdome identity labels from the StackResource
+// onto child objects (Deployment, Service) so the Stack controller can discover
+// them and so they appear in label-based queries.
+func identityLabels(resource *v1alpha1.StackResource) map[string]string {
+	out := map[string]string{}
+	for _, key := range []string{
+		v1alpha1.LabelManagedBy,
+		v1alpha1.LabelStackName,
+		v1alpha1.LabelStackID,
+		v1alpha1.LabelResourceName,
+		v1alpha1.LabelResourceID,
+	} {
+		if val, ok := resource.Labels[key]; ok {
+			out[key] = val
+		}
+	}
+	return out
+}
+
+func mergeLabels(base map[string]string, extra map[string]string) map[string]string {
+	out := make(map[string]string, len(base)+len(extra))
+	for k, v := range base {
+		out[k] = v
+	}
+	for k, v := range extra {
+		out[k] = v
+	}
+	return out
+}
+
+// ---------------------------------------------------------------------------
+// Image resolution
+// ---------------------------------------------------------------------------
 
 func (r *workloadReconciler) getImageBuild(ctx context.Context, resource *v1alpha1.StackResource) (*buildsv1alpha1.ImageBuild, error) {
 	existingApplicationBuild := &buildsv1alpha1.ImageBuild{}
@@ -74,51 +114,85 @@ func (r *workloadReconciler) getImageForResource(ctx context.Context, resource *
 	return ptr.To(resource.Spec.ImageSpec.Image), nil
 }
 
+// ---------------------------------------------------------------------------
+// Top-level reconcile: gates → workload type dispatch
+// ---------------------------------------------------------------------------
+
+// reconcile runs the pre-flight checks (dependencies, volume mounts, image
+// build) and then dispatches to the workload-type-specific reconciler.
 func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.StackResource) (subReconcilerResult, error) {
 	logger := controller.LoggerFromContext(ctx)
-	logger.Info("in workload reconciler for")
-	logger.Info(resource.Name)
+	logger.Info("in workload reconciler", "resource", resource.Name)
 
+	// --- Gate: sibling dependencies ---
 	canRun, message, err := r.DependencyChecker.DependenciesAvailable(ctx, resource)
 	if err != nil {
 		return resultNil, err
 	}
 	if !canRun {
-		// Our dependencies are not yet ready, we will run when our dependencies are available.
+		setResourceCondition(resource, v1alpha1.StackResourceDependenciesReady, false, "DependenciesNotReady", message)
 		reportStackResourceNotReady(resource, "DependenciesNotReady", message)
-		// We need to requeue this request because we dont get requeued automatically when the other dependencies are
-		// ready/updated.
 		return resultRequeueAfter(DefaultRequeueTime), nil
 	}
 
+	// --- Gate: volume mounts ---
 	volumeMountsReady, message, err := r.DependencyChecker.VolumeMountsReadyForUse(ctx, resource)
 	if err != nil {
 		logger.Error(err, "failed to check if volume mounts are ready for use")
 	}
 	if !volumeMountsReady {
-		logger.Info("volume mounts are not ready for use")
+		setResourceCondition(resource, v1alpha1.StackResourceDependenciesReady, false, "VolumeMountsNotReady", message)
 		reportStackResourceNotReady(resource, "VolumeMountsNotReady", message)
 		return resultRequeueAfter(DefaultRequeueTime), nil
 	}
 
+	setResourceCondition(resource, v1alpha1.StackResourceDependenciesReady, true, "DependenciesReady", "dependencies and volume mounts ready")
+
+	// --- Gate: image build (only for build-from-source resources) ---
 	if resource.Spec.BuildSpec != nil {
 		currentApplicationBuild, err := r.getImageBuild(ctx, resource)
 		if err != nil {
 			return resultNil, err
 		}
-
 		if !imageBuildComplete(currentApplicationBuild) {
+			setResourceCondition(resource, v1alpha1.StackResourceBuildReady, false, "BuildNotReady", "application build is not yet ready")
 			reportStackResourceNotReady(resource, "ApplicationBuildNotYetReady", "Application build is not yet ready")
 			return resultStop, nil
 		}
+		setResourceCondition(resource, v1alpha1.StackResourceBuildReady, true, "BuildReady", "application build complete")
 	}
+
+	// --- Dispatch by workload type ---
+	switch resource.Spec.WorkloadType {
+	case v1alpha1.WorkloadTypeService, v1alpha1.WorkloadTypeWorker, "":
+		return r.reconcileDeployment(ctx, resource)
+	case v1alpha1.WorkloadTypeStatefulService, v1alpha1.WorkloadTypeJob, v1alpha1.WorkloadTypeCronJob:
+		reportStackResourceFailed(resource, "WorkloadTypeNotSupported",
+			fmt.Sprintf("workload type %q is not yet supported", resource.Spec.WorkloadType))
+		return resultStop, nil
+	default:
+		return resultNil, fmt.Errorf("unknown workload type: %s", resource.Spec.WorkloadType)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Deployment reconciliation
+// ---------------------------------------------------------------------------
+
+// reconcileDeployment creates or updates the Deployment for a StackResource,
+// then evaluates the rollout status to set conditions and decide whether to
+// continue to the next sub-reconciler (svc) or requeue.
+//
+// Status flow:
+//  1. Apply desired deployment spec via CreateOrUpdate
+//  2. Sync replica counts from the Deployment into StackResource status
+//  3. Evaluate Converged condition (all replicas updated, ready, available)
+//  4. Evaluate Available condition (rollout complete and serving traffic)
+//  5. If not available: capture crash details and decide requeue vs stop
+func (r *workloadReconciler) reconcileDeployment(ctx context.Context, resource *v1alpha1.StackResource) (subReconcilerResult, error) {
+	logger := controller.LoggerFromContext(ctx)
 
 	volumeMountInfo, err := r.getVolumeMountInfoMap(ctx, resource)
-	if err != nil {
-		return resultNil, err
-	}
-
-	siblings, err := r.GetSiblings(ctx, resource)
 	if err != nil {
 		return resultNil, err
 	}
@@ -128,12 +202,21 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.S
 		return resultNil, err
 	}
 
-	interpolatedEnvVars, err := r.interpolateEnvVars(resource, siblings)
-	if err != nil {
-		return resultNil, fmt.Errorf("failed to interpolate env vars: %w", err)
+	envVars := buildEnvVars(resource)
+	needsRestart := r.requiresRestart(resource)
+
+	replicas := ptr.To(int32(1))
+	if resource.Spec.Replicas != nil {
+		replicas = resource.Spec.Replicas
 	}
 
-	needsRestart := r.requiresRestart(resource)
+	probes, err := buildProbes(resource)
+	if err != nil {
+		reportStackResourceFailed(resource, "InvalidSpec", err.Error())
+		return resultStop, nil
+	}
+
+	// --- Apply desired deployment spec ---
 
 	deployment := &appsv1.Deployment{
 		ObjectMeta: v1.ObjectMeta{
@@ -143,67 +226,18 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.S
 	}
 
 	op, err := controllerutil.CreateOrUpdate(ctx, r.Client, deployment, func() error {
-		deployment.Spec.Selector = &v1.LabelSelector{
-			MatchLabels: GetDeploymentLabelForResource(resource),
-		}
-		deployment.Spec.Strategy.Type = appsv1.RollingUpdateDeploymentStrategyType
-		deployment.Spec.ProgressDeadlineSeconds = ptr.To(int32(300))
-		deployment.Spec.Template.ObjectMeta.Labels = GetDeploymentLabelForResource(resource)
-
-		if len(deployment.Spec.Template.Spec.Containers) == 0 {
-			deployment.Spec.Template.Spec.Containers = []corev1.Container{{}}
-		}
-		c := &deployment.Spec.Template.Spec.Containers[0]
-		c.Name = resource.Name
-		c.Image = *image
-		c.ImagePullPolicy = resolveImagePullPolicy(resource, *image)
-		c.TerminationMessagePolicy = corev1.TerminationMessageFallbackToLogsOnError
-		c.Command = nilIfEmpty(resource.Spec.Command)
-		c.Args = nilIfEmpty(resource.Spec.Args)
-		c.Ports = nilIfEmpty(InterpolatedContainerPorts(resource))
-		c.Env = nilIfEmpty(interpolatedEnvVars)
-		c.VolumeMounts = nilIfEmpty(InterpolatedVolumeMountList(resource))
-
-		deployment.Spec.Template.Spec.Volumes = nilIfEmpty(InterpolatedVolumesList(resource, volumeMountInfo))
-
-		if resource.Spec.Init != nil {
-			initImage := *image
-			if resource.Spec.Init.ImageSpec != nil {
-				initImage = resource.Spec.Init.ImageSpec.Image
-			}
-			if len(deployment.Spec.Template.Spec.InitContainers) == 0 {
-				deployment.Spec.Template.Spec.InitContainers = []corev1.Container{{}}
-			}
-			ic := &deployment.Spec.Template.Spec.InitContainers[0]
-			ic.Name = resource.InitContainerName()
-			ic.Image = initImage
-			ic.ImagePullPolicy = resolveImagePullPolicy(resource, initImage)
-			ic.TerminationMessagePolicy = corev1.TerminationMessageFallbackToLogsOnError
-			ic.Command = nilIfEmpty(resource.Spec.Init.Command)
-			ic.Args = nilIfEmpty(resource.Spec.Init.Args)
-			ic.Env = nilIfEmpty(interpolatedEnvVars)
-			ic.VolumeMounts = nilIfEmpty(InterpolatedVolumeMountList(resource))
-		} else {
-			deployment.Spec.Template.Spec.InitContainers = nil
-		}
-
+		r.applyDeploymentSpec(deployment, resource, *image, replicas, envVars, probes, volumeMountInfo, needsRestart)
 		if err := r.setImagePullSecret(ctx, resource, deployment); err != nil {
 			return err
 		}
-
-		if needsRestart {
-			if deployment.Spec.Template.Annotations == nil {
-				deployment.Spec.Template.Annotations = make(map[string]string)
-			}
-			deployment.Spec.Template.Annotations[v1alpha1.RestartResourceAnnotation] = v1.Now().UTC().String()
-		}
-
 		return controllerutil.SetControllerReference(resource, deployment, r.Scheme)
 	})
 	if err != nil {
 		return resultNil, err
 	}
 
+	// A restart forces a pod template annotation change; mark not-ready so the
+	// next reconcile re-evaluates once the rollout begins.
 	if needsRestart {
 		resource.Status.LastRestartRequestProcessedAt = ptr.To(v1.NewTime(time.Now().UTC()))
 		reportStackResourceNotReady(resource, "StackResourceDeploymentNotReady", "StackResourceDeploymentNotReady")
@@ -211,37 +245,46 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.S
 	}
 
 	logger.Info("deployment reconciled", "operation", op)
-	currentDeploymentRevision := deployment.Annotations[deploymentRevisionAnnotation]
 
-	if controller.DeploymentAvailable(deployment) {
+	// --- Sync replica counts ---
+	resource.Status.Replicas = deployment.Status.Replicas
+	resource.Status.AvailableReplicas = deployment.Status.AvailableReplicas
+	resource.Status.UpdatedReplicas = deployment.Status.UpdatedReplicas
+
+	// --- Evaluate convergence ---
+	//
+	// Converged = every replica is on the new spec, ready, and available.
+	// This is the condition the Stack controller uses to determine if a child
+	// StackResource is healthy. It's strictly stronger than Available: a
+	// scale-up in progress can be Available (serving traffic) but not Converged.
+	r.evaluateConvergence(resource, deployment)
+
+	// --- Evaluate availability ---
+	//
+	// Serving = deployment controller has observed the current generation AND
+	// at least minAvailable pods are up (Available=True condition). This gates
+	// whether the svc reconciler runs next to create/update the Service and
+	// Ingress. Convergence (checked above) is the stricter signal used by the
+	// Stack controller for release gating.
+	if deploymentServing(deployment) {
+		setResourceCondition(resource, v1alpha1.StackResourceWorkloadAvailable, true, "DeploymentServing", "deployment serving at minimum availability")
 		resource.Status.LastFailureDetails = nil
-		resource.Status.LastFailureRevision = ""
+		resource.Status.LastFailureDeploymentRevision = ""
 		return resultNil, nil
 	}
 
-	logger.Info("deployment not ready")
+	// --- Not serving: capture failures and decide requeue ---
+	logger.Info("deployment not serving")
+	setResourceCondition(resource, v1alpha1.StackResourceWorkloadAvailable, false, "DeploymentNotAvailable", "deployment is not yet available")
 
-	// Attempt to capture crash details for the current revision. We only do the expensive
-	// pod listing when LastFailureRevision is untagged for this revision — once details are
-	// recorded the tag prevents redundant API calls on subsequent watch-event-triggered
-	// reconciles.
-	if resource.Status.LastFailureRevision != currentDeploymentRevision {
-		failureDetails, err := captureLastFailureDetails(ctx, r.uncachedClient, resource, currentDeploymentRevision)
-		if err != nil {
-			logger.Error(err, "failed to capture failure details")
-		}
-		resource.Status.LastFailureDetails = failureDetails
-		if len(resource.Status.LastFailureDetails) > 0 {
-			resource.Status.LastFailureRevision = currentDeploymentRevision
-		}
-	}
+	currentDeploymentRevision := deployment.Annotations[deploymentRevisionAnnotation]
+	r.captureFailureDetailsOnce(ctx, resource, currentDeploymentRevision)
 
 	reportStackResourceNotReady(resource, "StackResourceDeploymentNotReady", "StackResourceDeploymentNotReady")
 
-	// Requeue every 10s until the deployment rollout is settled — either the rollout
-	// completed (NewReplicaSetAvailable) + grace period elapsed, or timed out
-	// (ProgressDeadlineExceeded). This gives pods time to start and potentially crash so
-	// the capture above has multiple chances to catch the failure state.
+	// Requeue every 10s until the rollout settles (NewReplicaSetAvailable + grace
+	// period, or ProgressDeadlineExceeded). This gives pods time to crash so the
+	// failure capture above has multiple chances to catch the failure state.
 	if !controller.DeploymentRolloutSettled(deployment, deploymentGracePeriodAfterNewReplicaSetAvailable) {
 		return resultRequeueAfter(10 * time.Second), nil
 	}
@@ -249,51 +292,182 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.S
 	return resultStop, nil
 }
 
-func (r *workloadReconciler) setImagePullSecret(ctx context.Context, resource *v1alpha1.StackResource, deployment *appsv1.Deployment) error {
-	if resource.NeedsPullSecret() {
-		authType := resource.RegistryAuthType()
-		switch authType {
-		case v1alpha1.RegistryAuthTypeDockerHub, v1alpha1.RegistryAuthTypeInClusterZotRegistry:
-			dockerConfigSecret := &corev1.Secret{}
-			if resource.HasBuildSpec() {
-				// has build spec
-				if err := r.Client.Get(ctx, types.NamespacedName{
-					Name:      resource.Spec.BuildSpec.Registry.Auth.DockerConfigAuth.SecretRef.Name,
-					Namespace: resource.Namespace,
-				}, dockerConfigSecret); err != nil {
-					if apierrors.IsNotFound(err) {
-						return fmt.Errorf("docker config secret not found: %w", err)
-					}
-					return fmt.Errorf("failed to get docker config secret: %w", err)
-				}
-				deployment.Spec.Template.Spec.ImagePullSecrets = []corev1.LocalObjectReference{
-					{
-						Name: dockerConfigSecret.Name,
-					},
-				}
-			} else {
-				// has image spec
-				if err := r.Client.Get(ctx, types.NamespacedName{
-					Name:      resource.Spec.ImageSpec.PullAuth.DockerConfigAuth.SecretRef.Name,
-					Namespace: resource.Namespace,
-				}, dockerConfigSecret); err != nil {
-					if apierrors.IsNotFound(err) {
-						return fmt.Errorf("docker config secret not found: %w", err)
-					}
-					return fmt.Errorf("failed to get docker config secret: %w", err)
-				}
-				deployment.Spec.Template.Spec.ImagePullSecrets = []corev1.LocalObjectReference{
-					{
-						Name: dockerConfigSecret.Name,
-					},
-				}
-			}
-		default:
-			return fmt.Errorf("unsupported registry auth type: %s", authType)
+// ---------------------------------------------------------------------------
+// Deployment spec construction
+// ---------------------------------------------------------------------------
+
+func (r *workloadReconciler) applyDeploymentSpec(
+	deployment *appsv1.Deployment,
+	resource *v1alpha1.StackResource,
+	image string,
+	replicas *int32,
+	envVars []corev1.EnvVar,
+	probes probeSet,
+	volumeMountInfo map[string]*storagev1alpha1.Volume,
+	needsRestart bool,
+) {
+	deployment.ObjectMeta.Labels = mergeLabels(deployment.ObjectMeta.Labels, identityLabels(resource))
+	deployment.Spec.Selector = &v1.LabelSelector{
+		MatchLabels: GetDeploymentLabelForResource(resource),
+	}
+	deployment.Spec.Replicas = replicas
+	deployment.Spec.Strategy.Type = appsv1.RollingUpdateDeploymentStrategyType
+	deployment.Spec.Strategy.RollingUpdate = &appsv1.RollingUpdateDeployment{
+		MaxUnavailable: ptr.To(intstr.FromInt32(maxUnavailableForReplicas(*replicas))),
+		MaxSurge:       ptr.To(intstr.FromString("25%")),
+	}
+	deployment.Spec.ProgressDeadlineSeconds = ptr.To(int32(300))
+
+	deployment.Spec.Template.ObjectMeta.Labels = mergeLabels(GetDeploymentLabelForResource(resource), identityLabels(resource))
+
+	// --- Main container ---
+	if len(deployment.Spec.Template.Spec.Containers) == 0 {
+		deployment.Spec.Template.Spec.Containers = []corev1.Container{{}}
+	}
+	c := &deployment.Spec.Template.Spec.Containers[0]
+	c.Name = resource.Name
+	c.Image = image
+	c.ImagePullPolicy = resolveImagePullPolicy(resource, image)
+	c.TerminationMessagePolicy = corev1.TerminationMessageFallbackToLogsOnError
+	c.Command = nilIfEmpty(resource.Spec.Command)
+	c.Args = nilIfEmpty(resource.Spec.Args)
+	c.Ports = nilIfEmpty(containerPorts(resource))
+	c.Env = nilIfEmpty(envVars)
+	c.VolumeMounts = nilIfEmpty(volumeMountList(resource))
+	c.Resources = corev1.ResourceRequirements{}
+	if resource.Spec.Resources != nil {
+		c.Resources = *resource.Spec.Resources
+	}
+	c.ReadinessProbe = probes.readiness
+	c.LivenessProbe = probes.liveness
+	c.StartupProbe = probes.startup
+
+	// --- Volumes ---
+	deployment.Spec.Template.Spec.Volumes = nilIfEmpty(volumesList(resource, volumeMountInfo))
+
+	if resource.Spec.TerminationGracePeriodSeconds != nil {
+		deployment.Spec.Template.Spec.TerminationGracePeriodSeconds = resource.Spec.TerminationGracePeriodSeconds
+	}
+
+	// --- Init container ---
+	if resource.Spec.Init != nil {
+		initImage := image
+		if resource.Spec.Init.ImageSpec != nil {
+			initImage = resource.Spec.Init.ImageSpec.Image
+		}
+		if len(deployment.Spec.Template.Spec.InitContainers) == 0 {
+			deployment.Spec.Template.Spec.InitContainers = []corev1.Container{{}}
+		}
+		ic := &deployment.Spec.Template.Spec.InitContainers[0]
+		ic.Name = resource.InitContainerName()
+		ic.Image = initImage
+		ic.ImagePullPolicy = resolveImagePullPolicy(resource, initImage)
+		ic.TerminationMessagePolicy = corev1.TerminationMessageFallbackToLogsOnError
+		ic.Command = nilIfEmpty(resource.Spec.Init.Command)
+		ic.Args = nilIfEmpty(resource.Spec.Init.Args)
+		ic.Env = nilIfEmpty(envVars)
+		ic.VolumeMounts = nilIfEmpty(volumeMountList(resource))
+	} else {
+		deployment.Spec.Template.Spec.InitContainers = nil
+	}
+
+	// --- Security defaults ---
+	applySecurityDefaults(&deployment.Spec.Template.Spec, resource.Spec.HardenedSecurityDefaults)
+
+	// --- Restart annotation ---
+	if needsRestart {
+		if deployment.Spec.Template.Annotations == nil {
+			deployment.Spec.Template.Annotations = make(map[string]string)
+		}
+		deployment.Spec.Template.Annotations[v1alpha1.RestartResourceAnnotation] = v1.Now().UTC().String()
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Status evaluation helpers
+// ---------------------------------------------------------------------------
+
+// evaluateConvergence sets the Converged condition and stamps LastConverged
+// when the deployment reaches full convergence on the current revision.
+func (r *workloadReconciler) evaluateConvergence(resource *v1alpha1.StackResource, deployment *appsv1.Deployment) {
+	if !deploymentConverged(deployment) {
+		setResourceCondition(resource, v1alpha1.StackResourceConverged, false, "NotConverged", "deployment has not fully rolled out at full availability")
+		return
+	}
+	setResourceCondition(resource, v1alpha1.StackResourceConverged, true, "FullyConverged", "all replicas updated and available on the target revision")
+
+	// Write-once per revision: only stamp LastConverged when the revision changes.
+	rev, ok := resource.Annotations[v1alpha1.RevisionAnnotation]
+	if !ok {
+		return
+	}
+	if lc := resource.Status.LastConverged; lc == nil || lc.Revision != rev {
+		resource.Status.LastConverged = &v1alpha1.StackResourceConvergenceRecord{
+			Revision: rev,
+			At:       v1.Now(),
 		}
 	}
+}
+
+// captureFailureDetailsOnce records crash/error details from pods for the
+// current deployment revision. The revision tag prevents redundant pod
+// listings on subsequent reconciles.
+func (r *workloadReconciler) captureFailureDetailsOnce(ctx context.Context, resource *v1alpha1.StackResource, deploymentRevision string) {
+	if resource.Status.LastFailureDeploymentRevision == deploymentRevision {
+		return
+	}
+	failureDetails, err := captureLastFailureDetails(ctx, r.uncachedClient, resource, deploymentRevision)
+	if err != nil {
+		controller.LoggerFromContext(ctx).Error(err, "failed to capture failure details")
+	}
+	resource.Status.LastFailureDetails = failureDetails
+	if len(resource.Status.LastFailureDetails) > 0 {
+		resource.Status.LastFailureDeploymentRevision = deploymentRevision
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Image pull secret
+// ---------------------------------------------------------------------------
+
+func (r *workloadReconciler) setImagePullSecret(ctx context.Context, resource *v1alpha1.StackResource, deployment *appsv1.Deployment) error {
+	if !resource.NeedsPullSecret() {
+		return nil
+	}
+	secretName, err := r.resolveImagePullSecretName(ctx, resource)
+	if err != nil {
+		return err
+	}
+	deployment.Spec.Template.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: secretName}}
 	return nil
 }
+
+func (r *workloadReconciler) resolveImagePullSecretName(ctx context.Context, resource *v1alpha1.StackResource) (string, error) {
+	authType := resource.RegistryAuthType()
+	switch authType {
+	case v1alpha1.RegistryAuthTypeDockerHub, v1alpha1.RegistryAuthTypeInClusterZotRegistry:
+		var secretRef string
+		if resource.HasBuildSpec() {
+			secretRef = resource.Spec.BuildSpec.Registry.Auth.DockerConfigAuth.SecretRef.Name
+		} else {
+			secretRef = resource.Spec.ImageSpec.PullAuth.DockerConfigAuth.SecretRef.Name
+		}
+		secret := &corev1.Secret{}
+		if err := r.Client.Get(ctx, types.NamespacedName{Name: secretRef, Namespace: resource.Namespace}, secret); err != nil {
+			if apierrors.IsNotFound(err) {
+				return "", fmt.Errorf("docker config secret not found: %w", err)
+			}
+			return "", fmt.Errorf("failed to get docker config secret: %w", err)
+		}
+		return secret.Name, nil
+	default:
+		return "", fmt.Errorf("unsupported registry auth type: %s", authType)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Restart detection
+// ---------------------------------------------------------------------------
 
 func (r *workloadReconciler) requiresRestart(resource *v1alpha1.StackResource) bool {
 	lastRestartProcessedAt := resource.Status.LastRestartRequestProcessedAt
@@ -308,64 +482,161 @@ func (r *workloadReconciler) requiresRestart(resource *v1alpha1.StackResource) b
 	}
 }
 
-func (r *workloadReconciler) interpolateEnvVars(resource *v1alpha1.StackResource, siblings []*v1alpha1.StackResource) ([]corev1.EnvVar, error) {
-	interpolationCtx, err := interpolation.NewInterpolationContext(siblings)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create interpolation context: %w", err)
-	}
+// ---------------------------------------------------------------------------
+// Spec mapping helpers
+// ---------------------------------------------------------------------------
 
-	interpolator := interpolation.NewInterpolator(interpolationCtx)
-
-	res := make([]corev1.EnvVar, 0)
+func buildEnvVars(resource *v1alpha1.StackResource) []corev1.EnvVar {
+	res := make([]corev1.EnvVar, 0, len(resource.Spec.EnvironmentVariables))
 	for _, env := range resource.Spec.EnvironmentVariables {
-		interpolatedValue, err := interpolator.InterpolateString(env.Value)
-		if err != nil {
-			return nil, fmt.Errorf("failed to interpolate env var '%s': %w", env.Name, err)
+		if env.ValueFrom != nil {
+			res = append(res, corev1.EnvVar{
+				Name: env.Name,
+				ValueFrom: &corev1.EnvVarSource{
+					SecretKeyRef: &env.ValueFrom.SecretKeyRef,
+				},
+			})
+		} else {
+			res = append(res, corev1.EnvVar{
+				Name:  env.Name,
+				Value: env.Value,
+			})
 		}
-		res = append(res, corev1.EnvVar{
-			Name:  env.Name,
-			Value: interpolatedValue,
-		})
 	}
-
-	return res, nil
+	return res
 }
 
-func InterpolatedContainerPorts(resource *v1alpha1.StackResource) []corev1.ContainerPort {
-	res := make([]corev1.ContainerPort, 0)
+type probeSet struct {
+	readiness *corev1.Probe
+	liveness  *corev1.Probe
+	startup   *corev1.Probe
+}
+
+func buildProbes(resource *v1alpha1.StackResource) (probeSet, error) {
+	hc := resource.Spec.HealthChecks
+	if hc == nil {
+		return probeSet{}, nil
+	}
+	readiness, err := buildProbe(hc.Readiness, resource.Spec.Ports)
+	if err != nil {
+		return probeSet{}, fmt.Errorf("readiness probe: %w", err)
+	}
+	liveness, err := buildProbe(hc.Liveness, resource.Spec.Ports)
+	if err != nil {
+		return probeSet{}, fmt.Errorf("liveness probe: %w", err)
+	}
+	startup, err := buildProbe(hc.Startup, resource.Spec.Ports)
+	if err != nil {
+		return probeSet{}, fmt.Errorf("startup probe: %w", err)
+	}
+	return probeSet{readiness: readiness, liveness: liveness, startup: startup}, nil
+}
+
+func buildProbe(p *v1alpha1.Probe, ports []v1alpha1.Port) (*corev1.Probe, error) {
+	if p == nil {
+		return nil, nil
+	}
+	probe := &corev1.Probe{
+		InitialDelaySeconds: p.InitialDelaySeconds,
+		PeriodSeconds:       p.PeriodSeconds,
+		FailureThreshold:    p.FailureThreshold,
+		TimeoutSeconds:      p.TimeoutSeconds,
+	}
+	switch {
+	case p.HTTPGet != nil:
+		number, ok := portNumberByName(p.HTTPGet.PortName, ports)
+		if !ok {
+			return nil, fmt.Errorf("probe references unknown port %q", p.HTTPGet.PortName)
+		}
+		probe.ProbeHandler = corev1.ProbeHandler{
+			HTTPGet: &corev1.HTTPGetAction{Path: p.HTTPGet.Path, Port: intstr.FromInt32(number)},
+		}
+	case p.TCPSocket != nil:
+		number, ok := portNumberByName(p.TCPSocket.PortName, ports)
+		if !ok {
+			return nil, fmt.Errorf("probe references unknown port %q", p.TCPSocket.PortName)
+		}
+		probe.ProbeHandler = corev1.ProbeHandler{
+			TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(number)},
+		}
+	case len(p.Command) > 0:
+		probe.ProbeHandler = corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: p.Command}}
+	}
+	return probe, nil
+}
+
+func portNumberByName(name string, ports []v1alpha1.Port) (int32, bool) {
+	for _, p := range ports {
+		if p.Name == name {
+			return p.Number, true
+		}
+	}
+	return 0, false
+}
+
+func containerPorts(resource *v1alpha1.StackResource) []corev1.ContainerPort {
+	res := make([]corev1.ContainerPort, 0, len(resource.Spec.Ports))
 	for _, port := range resource.Spec.Ports {
 		res = append(res, corev1.ContainerPort{
+			Name:          port.Name,
 			ContainerPort: port.Number,
 		})
 	}
 	return res
 }
 
-func InterpolatedVolumeMountList(resource *v1alpha1.StackResource) []corev1.VolumeMount {
+// ---------------------------------------------------------------------------
+// Security
+// ---------------------------------------------------------------------------
+
+func applySecurityDefaults(podSpec *corev1.PodSpec, hardened *bool) {
+	if hardened == nil || !*hardened {
+		return
+	}
+	podSpec.SecurityContext = &corev1.PodSecurityContext{
+		RunAsNonRoot: ptr.To(true),
+		SeccompProfile: &corev1.SeccompProfile{
+			Type: corev1.SeccompProfileTypeRuntimeDefault,
+		},
+	}
+	for i := range podSpec.Containers {
+		podSpec.Containers[i].SecurityContext = &corev1.SecurityContext{
+			AllowPrivilegeEscalation: ptr.To(false),
+			Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+		}
+	}
+	for i := range podSpec.InitContainers {
+		podSpec.InitContainers[i].SecurityContext = &corev1.SecurityContext{
+			AllowPrivilegeEscalation: ptr.To(false),
+			Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Volume helpers
+// ---------------------------------------------------------------------------
+
+func volumeMountList(resource *v1alpha1.StackResource) []corev1.VolumeMount {
 	if len(resource.Spec.VolumeMounts) == 0 {
 		return []corev1.VolumeMount{}
 	}
-	res := make([]corev1.VolumeMount, 0)
+	res := make([]corev1.VolumeMount, 0, len(resource.Spec.VolumeMounts))
 	for _, mount := range resource.Spec.VolumeMounts {
-		sourceVolumeName := mount.SourceVolume
-		subPath := mount.SourceSubPath
-		if len(subPath) == 0 {
-			res = append(res, corev1.VolumeMount{
-				Name:      sourceVolumeName,
-				MountPath: mount.Destination,
-			})
-		} else {
-			res = append(res, corev1.VolumeMount{
-				Name:      sourceVolumeName,
-				MountPath: mount.Destination,
-				SubPath:   strings.TrimPrefix(subPath, "/"),
-			})
+		vm := corev1.VolumeMount{
+			Name:      mount.SourceVolume,
+			MountPath: mount.Destination,
+			ReadOnly:  mount.ReadOnly,
 		}
+		if len(mount.SourceSubPath) > 0 {
+			vm.SubPath = strings.TrimPrefix(mount.SourceSubPath, "/")
+		}
+		res = append(res, vm)
 	}
 	return res
 }
 
-func InterpolatedVolumesList(resource *v1alpha1.StackResource, volumeInfo map[string]*storagev1alpha1.Volume) []corev1.Volume {
+func volumesList(resource *v1alpha1.StackResource, volumeInfo map[string]*storagev1alpha1.Volume) []corev1.Volume {
 	if len(resource.Spec.VolumeMounts) == 0 {
 		return []corev1.Volume{}
 	}
@@ -402,25 +673,9 @@ func (r *workloadReconciler) getVolumeMountInfoMap(ctx context.Context, resource
 	return res, nil
 }
 
-func (r *workloadReconciler) GetSiblings(ctx context.Context, resource *v1alpha1.StackResource) ([]*v1alpha1.StackResource, error) {
-	srList := &v1alpha1.StackResourceList{}
-	if err := r.Client.List(ctx, srList, client.InNamespace(resource.Namespace)); err != nil {
-		return nil, err
-	}
-
-	// Set current resource's internal service name
-	for i := range srList.Items {
-		if srList.Items[i].Name == resource.Name {
-			// We do this because we need to pass the all siblings as interpolation context while interpolating the env vars.
-			srList.Items[i].Status.InternalAddress = ptr.To(ResourceSVCName(resource))
-		}
-	}
-	res := make([]*v1alpha1.StackResource, len(srList.Items))
-	for i := range srList.Items {
-		res[i] = &srList.Items[i]
-	}
-	return res, nil
-}
+// ---------------------------------------------------------------------------
+// Image pull policy
+// ---------------------------------------------------------------------------
 
 // resolveImagePullPolicy returns the pull policy for a container image.
 // Precedence: explicit ImageSpec policy > tag-based inference.
@@ -435,6 +690,10 @@ func resolveImagePullPolicy(resource *v1alpha1.StackResource, image string) core
 	}
 	return corev1.PullIfNotPresent
 }
+
+// ---------------------------------------------------------------------------
+// Utilities
+// ---------------------------------------------------------------------------
 
 func nilIfEmpty[T any](s []T) []T {
 	if len(s) == 0 {

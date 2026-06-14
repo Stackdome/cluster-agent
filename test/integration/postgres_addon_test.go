@@ -1,9 +1,6 @@
 package integration
 
 import (
-	"context"
-	"time"
-
 	cnpgv1 "github.com/cloudnative-pg/cloudnative-pg/api/v1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -11,29 +8,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	addonsv1alpha1 "stackdome.io/cluster-agent/api/addons/v1alpha1"
-	"stackdome.io/cluster-agent/test/integration/bootstrap"
 	"stackdome.io/cluster-agent/test/integration/fixtures"
 	"stackdome.io/cluster-agent/test/integration/helpers"
 )
 
-const (
-	pgReadyTimeout   = 5 * time.Minute
-	pgDeleteTimeout  = 2 * time.Minute
-	conditionTimeout = 5 * time.Minute
-)
-
 var _ = Describe("PostgresCluster Addon", Ordered, func() {
-	var (
-		testEnv *bootstrap.Environment
-		ctx     context.Context
-		c       client.Client
-	)
-
-	BeforeAll(func() {
-		testEnv = GetEnvironment()
-		ctx = context.Background()
-		c = testEnv.Client
-	})
 
 	Context("Simple PostgresCluster", func() {
 		var pg *addonsv1alpha1.PostgresCluster
@@ -45,7 +24,7 @@ var _ = Describe("PostgresCluster Addon", Ordered, func() {
 			Expect(c.Create(ctx, pg)).To(Succeed())
 
 			By("Waiting for ClusterReady condition")
-			readyPg, err := helpers.WaitForPostgresClusterReady(ctx, c, client.ObjectKeyFromObject(pg), pgReadyTimeout)
+			readyPg, err := helpers.WaitForPostgresClusterReady(ctx, c, client.ObjectKeyFromObject(pg), readyTimeout)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(readyPg.Status.Phase).To(Equal("Cluster in healthy state"))
 
@@ -56,7 +35,7 @@ var _ = Describe("PostgresCluster Addon", Ordered, func() {
 			Expect(readyPg.Status.Outputs.ReadService).NotTo(BeEmpty())
 
 			By("Verifying ClusterConfigurationValid condition")
-			Expect(helpers.HasCondition(readyPg, addonsv1alpha1.ClusterConfigurationValid, metav1.ConditionTrue)).To(BeTrue())
+			Expect(helpers.PostgresClusterHasCondition(readyPg, addonsv1alpha1.ClusterConfigurationValid, metav1.ConditionTrue)).To(BeTrue())
 		})
 
 		It("should verify the underlying CNPG Cluster was created", func() {
@@ -73,7 +52,7 @@ var _ = Describe("PostgresCluster Addon", Ordered, func() {
 			if pg != nil {
 				By("Cleaning up simple PostgresCluster")
 				_ = c.Delete(ctx, pg)
-				_ = helpers.WaitForPostgresClusterDeleted(ctx, c, client.ObjectKeyFromObject(pg), pgDeleteTimeout)
+				_ = helpers.WaitForPostgresClusterDeleted(ctx, c, client.ObjectKeyFromObject(pg), deleteTimeout)
 			}
 		})
 	})
@@ -88,12 +67,12 @@ var _ = Describe("PostgresCluster Addon", Ordered, func() {
 			Expect(c.Create(ctx, pg)).To(Succeed())
 
 			By("Waiting for ClusterReady condition")
-			_, err := helpers.WaitForPostgresClusterReady(ctx, c, client.ObjectKeyFromObject(pg), pgReadyTimeout)
+			_, err := helpers.WaitForPostgresClusterReady(ctx, c, client.ObjectKeyFromObject(pg), readyTimeout)
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Waiting for DatabasesApplied condition")
-			readyPg, err := helpers.WaitForCondition(ctx, c, client.ObjectKeyFromObject(pg),
-				addonsv1alpha1.DatabasesApplied, metav1.ConditionTrue, conditionTimeout)
+			readyPg, err := helpers.WaitForPostgresClusterCondition(ctx, c, client.ObjectKeyFromObject(pg),
+				addonsv1alpha1.DatabasesApplied, metav1.ConditionTrue, readyTimeout)
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Verifying database info in status outputs")
@@ -123,7 +102,7 @@ var _ = Describe("PostgresCluster Addon", Ordered, func() {
 			if pg != nil {
 				By("Cleaning up PostgresCluster with databases")
 				_ = c.Delete(ctx, pg)
-				_ = helpers.WaitForPostgresClusterDeleted(ctx, c, client.ObjectKeyFromObject(pg), pgDeleteTimeout)
+				_ = helpers.WaitForPostgresClusterDeleted(ctx, c, client.ObjectKeyFromObject(pg), deleteTimeout)
 			}
 		})
 	})
@@ -132,13 +111,13 @@ var _ = Describe("PostgresCluster Addon", Ordered, func() {
 		var pg *addonsv1alpha1.PostgresCluster
 
 		It("should configure WAL archiving and scheduled backup", func() {
-			pg = fixtures.PostgresClusterWithBackup("pg-with-backup", testEnv.ObjectStoreName)
+			pg = fixtures.PostgresClusterWithBackup("pg-with-backup", env.ObjectStoreName)
 
 			By("Creating the PostgresCluster CR")
 			Expect(c.Create(ctx, pg)).To(Succeed())
 
 			By("Waiting for ClusterReady condition")
-			_, err := helpers.WaitForPostgresClusterReady(ctx, c, client.ObjectKeyFromObject(pg), pgReadyTimeout)
+			_, err := helpers.WaitForPostgresClusterReady(ctx, c, client.ObjectKeyFromObject(pg), readyTimeout)
 			Expect(err).NotTo(HaveOccurred())
 		})
 
@@ -169,7 +148,7 @@ var _ = Describe("PostgresCluster Addon", Ordered, func() {
 			if pg != nil {
 				By("Cleaning up PostgresCluster with backup")
 				_ = c.Delete(ctx, pg)
-				_ = helpers.WaitForPostgresClusterDeleted(ctx, c, client.ObjectKeyFromObject(pg), pgDeleteTimeout)
+				_ = helpers.WaitForPostgresClusterDeleted(ctx, c, client.ObjectKeyFromObject(pg), deleteTimeout)
 			}
 		})
 	})
@@ -182,7 +161,7 @@ var _ = Describe("PostgresCluster Addon", Ordered, func() {
 			Expect(c.Create(ctx, pg)).To(Succeed())
 
 			By("Waiting for ClusterReady condition")
-			_, err := helpers.WaitForPostgresClusterReady(ctx, c, client.ObjectKeyFromObject(pg), pgReadyTimeout)
+			_, err := helpers.WaitForPostgresClusterReady(ctx, c, client.ObjectKeyFromObject(pg), readyTimeout)
 			Expect(err).NotTo(HaveOccurred())
 
 			cnpgClusterName := pg.CnpgClusterName()
@@ -191,7 +170,7 @@ var _ = Describe("PostgresCluster Addon", Ordered, func() {
 			Expect(c.Delete(ctx, pg)).To(Succeed())
 
 			By("Waiting for PostgresCluster to be deleted")
-			Expect(helpers.WaitForPostgresClusterDeleted(ctx, c, client.ObjectKeyFromObject(pg), pgDeleteTimeout)).To(Succeed())
+			Expect(helpers.WaitForPostgresClusterDeleted(ctx, c, client.ObjectKeyFromObject(pg), deleteTimeout)).To(Succeed())
 
 			By("Verifying the underlying CNPG Cluster is also deleted")
 			cnpgCluster := &cnpgv1.Cluster{}

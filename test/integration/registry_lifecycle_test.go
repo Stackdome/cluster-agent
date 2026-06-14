@@ -1,7 +1,6 @@
 package integration
 
 import (
-	"context"
 	"encoding/json"
 	"time"
 
@@ -20,32 +19,14 @@ import (
 	"stackdome.io/cluster-agent/test/integration/helpers"
 )
 
-const (
-	registryReadyTimeout  = 5 * time.Minute
-	registryDeleteTimeout = 2 * time.Minute
-	registryNs            = "stackdome-registry"
-	bootstrapRegistryName = "int-test-registry"
-)
-
 var _ = Describe("Registry Lifecycle", Ordered, func() {
-	var (
-		testEnv *bootstrap.Environment
-		ctx     context.Context
-		c       client.Client
-	)
-
-	BeforeAll(func() {
-		testEnv = GetEnvironment()
-		ctx = context.Background()
-		c = testEnv.Client
-	})
 
 	Context("Registry bootstrap validation", Ordered, func() {
 		var bootstrapReg *registryv1alpha1.ClusterRegistry
 
 		It("should have the bootstrap ClusterRegistry in Running phase", func() {
 			bootstrapReg = &registryv1alpha1.ClusterRegistry{}
-			err := c.Get(ctx, client.ObjectKey{Name: bootstrapRegistryName}, bootstrapReg)
+			err := c.Get(ctx, client.ObjectKey{Name: bootstrap.RegistryName}, bootstrapReg)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(bootstrapReg.Status.Phase).To(Equal(registryv1alpha1.RegistryPhaseRunning))
 		})
@@ -57,8 +38,8 @@ var _ = Describe("Registry Lifecycle", Ordered, func() {
 		It("should have the registry Deployment available", func() {
 			dep := &appsv1.Deployment{}
 			err := c.Get(ctx, client.ObjectKey{
-				Name:      bootstrapRegistryName,
-				Namespace: registryNs,
+				Name:      bootstrap.RegistryName,
+				Namespace: bootstrap.RegistryNamespace,
 			}, dep)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(dep.Status.AvailableReplicas).To(BeNumerically(">=", 1))
@@ -67,8 +48,8 @@ var _ = Describe("Registry Lifecycle", Ordered, func() {
 		It("should have the registry Service with a ClusterIP", func() {
 			svc := &corev1.Service{}
 			err := c.Get(ctx, client.ObjectKey{
-				Name:      bootstrapRegistryName,
-				Namespace: registryNs,
+				Name:      bootstrap.RegistryName,
+				Namespace: bootstrap.RegistryNamespace,
 			}, svc)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(svc.Spec.ClusterIP).NotTo(BeEmpty())
@@ -78,7 +59,7 @@ var _ = Describe("Registry Lifecycle", Ordered, func() {
 			pvc := &corev1.PersistentVolumeClaim{}
 			err := c.Get(ctx, client.ObjectKey{
 				Name:      bootstrapReg.RegistryPVCName(),
-				Namespace: registryNs,
+				Namespace: bootstrap.RegistryNamespace,
 			}, pvc)
 			Expect(err).NotTo(HaveOccurred())
 		})
@@ -87,7 +68,7 @@ var _ = Describe("Registry Lifecycle", Ordered, func() {
 			cm := &corev1.ConfigMap{}
 			err := c.Get(ctx, client.ObjectKey{
 				Name:      bootstrapReg.RegistryConfigMapName(),
-				Namespace: registryNs,
+				Namespace: bootstrap.RegistryNamespace,
 			}, cm)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(cm.Data["config.json"]).NotTo(BeEmpty())
@@ -102,7 +83,7 @@ var _ = Describe("Registry Lifecycle", Ordered, func() {
 			cm := &corev1.ConfigMap{}
 			err := c.Get(ctx, client.ObjectKey{
 				Name:      "stackdome-insecure-registries",
-				Namespace: registryNs,
+				Namespace: bootstrap.RegistryNamespace,
 			}, cm)
 			Expect(err).NotTo(HaveOccurred())
 
@@ -115,7 +96,7 @@ var _ = Describe("Registry Lifecycle", Ordered, func() {
 			ds := &appsv1.DaemonSet{}
 			err := c.Get(ctx, client.ObjectKey{
 				Name:      reg.RegistryConfigReconcilerDaemonSetName,
-				Namespace: registryNs,
+				Namespace: bootstrap.RegistryNamespace,
 			}, ds)
 			Expect(err).NotTo(HaveOccurred())
 
@@ -142,8 +123,8 @@ var _ = Describe("Registry Lifecycle", Ordered, func() {
 		It("should not trigger spurious Deployment rollouts on reconcile", func() {
 			dep := &appsv1.Deployment{}
 			err := c.Get(ctx, client.ObjectKey{
-				Name:      bootstrapRegistryName,
-				Namespace: registryNs,
+				Name:      bootstrap.RegistryName,
+				Namespace: bootstrap.RegistryNamespace,
 			}, dep)
 			Expect(err).NotTo(HaveOccurred())
 			initialVersion := dep.ResourceVersion
@@ -152,8 +133,8 @@ var _ = Describe("Registry Lifecycle", Ordered, func() {
 			time.Sleep(30 * time.Second)
 
 			err = c.Get(ctx, client.ObjectKey{
-				Name:      bootstrapRegistryName,
-				Namespace: registryNs,
+				Name:      bootstrap.RegistryName,
+				Namespace: bootstrap.RegistryNamespace,
 			}, dep)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(dep.ResourceVersion).To(Equal(initialVersion),
@@ -167,8 +148,8 @@ var _ = Describe("Registry Lifecycle", Ordered, func() {
 		It("should record the current auth secret version", func() {
 			authSecret := &corev1.Secret{}
 			err := c.Get(ctx, client.ObjectKey{
-				Name:      bootstrapRegistryName + "-auth",
-				Namespace: registryNs,
+				Name:      bootstrap.RegistryName + "-auth",
+				Namespace: bootstrap.RegistryNamespace,
 			}, authSecret)
 			Expect(err).NotTo(HaveOccurred())
 			initialAuthSecretVersion = authSecret.ResourceVersion
@@ -179,20 +160,36 @@ var _ = Describe("Registry Lifecycle", Ordered, func() {
 			credSecret := &corev1.Secret{}
 			err := c.Get(ctx, client.ObjectKey{
 				Name:      "registry-creds",
-				Namespace: registryNs,
+				Namespace: bootstrap.RegistryNamespace,
 			}, credSecret)
 			Expect(err).NotTo(HaveOccurred())
 
 			credSecret.Data["password"] = []byte("new-password-123")
 			Expect(c.Update(ctx, credSecret)).To(Succeed())
 
-			// The controller doesn't watch the source credentials secret (to avoid
-			// caching all Secrets cluster-wide). In production, changes are picked up
-			// via a 5-minute periodic requeue. Here we force an immediate reconcile
-			// by annotating the CR to keep the test fast.
+			DeferCleanup(func() {
+				By("Restoring original registry credentials")
+				restored := &corev1.Secret{}
+				if err := c.Get(ctx, client.ObjectKey{Name: "registry-creds", Namespace: bootstrap.RegistryNamespace}, restored); err != nil {
+					return
+				}
+				restored.Data["password"] = []byte("admin")
+				_ = c.Update(ctx, restored)
+
+				r := &registryv1alpha1.ClusterRegistry{}
+				if err := c.Get(ctx, client.ObjectKey{Name: bootstrap.RegistryName}, r); err != nil {
+					return
+				}
+				if r.Annotations == nil {
+					r.Annotations = map[string]string{}
+				}
+				r.Annotations["test.stackdome.io/credential-update"] = time.Now().Format(time.RFC3339)
+				_ = c.Update(ctx, r)
+			})
+
 			By("Forcing a reconcile by annotating the ClusterRegistry CR")
 			reg := &registryv1alpha1.ClusterRegistry{}
-			Expect(c.Get(ctx, client.ObjectKey{Name: bootstrapRegistryName}, reg)).To(Succeed())
+			Expect(c.Get(ctx, client.ObjectKey{Name: bootstrap.RegistryName}, reg)).To(Succeed())
 			if reg.Annotations == nil {
 				reg.Annotations = map[string]string{}
 			}
@@ -203,28 +200,14 @@ var _ = Describe("Registry Lifecycle", Ordered, func() {
 			Eventually(func() bool {
 				authSecret := &corev1.Secret{}
 				if err := c.Get(ctx, client.ObjectKey{
-					Name:      bootstrapRegistryName + "-auth",
-					Namespace: registryNs,
+					Name:      bootstrap.RegistryName + "-auth",
+					Namespace: bootstrap.RegistryNamespace,
 				}, authSecret); err != nil {
 					return false
 				}
 				return authSecret.ResourceVersion != initialAuthSecretVersion
 			}, 2*time.Minute, 5*time.Second).Should(BeTrue(),
 				"auth secret should be updated after credential change")
-
-			By("Restoring original credentials")
-			err = c.Get(ctx, client.ObjectKey{
-				Name:      "registry-creds",
-				Namespace: registryNs,
-			}, credSecret)
-			Expect(err).NotTo(HaveOccurred())
-			credSecret.Data["password"] = []byte("admin")
-			Expect(c.Update(ctx, credSecret)).To(Succeed())
-
-			By("Forcing reconcile to restore original auth secret")
-			Expect(c.Get(ctx, client.ObjectKey{Name: bootstrapRegistryName}, reg)).To(Succeed())
-			reg.Annotations["test.stackdome.io/credential-update"] = time.Now().Format(time.RFC3339)
-			Expect(c.Update(ctx, reg)).To(Succeed())
 		})
 	})
 
@@ -240,7 +223,7 @@ var _ = Describe("Registry Lifecycle", Ordered, func() {
 		It("should create a second registry and reach Running", func() {
 			By("Creating credentials secret for second registry")
 			credSecret := fixtures.ClusterRegistryCredentialsSecret(
-				secondCredSecret, registryNs, "testuser", "testpass")
+				secondCredSecret, bootstrap.RegistryNamespace, "testuser", "testpass")
 			Expect(c.Create(ctx, credSecret)).To(Succeed())
 
 			By("Creating second ClusterRegistry CR")
@@ -249,7 +232,7 @@ var _ = Describe("Registry Lifecycle", Ordered, func() {
 
 			By("Waiting for second registry to reach Running")
 			readyReg, err := helpers.WaitForClusterRegistryReady(
-				ctx, c, client.ObjectKey{Name: secondRegistryName}, registryReadyTimeout)
+				ctx, c, client.ObjectKey{Name: secondRegistryName}, readyTimeout)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(readyReg.Status.InternalURL).NotTo(BeEmpty())
 			secondReg = readyReg
@@ -259,7 +242,7 @@ var _ = Describe("Registry Lifecycle", Ordered, func() {
 			cm := &corev1.ConfigMap{}
 			err := c.Get(ctx, client.ObjectKey{
 				Name:      "stackdome-insecure-registries",
-				Namespace: registryNs,
+				Namespace: bootstrap.RegistryNamespace,
 			}, cm)
 			Expect(err).NotTo(HaveOccurred())
 
@@ -267,7 +250,7 @@ var _ = Describe("Registry Lifecycle", Ordered, func() {
 			Expect(json.Unmarshal([]byte(cm.Data["registries.json"]), &registryConfig)).To(Succeed())
 
 			bootstrapReg := &registryv1alpha1.ClusterRegistry{}
-			Expect(c.Get(ctx, client.ObjectKey{Name: bootstrapRegistryName}, bootstrapReg)).To(Succeed())
+			Expect(c.Get(ctx, client.ObjectKey{Name: bootstrap.RegistryName}, bootstrapReg)).To(Succeed())
 			Expect(registryConfig.HasEndpoint(bootstrapReg.Status.InternalURL)).To(BeTrue(),
 				"shared ConfigMap should contain bootstrap registry endpoint")
 			Expect(registryConfig.HasEndpoint(secondReg.Status.InternalURL)).To(BeTrue(),
@@ -282,14 +265,14 @@ var _ = Describe("Registry Lifecycle", Ordered, func() {
 
 			By("Waiting for second registry to be deleted")
 			Expect(helpers.WaitForClusterRegistryDeleted(
-				ctx, c, client.ObjectKey{Name: secondRegistryName}, registryDeleteTimeout)).To(Succeed())
+				ctx, c, client.ObjectKey{Name: secondRegistryName}, deleteTimeout)).To(Succeed())
 
 			By("Verifying shared ConfigMap only has the bootstrap registry")
 			Eventually(func() bool {
 				cm := &corev1.ConfigMap{}
 				if err := c.Get(ctx, client.ObjectKey{
 					Name:      "stackdome-insecure-registries",
-					Namespace: registryNs,
+					Namespace: bootstrap.RegistryNamespace,
 				}, cm); err != nil {
 					return false
 				}
@@ -306,7 +289,7 @@ var _ = Describe("Registry Lifecycle", Ordered, func() {
 			ds := &appsv1.DaemonSet{}
 			err := c.Get(ctx, client.ObjectKey{
 				Name:      reg.RegistryConfigReconcilerDaemonSetName,
-				Namespace: registryNs,
+				Namespace: bootstrap.RegistryNamespace,
 			}, ds)
 			Expect(err).NotTo(HaveOccurred(), "DaemonSet should still exist while bootstrap registry is running")
 		})
@@ -315,7 +298,7 @@ var _ = Describe("Registry Lifecycle", Ordered, func() {
 			credSecret := &corev1.Secret{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      secondCredSecret,
-					Namespace: registryNs,
+					Namespace: bootstrap.RegistryNamespace,
 				},
 			}
 			_ = c.Delete(ctx, credSecret)

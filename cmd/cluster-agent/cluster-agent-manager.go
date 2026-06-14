@@ -174,9 +174,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = stack.NewStackReconciler(mgr.GetClient(), mgr.GetScheme(), stackResourceController.RequeueCh).
+	if err = stack.NewStackReconciler(mgr.GetClient(), mgr.GetScheme()).
 		SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "Workspace")
+		setupLog.Error(err, "unable to create controller", "controller", "stack")
 		os.Exit(1)
 	}
 
@@ -184,7 +184,7 @@ func main() {
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "WorkspaceVolume")
+		setupLog.Error(err, "unable to create controller", "controller", "volume")
 		os.Exit(1)
 	}
 	if err = (&workspaceuser.WorkspaceUserReconciler{

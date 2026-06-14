@@ -49,6 +49,13 @@ func ResourceSVCName(resource *v1alpha1.StackResource) string {
 }
 
 func (r *svcReconciler) reconcile(ctx context.Context, resource *v1alpha1.StackResource) (subReconcilerResult, error) {
+	// For worker type we dont create ingress or svc. We just report ready when the workload is ready. This is because
+	//  worker type workloads are meant for background processing.
+	if resource.Spec.WorkloadType == v1alpha1.WorkloadTypeWorker {
+		reportStackResourceReady(resource)
+		return resultNil, nil
+	}
+
 	svc, err := r.ensureService(ctx, resource)
 	if err != nil {
 		return resultNil, err
@@ -73,12 +80,18 @@ func (r *svcReconciler) reconcile(ctx context.Context, resource *v1alpha1.StackR
 	}
 
 	resource.Status.ExternalAddress = buildExternalAddresses(portFqdnMap)
+	if resource.Spec.HasExposedPort() {
+		setResourceCondition(resource, v1alpha1.StackResourceIngressReady, true, "IngressConfigured", "ingress routes configured for public ports")
+	}
 	reportStackResourceReady(resource)
 	return resultNil, nil
 }
 
 func (r *svcReconciler) serviceNotReady(ctx context.Context, resource *v1alpha1.StackResource, message string) (subReconcilerResult, error) {
 	controller.LoggerFromContext(ctx).Info("workload svc not ready")
+	if resource.Spec.HasExposedPort() {
+		setResourceCondition(resource, v1alpha1.StackResourceIngressReady, false, "IngressNotReady", message)
+	}
 	reportStackResourceNotReady(resource, "ServiceNotReady", message)
 	return resultRequeue, nil
 }
@@ -154,20 +167,6 @@ func (r *svcReconciler) reconcileIngress(
 	return portFqdnMap, nil
 }
 
-func collectExposedPorts(resource *v1alpha1.StackResource) (portFqdnMap map[int]string, tlsHosts []string) {
-	portFqdnMap = make(map[int]string)
-	for _, port := range resource.Spec.Ports {
-		if !port.ExposeToPublic {
-			continue
-		}
-		portFqdnMap[int(port.Number)] = port.FQDN
-		if port.TLS {
-			tlsHosts = append(tlsHosts, port.FQDN)
-		}
-	}
-	return
-}
-
 func (r *svcReconciler) buildTLSConfig(
 	ctx context.Context,
 	resource *v1alpha1.StackResource,
@@ -191,30 +190,6 @@ func (r *svcReconciler) buildTLSConfig(
 		SecretName: fmt.Sprintf("%s-tls", resource.Name),
 	}}
 	return
-}
-
-func buildIngressRules(portFqdnMap map[int]string, serviceName string) []networkingv1.IngressRule {
-	rules := make([]networkingv1.IngressRule, 0, len(portFqdnMap))
-	for port, fqdn := range portFqdnMap {
-		rules = append(rules, networkingv1.IngressRule{
-			Host: fqdn,
-			IngressRuleValue: networkingv1.IngressRuleValue{
-				HTTP: &networkingv1.HTTPIngressRuleValue{
-					Paths: []networkingv1.HTTPIngressPath{{
-						Path:     "/",
-						PathType: ptr.To(networkingv1.PathTypePrefix),
-						Backend: networkingv1.IngressBackend{
-							Service: &networkingv1.IngressServiceBackend{
-								Name: serviceName,
-								Port: networkingv1.ServiceBackendPort{Number: int32(port)},
-							},
-						},
-					}},
-				},
-			},
-		})
-	}
-	return rules
 }
 
 func (r *svcReconciler) ingressNeedsUpdate(desired, existing *networkingv1.Ingress) bool {
@@ -260,26 +235,6 @@ func (r *svcReconciler) ensureRedirectMiddleware(ctx context.Context, namespace 
 	return nil
 }
 
-func buildRedirectMiddleware(namespace string) *unstructured.Unstructured {
-	mw := &unstructured.Unstructured{
-		Object: map[string]interface{}{
-			"apiVersion": "traefik.io/v1alpha1",
-			"kind":       "Middleware",
-			"metadata": map[string]interface{}{
-				"name":      traefikRedirectMiddlewareName,
-				"namespace": namespace,
-			},
-			"spec": map[string]interface{}{
-				"redirectScheme": map[string]interface{}{
-					"scheme":    "https",
-					"permanent": true,
-				},
-			},
-		},
-	}
-	return mw
-}
-
 func (r *svcReconciler) setTLSConfiguredIfEnabled(resource *v1alpha1.StackResource, annotations map[string]string) {
 	issuerName := annotations[certManagerClusterIssuerAnnotation]
 	if issuerName != "" {
@@ -293,11 +248,11 @@ func (r *svcReconciler) setTLSConfiguredIfEnabled(resource *v1alpha1.StackResour
 func (r *svcReconciler) resolveClusterIssuer(ctx context.Context, resource *v1alpha1.StackResource) (string, bool) {
 	logger := controller.LoggerFromContext(ctx)
 
-	issuerName := resource.Annotations[v1alpha1.StackdomeClusterIssuerAnnotationKey]
+	issuerName := resource.Annotations[v1alpha1.ClusterIssuerAnnotation]
 	if issuerName == "" {
 		logger.Info("StackResource missing cluster-issuer annotation, skipping TLS")
 		setTLSCondition(resource, v1.ConditionFalse, "ClusterIssuerNotConfigured",
-			fmt.Sprintf("Missing annotation %s", v1alpha1.StackdomeClusterIssuerAnnotationKey))
+			fmt.Sprintf("Missing annotation %s", v1alpha1.ClusterIssuerAnnotation))
 		return "", false
 	}
 
@@ -317,21 +272,7 @@ func (r *svcReconciler) resolveClusterIssuer(ctx context.Context, resource *v1al
 	return issuerName, true
 }
 
-func setTLSCondition(resource *v1alpha1.StackResource, status v1.ConditionStatus, reason, message string) {
-	meta.SetStatusCondition(&resource.Status.Conditions, v1.Condition{
-		Type:               string(v1alpha1.StackResourceTLSConfigured),
-		Status:             status,
-		ObservedGeneration: resource.Generation,
-		Reason:             reason,
-		Message:            message,
-	})
-}
-
 // --- Service reconciliation ---
-
-func httpProxyNameForResource(resourceName string) string {
-	return fmt.Sprintf("%s-http-proxy", resourceName)
-}
 
 func (r *svcReconciler) ensureService(ctx context.Context, resource *v1alpha1.StackResource) (*corev1.Service, error) {
 	logger := controller.LoggerFromContext(ctx)
@@ -365,6 +306,7 @@ func (r *svcReconciler) buildDesiredService(resource *v1alpha1.StackResource) co
 		ObjectMeta: v1.ObjectMeta{
 			Name:      ResourceSVCName(resource),
 			Namespace: resource.Namespace,
+			Labels:    identityLabels(resource),
 		},
 		Spec: corev1.ServiceSpec{
 			Selector: GetDeploymentLabelForResource(resource),
@@ -374,9 +316,9 @@ func (r *svcReconciler) buildDesiredService(resource *v1alpha1.StackResource) co
 	ports := make([]corev1.ServicePort, 0, len(resource.Spec.Ports))
 	for _, p := range resource.Spec.Ports {
 		ports = append(ports, corev1.ServicePort{
-			Name:       fmt.Sprintf("%s-%d", resource.Name, p.Number),
+			Name:       p.Name,
 			Port:       p.Number,
-			TargetPort: intstr.FromInt(int(p.Number)),
+			TargetPort: intstr.FromString(p.Name),
 		})
 	}
 
@@ -388,4 +330,76 @@ func (r *svcReconciler) buildDesiredService(resource *v1alpha1.StackResource) co
 	}
 
 	return svc
+}
+
+func collectExposedPorts(resource *v1alpha1.StackResource) (portFqdnMap map[int]string, tlsHosts []string) {
+	portFqdnMap = make(map[int]string)
+	for _, port := range resource.Spec.Ports {
+		if !port.ExposeToPublic {
+			continue
+		}
+		portFqdnMap[int(port.Number)] = port.FQDN
+		if port.TLS {
+			tlsHosts = append(tlsHosts, port.FQDN)
+		}
+	}
+	return
+}
+
+func setTLSCondition(resource *v1alpha1.StackResource, status v1.ConditionStatus, reason, message string) {
+	meta.SetStatusCondition(&resource.Status.Conditions, v1.Condition{
+		Type:               string(v1alpha1.StackResourceTLSConfigured),
+		Status:             status,
+		ObservedGeneration: resource.Generation,
+		Reason:             reason,
+		Message:            message,
+	})
+}
+
+func buildRedirectMiddleware(namespace string) *unstructured.Unstructured {
+	mw := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "traefik.io/v1alpha1",
+			"kind":       "Middleware",
+			"metadata": map[string]interface{}{
+				"name":      traefikRedirectMiddlewareName,
+				"namespace": namespace,
+			},
+			"spec": map[string]interface{}{
+				"redirectScheme": map[string]interface{}{
+					"scheme":    "https",
+					"permanent": true,
+				},
+			},
+		},
+	}
+	return mw
+}
+
+func buildIngressRules(portFqdnMap map[int]string, serviceName string) []networkingv1.IngressRule {
+	rules := make([]networkingv1.IngressRule, 0, len(portFqdnMap))
+	for port, fqdn := range portFqdnMap {
+		rules = append(rules, networkingv1.IngressRule{
+			Host: fqdn,
+			IngressRuleValue: networkingv1.IngressRuleValue{
+				HTTP: &networkingv1.HTTPIngressRuleValue{
+					Paths: []networkingv1.HTTPIngressPath{{
+						Path:     "/",
+						PathType: ptr.To(networkingv1.PathTypePrefix),
+						Backend: networkingv1.IngressBackend{
+							Service: &networkingv1.IngressServiceBackend{
+								Name: serviceName,
+								Port: networkingv1.ServiceBackendPort{Number: int32(port)},
+							},
+						},
+					}},
+				},
+			},
+		})
+	}
+	return rules
+}
+
+func httpProxyNameForResource(resourceName string) string {
+	return fmt.Sprintf("%s-http-proxy", resourceName)
 }
