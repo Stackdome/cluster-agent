@@ -21,8 +21,11 @@ import (
 )
 
 const (
-	registryName       = "int-test-registry"
-	registryNamespace  = "stackdome-registry"
+	RegistryName      = "int-test-registry"
+	RegistryNamespace = "stackdome-registry"
+
+	registryName      = RegistryName
+	registryNamespace = RegistryNamespace
 	registryCredSecret = "registry-creds"
 	registryPort       = int32(5000)
 	registryUsername   = "admin"

@@ -8,7 +8,6 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -17,94 +16,36 @@ import (
 )
 
 // WaitForStackReady polls until the Stack reaches phase=Ready or the timeout expires.
+// For display-phase coverage; prefer WaitForStackAvailable for convergence assertions.
 func WaitForStackReady(ctx context.Context, c client.Client, key client.ObjectKey, timeout time.Duration) (*corev1alpha1.Stack, error) {
-	deadline := time.After(timeout)
-	tick := time.NewTicker(10 * time.Second)
-	defer tick.Stop()
+	return WaitFor(ctx, c, key, &corev1alpha1.Stack{}, func(s *corev1alpha1.Stack) bool {
+		return s.Status.Phase == corev1alpha1.StackReady
+	}, timeout)
+}
 
-	for {
-		select {
-		case <-deadline:
-			stack := &corev1alpha1.Stack{}
-			_ = c.Get(ctx, key, stack)
-			return stack, fmt.Errorf("timed out waiting for Stack %s to become Ready (current phase: %s)", key.Name, stack.Status.Phase)
-		case <-tick.C:
-			stack := &corev1alpha1.Stack{}
-			if err := c.Get(ctx, key, stack); err != nil {
-				continue
-			}
-			if stack.Status.Phase == corev1alpha1.StackReady {
-				return stack, nil
-			}
-		}
-	}
+// WaitForStackAvailable polls until the Stack has a fresh Available=True condition.
+func WaitForStackAvailable(ctx context.Context, c client.Client, key client.ObjectKey, timeout time.Duration) (*corev1alpha1.Stack, error) {
+	return WaitFor(ctx, c, key, &corev1alpha1.Stack{}, func(s *corev1alpha1.Stack) bool {
+		cond := meta.FindStatusCondition(s.Status.Conditions, string(corev1alpha1.StackConditionAvailable))
+		return cond != nil && cond.Status == metav1.ConditionTrue && cond.ObservedGeneration == s.Generation
+	}, timeout)
 }
 
 // WaitForStackResourceAvailable polls until the StackResource has Available=True.
 func WaitForStackResourceAvailable(ctx context.Context, c client.Client, key client.ObjectKey, timeout time.Duration) (*corev1alpha1.StackResource, error) {
-	deadline := time.After(timeout)
-	tick := time.NewTicker(10 * time.Second)
-	defer tick.Stop()
-
-	for {
-		select {
-		case <-deadline:
-			sr := &corev1alpha1.StackResource{}
-			_ = c.Get(ctx, key, sr)
-			return sr, fmt.Errorf("timed out waiting for StackResource %s to become Available (current phase: %s)", key.Name, sr.Status.Phase)
-		case <-tick.C:
-			sr := &corev1alpha1.StackResource{}
-			if err := c.Get(ctx, key, sr); err != nil {
-				continue
-			}
-			cond := meta.FindStatusCondition(sr.Status.Conditions, string(corev1alpha1.StackResourceStatusAvailable))
-			if cond != nil && cond.Status == metav1.ConditionTrue {
-				return sr, nil
-			}
-		}
-	}
+	return WaitFor(ctx, c, key, &corev1alpha1.StackResource{}, func(sr *corev1alpha1.StackResource) bool {
+		return StackResourceIsAvailable(sr)
+	}, timeout)
 }
 
 // WaitForStackDeleted polls until the Stack no longer exists.
 func WaitForStackDeleted(ctx context.Context, c client.Client, key client.ObjectKey, timeout time.Duration) error {
-	deadline := time.After(timeout)
-	tick := time.NewTicker(5 * time.Second)
-	defer tick.Stop()
-
-	for {
-		select {
-		case <-deadline:
-			return fmt.Errorf("timed out waiting for Stack %s to be deleted", key.Name)
-		case <-tick.C:
-			stack := &corev1alpha1.Stack{}
-			if err := c.Get(ctx, key, stack); err != nil {
-				if errors.IsNotFound(err) {
-					return nil
-				}
-			}
-		}
-	}
+	return WaitForDeleted(ctx, c, key, &corev1alpha1.Stack{}, timeout)
 }
 
 // WaitForStackResourceDeleted polls until the StackResource no longer exists.
 func WaitForStackResourceDeleted(ctx context.Context, c client.Client, key client.ObjectKey, timeout time.Duration) error {
-	deadline := time.After(timeout)
-	tick := time.NewTicker(5 * time.Second)
-	defer tick.Stop()
-
-	for {
-		select {
-		case <-deadline:
-			return fmt.Errorf("timed out waiting for StackResource %s to be deleted", key.Name)
-		case <-tick.C:
-			sr := &corev1alpha1.StackResource{}
-			if err := c.Get(ctx, key, sr); err != nil {
-				if errors.IsNotFound(err) {
-					return nil
-				}
-			}
-		}
-	}
+	return WaitForDeleted(ctx, c, key, &corev1alpha1.StackResource{}, timeout)
 }
 
 // GetDeploymentForResource retrieves the Deployment created for a StackResource.
@@ -175,25 +116,7 @@ func GetStackResource(ctx context.Context, c client.Client, key client.ObjectKey
 
 // WaitForDeploymentUpdated polls until the Deployment matches the given predicate.
 func WaitForDeploymentUpdated(ctx context.Context, c client.Client, namespace, name string, predicate func(*appsv1.Deployment) bool, timeout time.Duration) (*appsv1.Deployment, error) {
-	deadline := time.After(timeout)
-	tick := time.NewTicker(5 * time.Second)
-	defer tick.Stop()
-
-	for {
-		select {
-		case <-deadline:
-			dep, _ := GetDeploymentForResource(ctx, c, namespace, name)
-			return dep, fmt.Errorf("timed out waiting for Deployment %s to match predicate", name)
-		case <-tick.C:
-			dep, err := GetDeploymentForResource(ctx, c, namespace, name)
-			if err != nil {
-				continue
-			}
-			if predicate(dep) {
-				return dep, nil
-			}
-		}
-	}
+	return WaitFor(ctx, c, client.ObjectKey{Name: name, Namespace: namespace}, &appsv1.Deployment{}, predicate, timeout)
 }
 
 // WaitForStackResourceCount polls until the namespace has at least the given number of StackResources.
@@ -243,24 +166,7 @@ func ServiceIsHeadless(svc *corev1.Service) bool {
 }
 
 func WaitForLastFailureDetails(ctx context.Context, c client.Client, key client.ObjectKey, timeout time.Duration) (*corev1alpha1.StackResource, error) {
-	deadline := time.After(timeout)
-	tick := time.NewTicker(5 * time.Second)
-	defer tick.Stop()
-
-	for {
-		select {
-		case <-deadline:
-			sr := &corev1alpha1.StackResource{}
-			_ = c.Get(ctx, key, sr)
-			return sr, fmt.Errorf("timed out waiting for LastFailureDetails on StackResource %s", key.Name)
-		case <-tick.C:
-			sr := &corev1alpha1.StackResource{}
-			if err := c.Get(ctx, key, sr); err != nil {
-				continue
-			}
-			if len(sr.Status.LastFailureDetails) > 0 {
-				return sr, nil
-			}
-		}
-	}
+	return WaitFor(ctx, c, key, &corev1alpha1.StackResource{}, func(sr *corev1alpha1.StackResource) bool {
+		return len(sr.Status.LastFailureDetails) > 0
+	}, timeout)
 }

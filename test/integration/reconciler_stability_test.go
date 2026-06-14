@@ -1,7 +1,6 @@
 package integration
 
 import (
-	"context"
 	"fmt"
 	"time"
 
@@ -20,32 +19,9 @@ import (
 	"stackdome.io/cluster-agent/test/integration/helpers"
 )
 
-const (
-	migStackReadyTimeout   = 5 * time.Minute
-	migSRAvailTimeout      = 5 * time.Minute
-	migFieldRemovalTimeout = 2 * time.Minute
-	migNoopStabilityWindow = 30 * time.Second
-	migPGReadyTimeout      = 5 * time.Minute
-	migCNPGChangeTimeout   = 2 * time.Minute
-	migStackDeleteTimeout  = 2 * time.Minute
-	migPGDeleteTimeout     = 2 * time.Minute
-	migRegistryTimeout     = 3 * time.Minute
-)
+var _ = Describe("Reconciler stability", func() {
 
-var _ = Describe("SSA to Update Migration", Ordered, func() {
-	var (
-		testEnv *bootstrap.Environment
-		ctx     context.Context
-		c       client.Client
-	)
-
-	BeforeAll(func() {
-		testEnv = GetEnvironment()
-		ctx = context.Background()
-		c = testEnv.Client
-	})
-
-	Context("StackResource field removal (workload_reconciler)", Ordered, func() {
+	Context("StackResource field clearing propagates to the Deployment", Ordered, func() {
 		var (
 			stack        *corev1alpha1.Stack
 			resourceName string
@@ -53,21 +29,20 @@ var _ = Describe("SSA to Update Migration", Ordered, func() {
 		)
 
 		BeforeAll(func() {
-			stack = fixtures.StackWithAllOptionalFields("mig-stack")
-			resourceName = stack.Spec.StackResources[0].Name
-
-			By("Creating the Stack with all optional fields populated")
-			Expect(c.Create(ctx, stack)).To(Succeed())
+			swr := fixtures.StackWithAllOptionalFields("mig-stack")
+			Expect(fixtures.CreateStackWithResources(ctx, c, swr)).To(Succeed())
+			stack = swr.Stack
+			resourceName = stack.Spec.ResourceNames[0]
 
 			By("Waiting for Stack to become Ready")
-			_, err := helpers.WaitForStackReady(ctx, c, client.ObjectKeyFromObject(stack), migStackReadyTimeout)
+			_, err := helpers.WaitForStackReady(ctx, c, client.ObjectKeyFromObject(stack), readyTimeout)
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Waiting for StackResource to become Available")
 			_, err = helpers.WaitForStackResourceAvailable(ctx, c, client.ObjectKey{
 				Name:      resourceName,
 				Namespace: stack.Namespace,
-			}, migSRAvailTimeout)
+			}, readyTimeout)
 			Expect(err).NotTo(HaveOccurred())
 
 			depKey = client.ObjectKey{Name: resourceName, Namespace: stack.Namespace}
@@ -90,13 +65,14 @@ var _ = Describe("SSA to Update Migration", Ordered, func() {
 			Expect(err).NotTo(HaveOccurred())
 			previousRV := dep.ResourceVersion
 
-			By("Clearing EnvironmentVariables on the Stack")
-			Expect(c.Get(ctx, client.ObjectKeyFromObject(stack), stack)).To(Succeed())
-			stack.Spec.StackResources[0].Spec.EnvironmentVariables = nil
-			Expect(c.Update(ctx, stack)).To(Succeed())
+			By("Clearing EnvironmentVariables on the StackResource")
+			sr := &corev1alpha1.StackResource{}
+			Expect(c.Get(ctx, client.ObjectKey{Name: resourceName, Namespace: stack.Namespace}, sr)).To(Succeed())
+			sr.Spec.EnvironmentVariables = nil
+			Expect(c.Update(ctx, sr)).To(Succeed())
 
 			By("Waiting for Deployment to be updated")
-			updatedDep, err := helpers.WaitForDeploymentFieldChange(ctx, c, depKey, previousRV, migFieldRemovalTimeout)
+			updatedDep, err := helpers.WaitForRVChange(ctx, c, depKey, &appsv1.Deployment{}, previousRV, fieldChangeTimeout)
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Verifying env vars are removed")
@@ -109,13 +85,14 @@ var _ = Describe("SSA to Update Migration", Ordered, func() {
 			Expect(err).NotTo(HaveOccurred())
 			previousRV := dep.ResourceVersion
 
-			By("Clearing Ports on the Stack")
-			Expect(c.Get(ctx, client.ObjectKeyFromObject(stack), stack)).To(Succeed())
-			stack.Spec.StackResources[0].Spec.Ports = nil
-			Expect(c.Update(ctx, stack)).To(Succeed())
+			By("Clearing Ports on the StackResource")
+			sr := &corev1alpha1.StackResource{}
+			Expect(c.Get(ctx, client.ObjectKey{Name: resourceName, Namespace: stack.Namespace}, sr)).To(Succeed())
+			sr.Spec.Ports = nil
+			Expect(c.Update(ctx, sr)).To(Succeed())
 
 			By("Waiting for Deployment to be updated")
-			updatedDep, err := helpers.WaitForDeploymentFieldChange(ctx, c, depKey, previousRV, migFieldRemovalTimeout)
+			updatedDep, err := helpers.WaitForRVChange(ctx, c, depKey, &appsv1.Deployment{}, previousRV, fieldChangeTimeout)
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Verifying container ports are removed")
@@ -128,13 +105,14 @@ var _ = Describe("SSA to Update Migration", Ordered, func() {
 			Expect(err).NotTo(HaveOccurred())
 			previousRV := dep.ResourceVersion
 
-			By("Clearing Command on the Stack")
-			Expect(c.Get(ctx, client.ObjectKeyFromObject(stack), stack)).To(Succeed())
-			stack.Spec.StackResources[0].Spec.Command = nil
-			Expect(c.Update(ctx, stack)).To(Succeed())
+			By("Clearing Command on the StackResource")
+			sr := &corev1alpha1.StackResource{}
+			Expect(c.Get(ctx, client.ObjectKey{Name: resourceName, Namespace: stack.Namespace}, sr)).To(Succeed())
+			sr.Spec.Command = nil
+			Expect(c.Update(ctx, sr)).To(Succeed())
 
 			By("Waiting for Deployment to be updated")
-			updatedDep, err := helpers.WaitForDeploymentFieldChange(ctx, c, depKey, previousRV, migFieldRemovalTimeout)
+			updatedDep, err := helpers.WaitForRVChange(ctx, c, depKey, &appsv1.Deployment{}, previousRV, fieldChangeTimeout)
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Verifying command is removed")
@@ -147,13 +125,14 @@ var _ = Describe("SSA to Update Migration", Ordered, func() {
 			Expect(err).NotTo(HaveOccurred())
 			previousRV := dep.ResourceVersion
 
-			By("Clearing Args on the Stack")
-			Expect(c.Get(ctx, client.ObjectKeyFromObject(stack), stack)).To(Succeed())
-			stack.Spec.StackResources[0].Spec.Args = nil
-			Expect(c.Update(ctx, stack)).To(Succeed())
+			By("Clearing Args on the StackResource")
+			sr := &corev1alpha1.StackResource{}
+			Expect(c.Get(ctx, client.ObjectKey{Name: resourceName, Namespace: stack.Namespace}, sr)).To(Succeed())
+			sr.Spec.Args = nil
+			Expect(c.Update(ctx, sr)).To(Succeed())
 
 			By("Waiting for Deployment to be updated")
-			updatedDep, err := helpers.WaitForDeploymentFieldChange(ctx, c, depKey, previousRV, migFieldRemovalTimeout)
+			updatedDep, err := helpers.WaitForRVChange(ctx, c, depKey, &appsv1.Deployment{}, previousRV, fieldChangeTimeout)
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Verifying args are removed")
@@ -166,13 +145,14 @@ var _ = Describe("SSA to Update Migration", Ordered, func() {
 			Expect(err).NotTo(HaveOccurred())
 			previousRV := dep.ResourceVersion
 
-			By("Setting Init to nil on the Stack")
-			Expect(c.Get(ctx, client.ObjectKeyFromObject(stack), stack)).To(Succeed())
-			stack.Spec.StackResources[0].Spec.Init = nil
-			Expect(c.Update(ctx, stack)).To(Succeed())
+			By("Setting Init to nil on the StackResource")
+			sr := &corev1alpha1.StackResource{}
+			Expect(c.Get(ctx, client.ObjectKey{Name: resourceName, Namespace: stack.Namespace}, sr)).To(Succeed())
+			sr.Spec.Init = nil
+			Expect(c.Update(ctx, sr)).To(Succeed())
 
 			By("Waiting for Deployment to be updated")
-			updatedDep, err := helpers.WaitForDeploymentFieldChange(ctx, c, depKey, previousRV, migFieldRemovalTimeout)
+			updatedDep, err := helpers.WaitForRVChange(ctx, c, depKey, &appsv1.Deployment{}, previousRV, fieldChangeTimeout)
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Verifying init containers are removed")
@@ -198,16 +178,16 @@ var _ = Describe("SSA to Update Migration", Ordered, func() {
 			Expect(c.Update(ctx, sr)).To(Succeed())
 
 			By("Verifying Deployment ResourceVersion remains stable for 30 seconds")
-			err = helpers.VerifyResourceVersionStable(ctx, c, depKey, stableRV, migNoopStabilityWindow)
+			err = helpers.VerifyRVStable(ctx, c, depKey, &appsv1.Deployment{}, stableRV, stabilityWindow)
 			Expect(err).NotTo(HaveOccurred(), "Deployment should not be updated when spec is unchanged")
 		})
 
 		AfterAll(func() {
-			// Skipping cleanup for debugging — leave Stack in cluster
+			helpers.CleanupStack(ctx, c, stack)
 		})
 	})
 
-	Context("PostgresCluster field removal (pg_cluster_reconciler)", Ordered, func() {
+	Context("PostgresCluster field clearing propagates to the CNPG Cluster", Ordered, func() {
 		var (
 			pg      *addonsv1alpha1.PostgresCluster
 			cnpgKey client.ObjectKey
@@ -220,7 +200,7 @@ var _ = Describe("SSA to Update Migration", Ordered, func() {
 			Expect(c.Create(ctx, pg)).To(Succeed())
 
 			By("Waiting for PostgresCluster to become Ready")
-			_, err := helpers.WaitForPostgresClusterReady(ctx, c, client.ObjectKeyFromObject(pg), migPGReadyTimeout)
+			_, err := helpers.WaitForPostgresClusterReady(ctx, c, client.ObjectKeyFromObject(pg), readyTimeout)
 			Expect(err).NotTo(HaveOccurred())
 
 			cnpgKey = client.ObjectKey{
@@ -252,7 +232,7 @@ var _ = Describe("SSA to Update Migration", Ordered, func() {
 			Expect(c.Update(ctx, pg)).To(Succeed())
 
 			By("Waiting for CNPG Cluster to be updated")
-			updatedCluster, err := helpers.WaitForCNPGClusterSpecChange(ctx, c, cnpgKey, previousRV, migCNPGChangeTimeout)
+			updatedCluster, err := helpers.WaitForRVChange(ctx, c, cnpgKey, &cnpgv1.Cluster{}, previousRV, fieldChangeTimeout)
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Verifying synchronous replication config is removed")
@@ -260,7 +240,7 @@ var _ = Describe("SSA to Update Migration", Ordered, func() {
 				"synchronous replication should be removed when NumSynchronousReplicas is 0")
 
 			By("Waiting for PostgresCluster to become Ready again")
-			_, err = helpers.WaitForPostgresClusterReady(ctx, c, client.ObjectKeyFromObject(pg), migPGReadyTimeout)
+			_, err = helpers.WaitForPostgresClusterReady(ctx, c, client.ObjectKeyFromObject(pg), readyTimeout)
 			Expect(err).NotTo(HaveOccurred())
 		})
 
@@ -275,7 +255,7 @@ var _ = Describe("SSA to Update Migration", Ordered, func() {
 			Expect(c.Update(ctx, pg)).To(Succeed())
 
 			By("Waiting for CNPG Cluster to be updated")
-			updatedCluster, err := helpers.WaitForCNPGClusterSpecChange(ctx, c, cnpgKey, previousRV, migCNPGChangeTimeout)
+			updatedCluster, err := helpers.WaitForRVChange(ctx, c, cnpgKey, &cnpgv1.Cluster{}, previousRV, fieldChangeTimeout)
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Verifying custom postgres parameters are removed (CNPG defaults may remain)")
@@ -285,7 +265,7 @@ var _ = Describe("SSA to Update Migration", Ordered, func() {
 				"shared_buffers should be removed when PostgresConf is emptied")
 
 			By("Waiting for PostgresCluster to become Ready again")
-			_, err = helpers.WaitForPostgresClusterReady(ctx, c, client.ObjectKeyFromObject(pg), migPGReadyTimeout)
+			_, err = helpers.WaitForPostgresClusterReady(ctx, c, client.ObjectKeyFromObject(pg), readyTimeout)
 			Expect(err).NotTo(HaveOccurred())
 		})
 
@@ -319,30 +299,29 @@ var _ = Describe("SSA to Update Migration", Ordered, func() {
 			if pg != nil {
 				By("Cleaning up migration test PostgresCluster")
 				_ = c.Delete(ctx, pg)
-				_ = helpers.WaitForPostgresClusterDeleted(ctx, c, client.ObjectKeyFromObject(pg), migPGDeleteTimeout)
+				_ = helpers.WaitForPostgresClusterDeleted(ctx, c, client.ObjectKeyFromObject(pg), deleteTimeout)
 			}
 		})
 	})
 
-	Context("Registry controller (no spurious updates)", Ordered, func() {
-		const registryName = "int-test-registry"
+	Context("ClusterRegistry no-op reconciles cause no updates", Ordered, func() {
 
 		It("should not update registry Deployment when nothing changed", func() {
 			By("Verifying registry is running (set up by bootstrap)")
-			reg, err := helpers.WaitForRegistryReady(ctx, c, registryName, migRegistryTimeout)
+			reg, err := helpers.WaitForClusterRegistryReady(ctx, c, client.ObjectKey{Name: bootstrap.RegistryName}, readyTimeout)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(reg.Status.Phase).To(Equal(registryv1alpha1.RegistryPhaseRunning))
 
 			By("Recording registry Deployment ResourceVersion")
 			dep := &appsv1.Deployment{}
 			Expect(c.Get(ctx, client.ObjectKey{
-				Name:      registryName,
-				Namespace: "stackdome-registry",
+				Name:      bootstrap.RegistryName,
+				Namespace: bootstrap.RegistryNamespace,
 			}, dep)).To(Succeed())
 			stableRV := dep.ResourceVersion
 
 			By("Triggering a no-op reconcile by annotating the ClusterRegistry")
-			Expect(c.Get(ctx, client.ObjectKey{Name: registryName}, reg)).To(Succeed())
+			Expect(c.Get(ctx, client.ObjectKey{Name: bootstrap.RegistryName}, reg)).To(Succeed())
 			if reg.Annotations == nil {
 				reg.Annotations = make(map[string]string)
 			}
@@ -350,8 +329,8 @@ var _ = Describe("SSA to Update Migration", Ordered, func() {
 			Expect(c.Update(ctx, reg)).To(Succeed())
 
 			By("Verifying registry Deployment ResourceVersion remains stable")
-			depKey := client.ObjectKey{Name: registryName, Namespace: "stackdome-registry"}
-			err = helpers.VerifyResourceVersionStable(ctx, c, depKey, stableRV, migNoopStabilityWindow)
+			depKey := client.ObjectKey{Name: bootstrap.RegistryName, Namespace: bootstrap.RegistryNamespace}
+			err = helpers.VerifyRVStable(ctx, c, depKey, &appsv1.Deployment{}, stableRV, stabilityWindow)
 			Expect(err).NotTo(HaveOccurred(), "Registry Deployment should not be updated on no-op reconcile")
 		})
 
@@ -359,28 +338,23 @@ var _ = Describe("SSA to Update Migration", Ordered, func() {
 			By("Recording registry ConfigMap ResourceVersion")
 			cm := &corev1.ConfigMap{}
 			cmKey := client.ObjectKey{
-				Name:      registryName + "-config",
-				Namespace: "stackdome-registry",
+				Name:      bootstrap.RegistryName + "-config",
+				Namespace: bootstrap.RegistryNamespace,
 			}
 			Expect(c.Get(ctx, cmKey, cm)).To(Succeed())
 			stableRV := cm.ResourceVersion
 
 			By("Triggering a no-op reconcile by annotating the ClusterRegistry")
 			reg := &registryv1alpha1.ClusterRegistry{}
-			Expect(c.Get(ctx, client.ObjectKey{Name: registryName}, reg)).To(Succeed())
+			Expect(c.Get(ctx, client.ObjectKey{Name: bootstrap.RegistryName}, reg)).To(Succeed())
 			if reg.Annotations == nil {
 				reg.Annotations = make(map[string]string)
 			}
 			reg.Annotations["ssa-test/noop-cm"] = fmt.Sprintf("%d", time.Now().UnixNano())
 			Expect(c.Update(ctx, reg)).To(Succeed())
 
-			By("Waiting for reconciliation to happen")
-			time.Sleep(15 * time.Second)
-
-			By("Verifying ConfigMap ResourceVersion is unchanged")
-			updatedCM := &corev1.ConfigMap{}
-			Expect(c.Get(ctx, cmKey, updatedCM)).To(Succeed())
-			Expect(updatedCM.ResourceVersion).To(Equal(stableRV),
+			By("Verifying ConfigMap ResourceVersion remains stable")
+			Expect(helpers.VerifyRVStable(ctx, c, cmKey, &corev1.ConfigMap{}, stableRV, stabilityWindow)).To(Succeed(),
 				"Registry ConfigMap should not be updated on no-op reconcile")
 		})
 	})

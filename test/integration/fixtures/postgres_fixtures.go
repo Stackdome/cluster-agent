@@ -8,9 +8,6 @@ import (
 
 const (
 	defaultImageCatalog = "postgres-catalog"
-	defaultNamespace    = "pg-integration-test"
-	defaultStorageClass = "standard"
-	defaultStorageSize  = "1Gi"
 	defaultPGMajor      = 16
 	defaultPGMinor      = 3
 )
@@ -56,6 +53,18 @@ func PostgresClusterWithDatabases(name string) *addonsv1alpha1.PostgresCluster {
 		{
 			Name: "analytics",
 		},
+	}
+	return pg
+}
+
+// PostgresClusterWithCustomConfig creates a PostgresCluster with custom postgres configuration.
+func PostgresClusterWithCustomConfig(name string) *addonsv1alpha1.PostgresCluster {
+	pg := SimplePostgresCluster(name)
+	pg.Spec.ReplicasSpec.NumSynchronousReplicas = 1
+	pg.Spec.ReplicasSpec.SynchronousReplicaDataDurability = addonsv1alpha1.PreferredDataDurability
+	pg.Spec.PostgreSQLSpec.PostgresConf = map[string]string{
+		"max_connections": "200",
+		"shared_buffers":  "256MB",
 	}
 	return pg
 }
