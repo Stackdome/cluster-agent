@@ -30,39 +30,129 @@ const (
 type StackResourceStatusCondition string
 
 const (
-	StackResourceStatusAvailable StackResourceStatusCondition = "Available"
-	StackResourceTLSConfigured   StackResourceStatusCondition = "TLSConfigured"
+	StackResourceStatusAvailable   StackResourceStatusCondition = "Available"
+	StackResourceTLSConfigured     StackResourceStatusCondition = "TLSConfigured"
+	StackResourceDependenciesReady StackResourceStatusCondition = "DependenciesReady"
+	StackResourceBuildReady        StackResourceStatusCondition = "BuildReady"
+	StackResourcePreDeployComplete StackResourceStatusCondition = "PreDeployComplete"
+	StackResourceWorkloadAvailable StackResourceStatusCondition = "WorkloadAvailable"
+	StackResourceIngressReady      StackResourceStatusCondition = "IngressReady"
+	StackResourceStalled           StackResourceStatusCondition = "Stalled"
+	StackResourceConverged         StackResourceStatusCondition = "Converged"
+)
+
+type WorkloadType string
+
+const (
+	WorkloadTypeService         WorkloadType = "Service"
+	WorkloadTypeStatefulService WorkloadType = "StatefulService"
+	WorkloadTypeWorker          WorkloadType = "Worker"
+	WorkloadTypeJob             WorkloadType = "Job"
+	WorkloadTypeCronJob         WorkloadType = "CronJob"
 )
 
 const (
 	RestartResourceAnnotation = "kubectl.kubernetes.io/restartedAt"
 )
 
-// StackResourceSpec defines the desired state of a StackResource
+type HealthChecks struct {
+	// +optional
+	Readiness *Probe `json:"readiness,omitempty"`
+	// +optional
+	Liveness *Probe `json:"liveness,omitempty"`
+	// +optional
+	Startup *Probe `json:"startup,omitempty"`
+}
+
+// +kubebuilder:validation:XValidation:rule="[has(self.httpGet), has(self.tcpSocket), has(self.command)].filter(x, x).size() == 1",message="exactly one of httpGet, tcpSocket, or command must be set"
+type Probe struct {
+	// +optional
+	HTTPGet *HTTPGetProbe `json:"httpGet,omitempty"`
+	// +optional
+	TCPSocket *TCPSocketProbe `json:"tcpSocket,omitempty"`
+	// +optional
+	Command []string `json:"command,omitempty"`
+	// +kubebuilder:default=0
+	InitialDelaySeconds int32 `json:"initialDelaySeconds,omitempty"`
+	// +kubebuilder:default=10
+	PeriodSeconds int32 `json:"periodSeconds,omitempty"`
+	// +kubebuilder:default=3
+	FailureThreshold int32 `json:"failureThreshold,omitempty"`
+	// +kubebuilder:default=1
+	TimeoutSeconds int32 `json:"timeoutSeconds,omitempty"`
+}
+
+type HTTPGetProbe struct {
+	// +kubebuilder:default=/
+	Path string `json:"path,omitempty"`
+	// PortName must reference a declared port name from spec.ports.
+	// +required
+	PortName string `json:"portName"`
+}
+
+type TCPSocketProbe struct {
+	// PortName must reference a declared port name from spec.ports.
+	// +required
+	PortName string `json:"portName"`
+}
+
+type EnvVarSource struct {
+	// +required
+	SecretKeyRef corev1.SecretKeySelector `json:"secretKeyRef"`
+}
+
+// +kubebuilder:validation:XValidation:rule="has(self.buildSpec) != has(self.imageSpec)",message="exactly one of buildSpec or imageSpec must be set"
+// +kubebuilder:validation:XValidation:rule="self.workloadType != 'CronJob' || (has(self.schedule) && self.schedule != ”)",message="schedule is required for CronJob workloads"
+// +kubebuilder:validation:XValidation:rule="self.workloadType == 'CronJob' || !has(self.schedule) || self.schedule == ”",message="schedule is only valid for CronJob workloads"
+// +kubebuilder:validation:XValidation:rule="!(self.workloadType in ['Worker','Job','CronJob']) || !has(self.ports) || size(self.ports) == 0",message="Worker, Job, and CronJob workloads cannot declare ports"
+// +kubebuilder:validation:XValidation:rule="self.workloadType in ['Service','StatefulService'] || !has(self.preDeployCommand)",message="preDeployCommand is only valid for Service and StatefulService workloads"
+// +kubebuilder:validation:XValidation:rule="self.workloadType in ['Service','StatefulService'] || !has(self.healthChecks)",message="healthChecks are only valid for Service and StatefulService workloads"
 type StackResourceSpec struct {
-	// Only one of the following fields should be specified
-	// +union
+	// +kubebuilder:validation:Enum=Service;StatefulService;Worker;Job;CronJob
+	// +kubebuilder:default=Service
+	WorkloadType WorkloadType `json:"workloadType,omitempty"`
+	// +optional
+	Schedule string `json:"schedule,omitempty"`
+	// +kubebuilder:default=1
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	Replicas *int32 `json:"replicas,omitempty"`
+
+	// +optional
 	BuildSpec *StackResourceBuildSpec `json:"buildSpec,omitempty"`
-	ImageSpec *ImageSpec              `json:"imageSpec,omitempty"`
+	// +optional
+	ImageSpec *ImageSpec `json:"imageSpec,omitempty"`
+
 	// +optional
 	Init *InitSpec `json:"init,omitempty"`
 	// +optional
-	Command []string `json:"command"`
+	Command []string `json:"command,omitempty"`
 	// +optional
-	Args []string `json:"args"`
+	Args []string `json:"args,omitempty"`
+	// +optional
+	EnvironmentVariables []EnvironmentVariable `json:"environmentVariables,omitempty"`
 	// +optional
 	VolumeMounts []VolumeMount `json:"volumeMounts,omitempty"`
 	// +optional
-	EnvironmentVariables []EnvironmentVariables `json:"environmentVariables,omitempty"`
-	// Other resources this workspace resource depends on.
+	DependsOn []string `json:"dependsOn,omitempty"`
 	// +optional
-	DependsOn []string `json:"dependsOn"`
+	Ports []Port `json:"ports,omitempty"`
+
 	// +optional
-	Ports []Port `json:"ports"`
+	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
+	// +optional
+	HealthChecks *HealthChecks `json:"healthChecks,omitempty"`
+	// +optional
+	PreDeployCommand []string `json:"preDeployCommand,omitempty"`
+	// +kubebuilder:default=30
+	// +optional
+	TerminationGracePeriodSeconds *int64 `json:"terminationGracePeriodSeconds,omitempty"`
+	// +kubebuilder:default=false
+	// +optional
+	HardenedSecurityDefaults *bool `json:"hardenedSecurityDefaults,omitempty"`
+
 	// +optional
 	RestartRequest *metav1.Time `json:"restartRequest,omitempty"`
-	// +optional
-	StateFul bool `json:"stateFul"`
 }
 
 type InitSpec struct {
@@ -75,31 +165,36 @@ type InitSpec struct {
 	ImageSpec *ImageSpec `json:"imageSpec"`
 }
 
-// type WorkspaceStorageRef struct {
-// 	WorkspaceStorageName string `json:"workspaceStorageName"`
-// }
-
-// +kubebuilder:validation:XValidation:rule="!self.exposeToPublic || self.fqdn != ''",message="fqdn is required when exposeToPublic is true"
+// +kubebuilder:validation:XValidation:rule="!self.exposeToPublic || self.fqdn != ”",message="fqdn is required when exposeToPublic is true"
+// +kubebuilder:validation:XValidation:rule="self.protocol == 'http' || !self.exposeToPublic",message="only http ports can be exposed to public"
 type Port struct {
 	// +required
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`
+	// +kubebuilder:validation:MaxLength=15
+	Name string `json:"name"`
+	// +required
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
 	Number int32 `json:"number"`
-	// +optional
+	// +kubebuilder:validation:Enum=http;grpc;tcp
+	// +kubebuilder:default=http
+	Protocol string `json:"protocol,omitempty"`
 	// +kubebuilder:default=false
-	ExposeToPublic bool `json:"exposeToPublic"`
-	// +optional
-	// +kubebuilder:default=true
-	IsHttp bool `json:"isHttp"`
+	ExposeToPublic bool `json:"exposeToPublic,omitempty"`
 	// +optional
 	FQDN string `json:"fqdn,omitempty"`
 	// +optional
-	TLS bool `json:"tls"`
+	TLS bool `json:"tls,omitempty"`
 }
 
-type EnvironmentVariables struct {
+// +kubebuilder:validation:XValidation:rule="has(self.value) != has(self.valueFrom)",message="exactly one of value or valueFrom must be set"
+type EnvironmentVariable struct {
 	// +required
 	Name string `json:"name"`
-	// +required
-	Value string `json:"value"`
+	// +optional
+	Value string `json:"value,omitempty"`
+	// +optional
+	ValueFrom *EnvVarSource `json:"valueFrom,omitempty"`
 }
 
 // +kubebuilder:validation:XValidation:rule="has(self.value) != has(self.valueFrom)",message="exactly one of value or valueFrom must be set"
@@ -121,9 +216,11 @@ type VolumeMount struct {
 	// +required
 	SourceVolume string `json:"sourceVolume"`
 	// +optional
-	SourceSubPath string `json:"sourceSubPath"`
+	SourceSubPath string `json:"sourceSubPath,omitempty"`
 	// +required
 	Destination string `json:"destination"`
+	// +kubebuilder:default=false
+	ReadOnly bool `json:"readOnly,omitempty"`
 }
 
 type StackResourceBuildSpec struct {
@@ -312,8 +409,9 @@ type BuildStatus struct {
 // StackResourceStatus defines the observed state of StackResource
 type StackResourceStatus struct {
 	// The most recent generation observed by the controller.
-	ObservedGeneration                    int64  `json:"observedGeneration,omitempty"`
-	ObservedStackdomeServerObjectRevision string `json:"observedStackdomeServerObjectRevision,omitempty"`
+	ObservedGeneration int64                           `json:"observedGeneration,omitempty"`
+	ObservedRevision   string                          `json:"observedRevision,omitempty"`
+	LastConverged      *StackResourceConvergenceRecord `json:"lastConverged,omitempty"`
 	// Conditions is a list of status conditions ths object is in.
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 	// +kubebuilder:default=Pending
@@ -325,10 +423,15 @@ type StackResourceStatus struct {
 	LastRestartRequestProcessedAt *metav1.Time `json:"lastRestartRequestProcessedAt,omitempty"`
 	// Current build that this resource uses.
 	// Applicable only to resources which have BuildSpec defined.
-	CurrentBuild        *BuildStatus        `json:"currentBuild,omitempty"`
-	StatusHash          string              `json:"statusHash,omitempty"`
-	LastFailureDetails  []LastFailureDetail `json:"lastFailureDetail,omitempty"`
-	LastFailureRevision string              `json:"lastFailureRevision,omitempty"`
+	CurrentBuild                  *BuildStatus        `json:"currentBuild,omitempty"`
+	StatusHash                    string              `json:"statusHash,omitempty"`
+	LastFailureDetails            []LastFailureDetail `json:"lastFailureDetail,omitempty"`
+	LastFailureDeploymentRevision string              `json:"lastFailureDeploymentRevision,omitempty"`
+	Replicas                      int32               `json:"replicas,omitempty"`
+	AvailableReplicas             int32               `json:"availableReplicas,omitempty"`
+	UpdatedReplicas               int32               `json:"updatedReplicas,omitempty"`
+	LastRunTime                   *metav1.Time        `json:"lastRunTime,omitempty"`
+	LastRunSucceeded              *bool               `json:"lastRunSucceeded,omitempty"`
 }
 
 type LastFailureDetail struct {
@@ -423,7 +526,7 @@ func getHostFromURL(urlString string) (string, error) {
 }
 
 func (w *StackResource) StatusHash() string {
-	hasher := fnv.New32a()
+	hasher := fnv.New64a()
 	hasher.Reset()
 	printer := spew.ConfigState{
 		Indent:         " ",
@@ -431,9 +534,16 @@ func (w *StackResource) StatusHash() string {
 		DisableMethods: true,
 		SpewKeys:       true,
 	}
-	w.Status.StatusHash = ""
-	printer.Fprintf(hasher, "%#v", w.Status)
-	return rand.SafeEncodeString(fmt.Sprint(hasher.Sum32()))
+	statusCopy := w.Status
+	statusCopy.StatusHash = ""
+	conds := make([]metav1.Condition, len(w.Status.Conditions))
+	copy(conds, w.Status.Conditions)
+	for i := range conds {
+		conds[i].LastTransitionTime = metav1.Time{}
+	}
+	statusCopy.Conditions = conds
+	printer.Fprintf(hasher, "%#v", statusCopy)
+	return rand.SafeEncodeString(fmt.Sprint(hasher.Sum64()))
 }
 
 // +kubebuilder:object:root=true
@@ -451,19 +561,6 @@ func (w *StackResourceSpec) HasExposedPort() bool {
 		}
 	}
 	return false
-}
-
-func (w *StackResource) SplitPortsByInternalAndExternal() ([]Port, []Port) {
-	internalPorts := make([]Port, 0)
-	externalPorts := make([]Port, 0)
-	for _, port := range w.Spec.Ports {
-		if port.ExposeToPublic {
-			externalPorts = append(externalPorts, port)
-		} else {
-			internalPorts = append(internalPorts, port)
-		}
-	}
-	return internalPorts, externalPorts
 }
 
 func (w *StackResource) VolumeMountSources() []string {

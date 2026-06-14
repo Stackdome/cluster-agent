@@ -8,6 +8,20 @@ const (
 	StackdomeObjectGeneration = "managedobject.stackdome.io/generation"
 )
 
+const (
+	LabelManagedBy    = "app.kubernetes.io/managed-by"
+	LabelStackName    = "core.stackdome.io/stack-name"
+	LabelStackID      = "core.stackdome.io/stack-id"
+	LabelResourceName = "core.stackdome.io/resource-name"
+	LabelResourceID   = "core.stackdome.io/resource-id"
+
+	ManagedByStackdome = "stackdome"
+
+	RevisionAnnotation      = "core.stackdome.io/revision"
+	ReleaseIDAnnotation     = "core.stackdome.io/release-id"
+	ClusterIssuerAnnotation = "core.stackdome.io/cluster-issuer"
+)
+
 // CredentialSecretKeyPair selects username and password keys from a Secret
 type CredentialSecretKeyPair struct {
 	// +required
