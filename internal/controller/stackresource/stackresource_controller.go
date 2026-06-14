@@ -10,11 +10,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -24,10 +22,6 @@ import (
 	"stackdome.io/cluster-agent/api/core/v1alpha1"
 	storagev1alpha1 "stackdome.io/cluster-agent/api/storage/v1alpha1"
 	"stackdome.io/cluster-agent/internal/controller"
-)
-
-const (
-	ownerKey = ".metadata.owner"
 )
 
 type subReconcilerResult struct {
@@ -58,7 +52,6 @@ type StackResourceReconciler struct {
 	uncachedClient client.Client
 	Scheme         *runtime.Scheme
 	subReconcilers []subReconciler
-	RequeueCh      chan event.GenericEvent
 }
 
 func (r *StackResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -136,9 +129,9 @@ func (r *StackResourceReconciler) reconcile(ctx context.Context, resource *v1alp
 }
 
 func reportStackResourceNotReady(resource *v1alpha1.StackResource, reason, msg string) {
-	objectRevision, ok := resource.Annotations[v1alpha1.StackdomeServerObjectRevisionAnnotationKey]
+	objectRevision, ok := resource.Annotations[v1alpha1.RevisionAnnotation]
 	if ok {
-		resource.Status.ObservedStackdomeServerObjectRevision = objectRevision
+		resource.Status.ObservedRevision = objectRevision
 	}
 	resource.Status.ObservedGeneration = resource.Generation
 	resource.Status.Phase = v1alpha1.StackResourcePhasePending
@@ -146,6 +139,59 @@ func reportStackResourceNotReady(resource *v1alpha1.StackResource, reason, msg s
 	resource.Status.InternalAddress = nil
 	meta.SetStatusCondition(&resource.Status.Conditions, metav1.Condition{
 		Type:               string(v1alpha1.StackResourceStatusAvailable),
+		Status:             metav1.ConditionFalse,
+		ObservedGeneration: resource.Generation,
+		Reason:             reason,
+		Message:            msg,
+	})
+	meta.SetStatusCondition(&resource.Status.Conditions, metav1.Condition{
+		Type:               string(v1alpha1.StackResourceConverged),
+		Status:             metav1.ConditionFalse,
+		ObservedGeneration: resource.Generation,
+		Reason:             reason,
+		Message:            msg,
+	})
+	resource.Status.StatusHash = resource.StatusHash()
+}
+
+func setResourceCondition(resource *v1alpha1.StackResource, condType v1alpha1.StackResourceStatusCondition, ready bool, reason, msg string) {
+	condStatus := metav1.ConditionFalse
+	if ready {
+		condStatus = metav1.ConditionTrue
+	}
+	meta.SetStatusCondition(&resource.Status.Conditions, metav1.Condition{
+		Type:               string(condType),
+		Status:             condStatus,
+		ObservedGeneration: resource.Generation,
+		Reason:             reason,
+		Message:            msg,
+	})
+}
+
+func reportStackResourceFailed(resource *v1alpha1.StackResource, reason, msg string) {
+	resource.Status.ObservedGeneration = resource.Generation
+	if rev, ok := resource.Annotations[v1alpha1.RevisionAnnotation]; ok {
+		resource.Status.ObservedRevision = rev
+	}
+	resource.Status.Phase = v1alpha1.StackResourcePhaseFailed
+	meta.SetStatusCondition(&resource.Status.Conditions, metav1.Condition{
+		Type:               string(v1alpha1.StackResourceStatusAvailable),
+		Status:             metav1.ConditionFalse,
+		ObservedGeneration: resource.Generation,
+		Reason:             reason,
+		Message:            msg,
+	})
+	// Terminal failure: mark Stalled so the Stack controller can distinguish
+	// retriable (Pending) from non-retriable (Failed) children.
+	meta.SetStatusCondition(&resource.Status.Conditions, metav1.Condition{
+		Type:               string(v1alpha1.StackResourceStalled),
+		Status:             metav1.ConditionTrue,
+		ObservedGeneration: resource.Generation,
+		Reason:             reason,
+		Message:            msg,
+	})
+	meta.SetStatusCondition(&resource.Status.Conditions, metav1.Condition{
+		Type:               string(v1alpha1.StackResourceConverged),
 		Status:             metav1.ConditionFalse,
 		ObservedGeneration: resource.Generation,
 		Reason:             reason,
@@ -159,14 +205,20 @@ func reportStackResourceReady(resource *v1alpha1.StackResource) {
 	if resource.Spec.BuildSpec != nil {
 		resource.Status.ImageSourceRevision = resource.Spec.BuildSpec.SourceRevision.GetSourceRevisionString()
 	}
-	objectRevision, ok := resource.Annotations[v1alpha1.StackdomeServerObjectRevisionAnnotationKey]
-	if ok {
-		resource.Status.ObservedStackdomeServerObjectRevision = objectRevision
+	if rev, ok := resource.Annotations[v1alpha1.RevisionAnnotation]; ok {
+		resource.Status.ObservedRevision = rev
 	}
 	resource.Status.Phase = v1alpha1.StackResourcePhaseReady
 	meta.SetStatusCondition(&resource.Status.Conditions, metav1.Condition{
 		Type:               string(v1alpha1.StackResourceStatusAvailable),
 		Status:             metav1.ConditionTrue,
+		ObservedGeneration: resource.Generation,
+		Reason:             "StackResourceAvailable",
+		Message:            "StackResource is available",
+	})
+	meta.SetStatusCondition(&resource.Status.Conditions, metav1.Condition{
+		Type:               string(v1alpha1.StackResourceStalled),
+		Status:             metav1.ConditionFalse,
 		ObservedGeneration: resource.Generation,
 		Reason:             "StackResourceAvailable",
 		Message:            "StackResource is available",
@@ -222,9 +274,8 @@ func stackResourceAvailable(resource *v1alpha1.StackResource) bool {
 
 func NewStackResourceReconciler(client client.Client, scheme *runtime.Scheme, uncachedClient client.Client) *StackResourceReconciler {
 	w := &StackResourceReconciler{
-		Client:    client,
-		Scheme:    scheme,
-		RequeueCh: make(chan event.GenericEvent),
+		Client: client,
+		Scheme: scheme,
 	}
 
 	depChecker := &workloadDependencyChecker{
@@ -254,6 +305,10 @@ func NewStackResourceReconciler(client client.Client, scheme *runtime.Scheme, un
 	return w
 }
 
+func imageBuildFailed(imageBuild *buildsv1alpha1.ImageBuild) bool {
+	return imageBuild.Status.Phase == buildsv1alpha1.BuildPhaseFailed
+}
+
 func imageBuildComplete(imageBuild *buildsv1alpha1.ImageBuild) bool {
 	availableCond := meta.FindStatusCondition(imageBuild.Status.Conditions, string(buildsv1alpha1.BuildAvailable))
 	if availableCond != nil && availableCond.Status == metav1.ConditionTrue {
@@ -264,16 +319,6 @@ func imageBuildComplete(imageBuild *buildsv1alpha1.ImageBuild) bool {
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *StackResourceReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &v1alpha1.StackResource{}, ownerKey, func(rawObj client.Object) []string {
-		sr := rawObj.(*v1alpha1.StackResource)
-		owner := metav1.GetControllerOf(sr)
-		if owner == nil {
-			return nil
-		}
-		return []string{owner.Name}
-	}); err != nil {
-		return err
-	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.StackResource{}).
 		Watches(&buildsv1alpha1.ImageBuild{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &v1alpha1.StackResource{})).
@@ -296,6 +341,5 @@ func (r *StackResourceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				return res
 			},
 		)).
-		WatchesRawSource(source.Channel(r.RequeueCh, &handler.EnqueueRequestForObject{})).
 		Complete(r)
 }

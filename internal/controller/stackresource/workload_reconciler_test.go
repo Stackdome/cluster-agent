@@ -14,6 +14,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -40,7 +41,7 @@ func newTestResource() *v1alpha1.StackResource {
 				Image: "busybox:latest",
 			},
 			Ports: []v1alpha1.Port{
-				{Number: 8080},
+				{Name: "http", Number: 8080, Protocol: "http"},
 			},
 		},
 	}
@@ -132,12 +133,6 @@ func setupCreateOrUpdate(mockClient *mocks.MockClient, deploy *appsv1.Deployment
 		Update(gomock.Any(), gomock.AssignableToTypeOf(&appsv1.Deployment{}), gomock.Any()).
 		Return(nil).
 		AnyTimes()
-}
-
-func setupSiblingsList(mockClient *mocks.MockClient) {
-	mockClient.EXPECT().
-		List(gomock.Any(), gomock.AssignableToTypeOf(&v1alpha1.StackResourceList{}), gomock.Any()).
-		Return(nil)
 }
 
 func setupEmptyUncachedList(mockUncached *mocks.MockClient) {
@@ -295,7 +290,6 @@ var _ = Describe("workloadReconciler", func() {
 
 	Context("deployment create or update", func() {
 		It("should create deployment when it does not exist", func() {
-			setupSiblingsList(mockClient)
 
 			mockClient.EXPECT().
 				Get(gomock.Any(), client.ObjectKey{Name: "test-resource", Namespace: "test-ns"}, gomock.AssignableToTypeOf(&appsv1.Deployment{})).
@@ -337,10 +331,17 @@ var _ = Describe("workloadReconciler", func() {
 					},
 				},
 				Spec: appsv1.DeploymentSpec{
+					Replicas: ptr.To(int32(1)),
 					Selector: &metav1.LabelSelector{
 						MatchLabels: map[string]string{"resource": "test-resource"},
 					},
-					Strategy:                appsv1.DeploymentStrategy{Type: appsv1.RollingUpdateDeploymentStrategyType},
+					Strategy: appsv1.DeploymentStrategy{
+						Type: appsv1.RollingUpdateDeploymentStrategyType,
+						RollingUpdate: &appsv1.RollingUpdateDeployment{
+							MaxUnavailable: ptr.To(intstr.FromInt32(0)),
+							MaxSurge:       ptr.To(intstr.FromString("25%")),
+						},
+					},
 					ProgressDeadlineSeconds: ptr.To(int32(300)),
 					Template: corev1.PodTemplateSpec{
 						ObjectMeta: metav1.ObjectMeta{
@@ -353,7 +354,7 @@ var _ = Describe("workloadReconciler", func() {
 									Image:                    "busybox:latest",
 									ImagePullPolicy:          corev1.PullAlways,
 									TerminationMessagePolicy: corev1.TerminationMessageFallbackToLogsOnError,
-									Ports:                    []corev1.ContainerPort{{ContainerPort: 8080}},
+									Ports:                    []corev1.ContainerPort{{Name: "http", ContainerPort: 8080}},
 								},
 							},
 						},
@@ -368,8 +369,6 @@ var _ = Describe("workloadReconciler", func() {
 			}
 			// Set owner reference to match what SetControllerReference will produce.
 			Expect(controllerutil.SetControllerReference(resource, existing, scheme)).To(Succeed())
-
-			setupSiblingsList(mockClient)
 
 			mockClient.EXPECT().
 				Get(gomock.Any(), client.ObjectKey{Name: "test-resource", Namespace: "test-ns"}, gomock.AssignableToTypeOf(&appsv1.Deployment{})).
@@ -397,10 +396,17 @@ var _ = Describe("workloadReconciler", func() {
 					},
 				},
 				Spec: appsv1.DeploymentSpec{
+					Replicas: ptr.To(int32(1)),
 					Selector: &metav1.LabelSelector{
 						MatchLabels: map[string]string{"resource": "test-resource"},
 					},
-					Strategy:                appsv1.DeploymentStrategy{Type: appsv1.RollingUpdateDeploymentStrategyType},
+					Strategy: appsv1.DeploymentStrategy{
+						Type: appsv1.RollingUpdateDeploymentStrategyType,
+						RollingUpdate: &appsv1.RollingUpdateDeployment{
+							MaxUnavailable: ptr.To(intstr.FromInt32(0)),
+							MaxSurge:       ptr.To(intstr.FromString("25%")),
+						},
+					},
 					ProgressDeadlineSeconds: ptr.To(int32(300)),
 					Template: corev1.PodTemplateSpec{
 						ObjectMeta: metav1.ObjectMeta{
@@ -413,7 +419,7 @@ var _ = Describe("workloadReconciler", func() {
 									Image:                    "old-image:v1",
 									ImagePullPolicy:          corev1.PullAlways,
 									TerminationMessagePolicy: corev1.TerminationMessageFallbackToLogsOnError,
-									Ports:                    []corev1.ContainerPort{{ContainerPort: 8080}},
+									Ports:                    []corev1.ContainerPort{{Name: "http", ContainerPort: 8080}},
 								},
 							},
 						},
@@ -427,8 +433,6 @@ var _ = Describe("workloadReconciler", func() {
 				},
 			}
 			Expect(controllerutil.SetControllerReference(resource, existing, scheme)).To(Succeed())
-
-			setupSiblingsList(mockClient)
 
 			mockClient.EXPECT().
 				Get(gomock.Any(), client.ObjectKey{Name: "test-resource", Namespace: "test-ns"}, gomock.AssignableToTypeOf(&appsv1.Deployment{})).
@@ -457,7 +461,6 @@ var _ = Describe("workloadReconciler", func() {
 				{ContainerName: "old-failure"},
 			}
 
-			setupSiblingsList(mockClient)
 			setupCreateOrUpdate(mockClient, availableDeployment("1"))
 
 			result, err := reconciler.reconcile(ctx, resource)
@@ -467,30 +470,28 @@ var _ = Describe("workloadReconciler", func() {
 			Expect(resource.Status.LastFailureDetails).To(BeNil())
 		})
 
-		It("should also clear LastFailureRevision so re-capture is possible if deployment degrades again", func() {
-			// Bug: previously only LastFailureDetails was cleared but not LastFailureRevision.
+		It("should also clear LastFailureDeploymentRevision so re-capture is possible if deployment degrades again", func() {
+			// Bug: previously only LastFailureDetails was cleared but not LastFailureDeploymentRevision.
 			// That left the revision tag set, which caused the capture block to be permanently
 			// skipped on subsequent reconciles — so crash details were never repopulated after
 			// the pod's brief Running phase between crash loops.
-			resource.Status.LastFailureRevision = "1"
+			resource.Status.LastFailureDeploymentRevision = "1"
 			resource.Status.LastFailureDetails = []v1alpha1.LastFailureDetail{
 				{ContainerName: "old-failure"},
 			}
 
-			setupSiblingsList(mockClient)
 			setupCreateOrUpdate(mockClient, availableDeployment("1"))
 
 			_, err := reconciler.reconcile(ctx, resource)
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(resource.Status.LastFailureDetails).To(BeNil())
-			Expect(resource.Status.LastFailureRevision).To(BeEmpty())
+			Expect(resource.Status.LastFailureDeploymentRevision).To(BeEmpty())
 		})
 	})
 
 	Context("when deployment is not ready", func() {
 		It("should requeue and attempt to capture failures for new revision", func() {
-			setupSiblingsList(mockClient)
 			setupCreateOrUpdate(mockClient, notReadyDeployment("1"))
 			setupEmptyUncachedList(mockUncached)
 
@@ -503,7 +504,6 @@ var _ = Describe("workloadReconciler", func() {
 		})
 
 		It("should capture crash details when pods are crashing", func() {
-			setupSiblingsList(mockClient)
 			setupCreateOrUpdate(mockClient, notReadyDeployment("1"))
 			setupCrashingPods(mockUncached, "1")
 
@@ -514,16 +514,15 @@ var _ = Describe("workloadReconciler", func() {
 			Expect(resource.Status.LastFailureDetails).To(HaveLen(1))
 			Expect(resource.Status.LastFailureDetails[0].ContainerName).To(Equal("test-resource"))
 			Expect(resource.Status.LastFailureDetails[0].LastTerminationReason).To(Equal("Error"))
-			Expect(resource.Status.LastFailureRevision).To(Equal("1"))
+			Expect(resource.Status.LastFailureDeploymentRevision).To(Equal("1"))
 		})
 
 		It("should skip capture when already captured for this revision", func() {
-			resource.Status.LastFailureRevision = "1"
+			resource.Status.LastFailureDeploymentRevision = "1"
 			resource.Status.LastFailureDetails = []v1alpha1.LastFailureDetail{
 				{ContainerName: "test-resource", RestartCount: 3},
 			}
 
-			setupSiblingsList(mockClient)
 			setupCreateOrUpdate(mockClient, notReadyDeployment("1"))
 			// No uncached client expectations — capture should be skipped
 
@@ -535,12 +534,11 @@ var _ = Describe("workloadReconciler", func() {
 		})
 
 		It("should clear stale failures and re-capture for new revision", func() {
-			resource.Status.LastFailureRevision = "1"
+			resource.Status.LastFailureDeploymentRevision = "1"
 			resource.Status.LastFailureDetails = []v1alpha1.LastFailureDetail{
 				{ContainerName: "old-crash"},
 			}
 
-			setupSiblingsList(mockClient)
 			setupCreateOrUpdate(mockClient, notReadyDeployment("2"))
 			setupCrashingPods(mockUncached, "2")
 
@@ -550,13 +548,12 @@ var _ = Describe("workloadReconciler", func() {
 			Expect(result.resultRequeueAfter).NotTo(BeNil())
 			Expect(resource.Status.LastFailureDetails).To(HaveLen(1))
 			Expect(resource.Status.LastFailureDetails[0].ContainerName).To(Equal("test-resource"))
-			Expect(resource.Status.LastFailureRevision).To(Equal("2"))
+			Expect(resource.Status.LastFailureDeploymentRevision).To(Equal("2"))
 		})
 	})
 
 	Context("when deployment rollout is settled", func() {
 		It("should stop requeuing after NewReplicaSetAvailable grace period", func() {
-			setupSiblingsList(mockClient)
 			setupCreateOrUpdate(mockClient, settledDeployment("1"))
 			setupEmptyUncachedList(mockUncached)
 
@@ -567,7 +564,6 @@ var _ = Describe("workloadReconciler", func() {
 		})
 
 		It("should stop on ProgressDeadlineExceeded", func() {
-			setupSiblingsList(mockClient)
 			setupCreateOrUpdate(mockClient, progressDeadlineExceededDeployment("1"))
 			setupEmptyUncachedList(mockUncached)
 
@@ -576,6 +572,55 @@ var _ = Describe("workloadReconciler", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result).To(Equal(resultStop))
 		})
+
+		It("should keep generic reason when no old replicas are serving", func() {
+			deploy := settledDeployment("2")
+			deploy.Status.Replicas = 1
+			deploy.Status.AvailableReplicas = 0
+			deploy.Status.UpdatedReplicas = 1
+
+			setupCreateOrUpdate(mockClient, deploy)
+			setupEmptyUncachedList(mockUncached)
+
+			result, err := reconciler.reconcile(ctx, resource)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal(resultStop))
+
+			cond := findCondition(resource.Status.Conditions, string(v1alpha1.StackResourceStatusAvailable))
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Reason).To(Equal("StackResourceDeploymentNotReady"))
+		})
+	})
+
+	Context("when deployment is serving but not converged (broken rollout with old pods alive)", func() {
+		It("should pass through to svc reconciler and set Converged=False", func() {
+			// Old pod available, new pod crashing: Available=True on deployment
+			// but Replicas(2) != UpdatedReplicas(1). deploymentServing returns
+			// true, so workload reconciler yields to the svc reconciler.
+			deploy := availableDeployment("2")
+			deploy.Status.Replicas = 2
+			deploy.Status.UpdatedReplicas = 1
+			deploy.Status.ReadyReplicas = 1
+			deploy.Status.AvailableReplicas = 1
+			deploy.Status.UnavailableReplicas = 1
+			deploy.Spec.Replicas = ptr.To(int32(1))
+
+			setupCreateOrUpdate(mockClient, deploy)
+
+			result, err := reconciler.reconcile(ctx, resource)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal(resultNil), "should pass through to svc reconciler")
+
+			workloadCond := findCondition(resource.Status.Conditions, string(v1alpha1.StackResourceWorkloadAvailable))
+			Expect(workloadCond).NotTo(BeNil())
+			Expect(workloadCond.Status).To(Equal(metav1.ConditionTrue))
+
+			convergedCond := findCondition(resource.Status.Conditions, string(v1alpha1.StackResourceConverged))
+			Expect(convergedCond).NotTo(BeNil())
+			Expect(convergedCond.Status).To(Equal(metav1.ConditionFalse), "not converged: old RS pods still present")
+		})
 	})
 
 	Context("when restart is requested", func() {
@@ -583,7 +628,6 @@ var _ = Describe("workloadReconciler", func() {
 			now := metav1.Now()
 			resource.Spec.RestartRequest = &now
 
-			setupSiblingsList(mockClient)
 			setupCreateOrUpdate(mockClient, notReadyDeployment("1"))
 
 			result, err := reconciler.reconcile(ctx, resource)
@@ -599,7 +643,6 @@ var _ = Describe("workloadReconciler", func() {
 			resource.Spec.RestartRequest = &restartTime
 			resource.Status.LastRestartRequestProcessedAt = &processedTime
 
-			setupSiblingsList(mockClient)
 			deploy := availableDeployment("1")
 			setupCreateOrUpdate(mockClient, deploy)
 
@@ -612,12 +655,11 @@ var _ = Describe("workloadReconciler", func() {
 
 	Context("when new revision after settled", func() {
 		It("should re-enter the capture loop for new revision", func() {
-			resource.Status.LastFailureRevision = "1"
+			resource.Status.LastFailureDeploymentRevision = "1"
 			resource.Status.LastFailureDetails = []v1alpha1.LastFailureDetail{
 				{ContainerName: "old-crash"},
 			}
 
-			setupSiblingsList(mockClient)
 			setupCreateOrUpdate(mockClient, notReadyDeployment("2"))
 			setupCrashingPods(mockUncached, "2")
 
@@ -625,7 +667,7 @@ var _ = Describe("workloadReconciler", func() {
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.resultRequeueAfter).NotTo(BeNil())
-			Expect(resource.Status.LastFailureRevision).To(Equal("2"))
+			Expect(resource.Status.LastFailureDeploymentRevision).To(Equal("2"))
 			Expect(resource.Status.LastFailureDetails[0].ContainerName).To(Equal("test-resource"))
 		})
 	})
@@ -645,7 +687,6 @@ var _ = Describe("workloadReconciler", func() {
 				},
 			})
 
-			setupSiblingsList(mockClient)
 			setupCreateOrUpdate(mockClient, deploy)
 			setupEmptyUncachedList(mockUncached)
 
@@ -670,7 +711,6 @@ var _ = Describe("workloadReconciler", func() {
 				},
 			})
 
-			setupSiblingsList(mockClient)
 			setupCreateOrUpdate(mockClient, deploy)
 			setupEmptyUncachedList(mockUncached)
 
@@ -778,7 +818,6 @@ var _ = Describe("workloadReconciler", func() {
 					return nil
 				})
 
-			setupSiblingsList(mockClient)
 			setupCreateOrUpdate(mockClient, notReadyDeployment("1"))
 
 			result, err := reconciler.reconcile(ctx, resource)
