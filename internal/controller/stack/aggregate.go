@@ -47,8 +47,11 @@ func aggregateStackStatus(stack *v1alpha1.Stack, children []v1alpha1.StackResour
 
 	// A child is converged when its controller reports it healthy for the
 	// current spec generation and (in managed mode) has observed the revision
-	// the hub stamped on it. Single source of truth used by both the summary
-	// pass and the readiness counts below.
+	// the hub stamped on it. When the Stack carries a release-id, the child
+	// must also carry the same release-id — this prevents a race where the
+	// Stack is updated to a new release but the child still belongs to the
+	// previous one (cache skew between the Stack and StackResource informers
+	// can deliver updates out of order).
 	isConverged := func(child *v1alpha1.StackResource) bool {
 		convergedCondition := findStatusCondition(child.Status.Conditions, child.Generation, string(v1alpha1.StackResourceConverged))
 		converged := convergedCondition != nil && convergedCondition.Status == metav1.ConditionTrue
@@ -56,7 +59,8 @@ func aggregateStackStatus(stack *v1alpha1.Stack, children []v1alpha1.StackResour
 			return converged
 		}
 		rev := child.Annotations[v1alpha1.RevisionAnnotation]
-		return converged && rev != "" && child.Status.ObservedRevision == rev
+		return converged && rev != "" && child.Status.ObservedRevision == rev &&
+			(releaseID == "" || child.Annotations[v1alpha1.ReleaseIDAnnotation] == releaseID)
 	}
 
 	isStalled := func(child *v1alpha1.StackResource) bool {
@@ -112,6 +116,8 @@ func aggregateStackStatus(stack *v1alpha1.Stack, children []v1alpha1.StackResour
 				summary.Message = "no revision annotation (required for release-managed stacks)"
 			case managed && healthy && child.Status.ObservedRevision != childRevision:
 				summary.Message = "ready on a previous revision; latest revision not yet observed"
+			case managed && healthy && releaseID != "" && child.Annotations[v1alpha1.ReleaseIDAnnotation] != releaseID:
+				summary.Message = "converged on a previous release; waiting for current release"
 			case stalledCond != nil && stalledCond.Status == metav1.ConditionTrue:
 				summary.Message = fmt.Sprintf("resource is stalled: %s", stalledCond.Reason)
 			case healthy:

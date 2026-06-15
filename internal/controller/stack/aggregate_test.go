@@ -136,6 +136,14 @@ func pendingChild(name, annotatedRev string, generation int64) v1alpha1.StackRes
 	return sr
 }
 
+func withReleaseID(sr v1alpha1.StackResource, id string) v1alpha1.StackResource {
+	if sr.Annotations == nil {
+		sr.Annotations = make(map[string]string)
+	}
+	sr.Annotations[v1alpha1.ReleaseIDAnnotation] = id
+	return sr
+}
+
 func findCond(t *testing.T, conds []metav1.Condition, condType string) metav1.Condition {
 	t.Helper()
 	for _, c := range conds {
@@ -696,12 +704,12 @@ func TestWriteOnceGuard(t *testing.T) {
 	stack := managedStack("web")
 	stack.Annotations[v1alpha1.ReleaseIDAnnotation] = "uuid-1"
 	status := aggregateStackStatus(stack, []v1alpha1.StackResource{
-		readyChild("web", testRev, testRev, 1),
+		withReleaseID(readyChild("web", testRev, testRev, 1), "uuid-1"),
 	})
 	firstAt := status.LastConverged.At
 	stack.Status.LastConverged = status.LastConverged
 	status2 := aggregateStackStatus(stack, []v1alpha1.StackResource{
-		readyChild("web", testRev, testRev, 1),
+		withReleaseID(readyChild("web", testRev, testRev, 1), "uuid-1"),
 	})
 	if !status2.LastConverged.At.Equal(&firstAt) {
 		t.Fatal("write-once guard failed: At changed on same target")
@@ -712,12 +720,12 @@ func TestRollbackProducesNewRecord(t *testing.T) {
 	stack := managedStack("web")
 	stack.Annotations[v1alpha1.ReleaseIDAnnotation] = "uuid-1"
 	status := aggregateStackStatus(stack, []v1alpha1.StackResource{
-		readyChild("web", testRev, testRev, 1),
+		withReleaseID(readyChild("web", testRev, testRev, 1), "uuid-1"),
 	})
 	stack.Status.LastConverged = status.LastConverged
 	stack.Annotations[v1alpha1.ReleaseIDAnnotation] = "uuid-2"
 	status2 := aggregateStackStatus(stack, []v1alpha1.StackResource{
-		readyChild("web", testRev, testRev, 1),
+		withReleaseID(readyChild("web", testRev, testRev, 1), "uuid-2"),
 	})
 	if status2.LastConverged.ReleaseID != "uuid-2" {
 		t.Fatalf("expected releaseID uuid-2, got %q", status2.LastConverged.ReleaseID)
@@ -730,7 +738,7 @@ func TestLastConvergedAdvancesOnNewRevision(t *testing.T) {
 	stack.Annotations[v1alpha1.ReleaseIDAnnotation] = "uuid-2"
 	stack.Status.LastConverged = &v1alpha1.ConvergenceRecord{Revision: "rev-1", ReleaseID: "uuid-1", At: metav1.Now()}
 	status := aggregateStackStatus(stack, []v1alpha1.StackResource{
-		readyChild("web", "rev-2", "rev-2", 1),
+		withReleaseID(readyChild("web", "rev-2", "rev-2", 1), "uuid-2"),
 	})
 	assertPhase(t, status, v1alpha1.StackReady)
 	if status.LastConverged.Revision != "rev-2" || status.LastConverged.ReleaseID != "uuid-2" {
@@ -747,6 +755,44 @@ func TestLastConvergedStickyThroughStalled(t *testing.T) {
 	assertPhase(t, status, v1alpha1.StackFailed)
 	if status.LastConverged == nil || status.LastConverged.Revision != testRev {
 		t.Fatalf("lastConverged must survive a stall, got %+v", status.LastConverged)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Release-ID gate
+// ---------------------------------------------------------------------------
+
+func TestReleaseIDGatePreventsEarlyConvergence(t *testing.T) {
+	stack := managedStack("web")
+	stack.Annotations[v1alpha1.ReleaseIDAnnotation] = "uuid-2"
+	status := aggregateStackStatus(stack, []v1alpha1.StackResource{
+		withReleaseID(readyChild("web", testRev, testRev, 1), "uuid-1"),
+	})
+	assertPhase(t, status, v1alpha1.StackProgressing)
+	if status.LastConverged != nil {
+		t.Fatal("lastConverged must not be written when child carries a stale release-id")
+	}
+	if status.Resources[0].Message != "converged on a previous release; waiting for current release" {
+		t.Fatalf("expected release-id mismatch message, got %q", status.Resources[0].Message)
+	}
+}
+
+func TestReleaseIDGatePassesWhenStackHasNoReleaseID(t *testing.T) {
+	status := aggregateStackStatus(managedStack("web"), []v1alpha1.StackResource{
+		readyChild("web", testRev, testRev, 1),
+	})
+	assertPhase(t, status, v1alpha1.StackReady)
+}
+
+func TestReleaseIDGateMatchingIDs(t *testing.T) {
+	stack := managedStack("web")
+	stack.Annotations[v1alpha1.ReleaseIDAnnotation] = "uuid-1"
+	status := aggregateStackStatus(stack, []v1alpha1.StackResource{
+		withReleaseID(readyChild("web", testRev, testRev, 1), "uuid-1"),
+	})
+	assertPhase(t, status, v1alpha1.StackReady)
+	if status.LastConverged == nil || status.LastConverged.ReleaseID != "uuid-1" {
+		t.Fatalf("expected lastConverged with releaseID uuid-1, got %+v", status.LastConverged)
 	}
 }
 

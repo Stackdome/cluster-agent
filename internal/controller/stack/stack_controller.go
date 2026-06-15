@@ -52,6 +52,12 @@ func (r *StackReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{Requeue: true}, nil
 	}
 
+	if propagated, err := r.ensureReleaseIDAnnotation(ctx, stack, children.Items); err != nil {
+		return ctrl.Result{}, err
+	} else if propagated {
+		return ctrl.Result{Requeue: true}, nil
+	}
+
 	previousHash := stack.Status.StatusHash
 	stack.Status = aggregateStackStatus(stack, children.Items)
 	stack.Status.StatusHash = stack.StatusHash()
@@ -83,6 +89,39 @@ func (r *StackReconciler) ensureChildOwnership(ctx context.Context, stack *v1alp
 		adopted = true
 	}
 	return adopted, nil
+}
+
+// ensureReleaseIDAnnotation propagates the Stack's release-id annotation to
+// owned children that don't already carry it. This guarantees the isConverged
+// gate in aggregateStackStatus has a release-id to compare even if the
+// external release worker hasn't stamped a child yet.
+func (r *StackReconciler) ensureReleaseIDAnnotation(ctx context.Context, stack *v1alpha1.Stack, children []v1alpha1.StackResource) (bool, error) {
+	releaseID := stack.Annotations[v1alpha1.ReleaseIDAnnotation]
+	if releaseID == "" {
+		return false, nil
+	}
+
+	logger := controller.LoggerFromContext(ctx)
+	updated := false
+	for i := range children {
+		child := &children[i]
+		if !metav1.IsControlledBy(child, stack) {
+			continue
+		}
+		if child.Annotations[v1alpha1.ReleaseIDAnnotation] == releaseID {
+			continue
+		}
+		if child.Annotations == nil {
+			child.Annotations = make(map[string]string)
+		}
+		child.Annotations[v1alpha1.ReleaseIDAnnotation] = releaseID
+		if err := r.Client.Update(ctx, child); err != nil {
+			return updated, err
+		}
+		logger.Info("propagated release-id to child", "stackResource", child.Name, "releaseID", releaseID)
+		updated = true
+	}
+	return updated, nil
 }
 
 func (r *StackReconciler) SetupWithManager(mgr ctrl.Manager) error {
