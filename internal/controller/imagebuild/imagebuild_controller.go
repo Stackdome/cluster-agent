@@ -108,7 +108,8 @@ func (r *ImageBuildReconciler) reconcileImageBuildWithVolumeSource(ctx context.C
 		return ctrl.Result{}, err
 	}
 
-	jobName := fmt.Sprintf("%s-build", buildConfig.Name)
+	sourceRevision := buildConfig.Spec.SourceRevision.GetSourceRevisionString()
+	jobName := buildsv1alpha1.BuildJobName(buildConfig.Spec.ResourceName, sourceRevision)
 	buildSource := &imagebuilder.Source{
 		Volume: &imagebuilder.VolumeSource{
 			PvcName: volumeRef.Status.PvcName,
@@ -124,7 +125,7 @@ func (r *ImageBuildReconciler) reconcileImageBuildWithVolumeSource(ctx context.C
 		WithNamespace(buildConfig.Namespace).
 		WithRegistryURL(buildConfig.Spec.RegistryURL).
 		WithImageName(buildConfig.Spec.ResourceName).
-		WithTag(buildConfig.Spec.SourceRevision.GetSourceRevisionString()).
+		WithTag(sourceRevision).
 		WithInsecureRegistry(buildConfig.Spec.InsecureRegistry).
 		WithDockerfilePath(buildConfig.Spec.BuildContext.DockerfilePath).
 		WithContextPath(buildConfig.Spec.BuildContext.ContextPath).
@@ -137,6 +138,7 @@ func (r *ImageBuildReconciler) reconcileImageBuildWithVolumeSource(ctx context.C
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	setBuildJobAnnotations(desiredImageBuilderJob, buildConfig.Spec.ResourceName, sourceRevision, buildConfig.Spec.BuildContext.DockerfilePath)
 	if err := controllerutil.SetControllerReference(buildConfig, desiredImageBuilderJob, r.Scheme); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -161,7 +163,8 @@ func (r *ImageBuildReconciler) reconcileImageBuildWithGitSource(ctx context.Cont
 		return ctrl.Result{}, err
 	}
 
-	jobName := fmt.Sprintf("%s-build", buildConfig.Name)
+	sourceRevision := buildConfig.Spec.SourceRevision.GetSourceRevisionString()
+	jobName := buildsv1alpha1.BuildJobName(buildConfig.Spec.ResourceName, sourceRevision)
 	buildSource := &imagebuilder.Source{
 		GitRepo: &imagebuilder.GitRepoBuildSource{
 			Repo:     buildConfig.Spec.BuildContext.ContextSource.Git.DeepCopy(),
@@ -175,7 +178,7 @@ func (r *ImageBuildReconciler) reconcileImageBuildWithGitSource(ctx context.Cont
 		WithNamespace(buildConfig.Namespace).
 		WithRegistryURL(buildConfig.Spec.RegistryURL).
 		WithImageName(buildConfig.Spec.ResourceName).
-		WithTag(buildConfig.Spec.SourceRevision.GetSourceRevisionString()).
+		WithTag(sourceRevision).
 		WithInsecureRegistry(buildConfig.Spec.InsecureRegistry).
 		WithDockerfilePath(buildConfig.Spec.BuildContext.DockerfilePath).
 		WithContextPath(buildConfig.Spec.BuildContext.ContextPath).
@@ -188,6 +191,7 @@ func (r *ImageBuildReconciler) reconcileImageBuildWithGitSource(ctx context.Cont
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	setBuildJobAnnotations(desiredImageBuilderJob, buildConfig.Spec.ResourceName, sourceRevision, buildConfig.Spec.BuildContext.DockerfilePath)
 	if err := controllerutil.SetControllerReference(buildConfig, desiredImageBuilderJob, r.Scheme); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -401,6 +405,15 @@ func reportImageBuildComplete(buildConfig *buildsv1alpha1.ImageBuild) {
 		Message:            "Image build complete",
 	})
 	buildConfig.Status.StatusHash = buildConfig.StatusHash()
+}
+
+func setBuildJobAnnotations(job *batchv1.Job, resourceName, sourceRevision, dockerfilePath string) {
+	if job.Annotations == nil {
+		job.Annotations = make(map[string]string)
+	}
+	job.Annotations[buildsv1alpha1.AnnotationResourceName] = resourceName
+	job.Annotations[buildsv1alpha1.AnnotationSourceRevision] = sourceRevision
+	job.Annotations[buildsv1alpha1.AnnotationDockerfilePath] = dockerfilePath
 }
 
 // SetupWithManager sets up the controller with the Manager.
