@@ -19,11 +19,19 @@ package v1alpha1
 import (
 	"fmt"
 	"hash/fnv"
+	"regexp"
+	"strings"
 
 	"github.com/davecgh/go-spew/spew"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/rand"
 	corev1alpha1 "stackdome.io/cluster-agent/api/core/v1alpha1"
+)
+
+const (
+	AnnotationResourceName   = "builds.stackdome.io/resource-name"
+	AnnotationSourceRevision = "builds.stackdome.io/source-revision"
+	AnnotationDockerfilePath = "builds.stackdome.io/dockerfile-path"
 )
 
 type BuildPhase string
@@ -145,20 +153,68 @@ type ImageBuildList struct {
 	Items           []ImageBuild `json:"items"`
 }
 
+var dnsLabelRegex = regexp.MustCompile(`[^a-z0-9]+`)
+
+func SanitizeDNSLabel(s string, fallback string) string {
+	s = strings.ToLower(s)
+	s = dnsLabelRegex.ReplaceAllString(s, "-")
+	s = strings.Trim(s, "-")
+	if s == "" {
+		return fallback
+	}
+	return s
+}
+
+func truncateString(s string, maxLen int) string {
+	runes := []rune(s)
+	if len(runes) > maxLen {
+		return string(runes[:maxLen])
+	}
+	return s
+}
+
 func ImageBuildName(resourceName string, srcRevision string) string {
-	res := fmt.Sprintf("%s-%s", resourceName, srcRevision)
+	cleanName := SanitizeDNSLabel(resourceName, "app")
+	cleanRev := SanitizeDNSLabel(srcRevision, "rev")
+	res := fmt.Sprintf("%s-%s", cleanName, cleanRev)
 	if len(res) > 100 {
-		return res[:100]
+		res = res[:100]
+		res = strings.TrimSuffix(res, "-")
 	}
 	return res
 }
 
+const (
+	buildJobSuffix       = "-build"
+	shortRevisionLen     = 8
+	maxLabelValueLen     = 63
+	maxResourceNameInJob = maxLabelValueLen - shortRevisionLen - len(buildJobSuffix) - 1 // 48
+)
+
+func BuildJobName(resourceName string, sourceRevision string) string {
+	cleanName := SanitizeDNSLabel(resourceName, "app")
+	cleanRev := SanitizeDNSLabel(sourceRevision, "rev")
+
+	if len(cleanRev) > shortRevisionLen {
+		cleanRev = cleanRev[:shortRevisionLen]
+		cleanRev = strings.TrimSuffix(cleanRev, "-")
+	}
+	if len(cleanName) > maxResourceNameInJob {
+		cleanName = cleanName[:maxResourceNameInJob]
+		cleanName = strings.TrimSuffix(cleanName, "-")
+	}
+	if cleanRev == "" {
+		cleanRev = "rev"
+	}
+	return fmt.Sprintf("%s-%s%s", cleanName, cleanRev, buildJobSuffix)
+}
+
 func (w *ImageBuild) ShortBuildSrcRevisionFromStatus() string {
-	return w.Status.BuildSourceRevision[:7]
+	return truncateString(w.Status.BuildSourceRevision, 7)
 }
 
 func (w *ImageBuild) ShortBuildSrcRevisionFromSpec() string {
-	return w.Spec.SourceRevision.GetSourceRevisionString()[:7]
+	return truncateString(w.Spec.SourceRevision.GetSourceRevisionString(), 7)
 }
 
 func init() {
