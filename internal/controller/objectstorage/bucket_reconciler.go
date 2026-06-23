@@ -1,0 +1,105 @@
+package objectstorage
+
+import (
+	"context"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
+
+	storagev1alpha1 "stackdome.io/cluster-agent/api/storage/v1alpha1"
+)
+
+type S3BucketCreator interface {
+	CreateBucket(ctx context.Context, bucket string) error
+}
+
+type s3BucketCreator struct {
+	client *s3.Client
+}
+
+func newS3BucketCreator(ctx context.Context, endpoint, accessKey, secretKey string) (*s3BucketCreator, error) {
+	cfg, err := awsconfig.LoadDefaultConfig(ctx,
+		awsconfig.WithRegion("us-east-1"),
+		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKey, secretKey, "")),
+	)
+	if err != nil {
+		return nil, err
+	}
+	s3Client := s3.NewFromConfig(cfg, func(o *s3.Options) {
+		o.BaseEndpoint = aws.String(endpoint)
+		o.UsePathStyle = true
+	})
+	return &s3BucketCreator{client: s3Client}, nil
+}
+
+func (c *s3BucketCreator) CreateBucket(ctx context.Context, bucket string) error {
+	_, err := c.client.CreateBucket(ctx, &s3.CreateBucketInput{
+		Bucket: aws.String(bucket),
+	})
+	return err
+}
+
+type bucketReconciler struct {
+	client        client.Client
+	bucketCreator S3BucketCreator
+}
+
+func newBucketReconciler(c client.Client) *bucketReconciler {
+	return &bucketReconciler{client: c}
+}
+
+func (r *bucketReconciler) name() string { return "bucket-reconciler" }
+
+func (r *bucketReconciler) reconcile(ctx context.Context, resource *storagev1alpha1.ObjectStorage) (subReconcilerResult, error) {
+	if len(resource.Spec.Buckets) == 0 {
+		return resultNil, nil
+	}
+
+	logger := log.FromContext(ctx)
+
+	creator := r.bucketCreator
+	if creator == nil {
+		secret := &corev1.Secret{}
+		if err := r.client.Get(ctx, client.ObjectKey{
+			Name:      resource.Status.CredentialsSecretName,
+			Namespace: resource.Namespace,
+		}, secret); err != nil {
+			return resultNil, err
+		}
+
+		accessKey := string(secret.Data["AWS_ACCESS_KEY_ID"])
+		secretKey := string(secret.Data["AWS_SECRET_ACCESS_KEY"])
+
+		var err error
+		creator, err = newS3BucketCreator(ctx, resource.Status.Endpoint, accessKey, secretKey)
+		if err != nil {
+			return resultNil, err
+		}
+	}
+
+	resource.Status.Buckets = make([]storagev1alpha1.BucketStatus, 0, len(resource.Spec.Buckets))
+	for _, bucket := range resource.Spec.Buckets {
+		if err := creator.CreateBucket(ctx, bucket.Name); err != nil {
+			logger.Error(err, "Failed to create bucket", "bucket", bucket.Name)
+			resource.Status.Buckets = append(resource.Status.Buckets, storagev1alpha1.BucketStatus{
+				Name:    bucket.Name,
+				Created: false,
+			})
+			setStatusCondition(resource, storagev1alpha1.ObjectStorageConditionBucketsReady, metav1.ConditionFalse, "BucketCreationFailed", "Failed to create bucket: "+bucket.Name)
+			return resultStop, nil
+		}
+		resource.Status.Buckets = append(resource.Status.Buckets, storagev1alpha1.BucketStatus{
+			Name:    bucket.Name,
+			Created: true,
+		})
+	}
+
+	setStatusCondition(resource, storagev1alpha1.ObjectStorageConditionBucketsReady, metav1.ConditionTrue, "BucketsReady", "All buckets created successfully")
+	return resultNil, nil
+}
