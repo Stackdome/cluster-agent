@@ -48,21 +48,21 @@ type subReconciler interface {
 type ObjectStorageReconciler struct {
 	client.Client
 	Scheme         *runtime.Scheme
-	S3gwImage      string
+	ObjectStorageImage      string
 	subReconcilers []subReconciler
 }
 
-func NewObjectStorageReconciler(c client.Client, scheme *runtime.Scheme, s3gwImage string) *ObjectStorageReconciler {
+func NewObjectStorageReconciler(c client.Client, scheme *runtime.Scheme, objectStorageImage string) *ObjectStorageReconciler {
 	r := &ObjectStorageReconciler{
 		Client:    c,
 		Scheme:    scheme,
-		S3gwImage: s3gwImage,
+		ObjectStorageImage: objectStorageImage,
 	}
 
 	r.subReconcilers = []subReconciler{
 		newVolumeReconciler(c, scheme),
 		newCredentialsReconciler(c, scheme),
-		newDeploymentReconciler(c, scheme, s3gwImage),
+		newDeploymentReconciler(c, scheme, objectStorageImage),
 		newServiceReconciler(c, scheme),
 		newIngressReconciler(c, scheme),
 		newBucketReconciler(c),

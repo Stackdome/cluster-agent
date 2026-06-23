@@ -5,6 +5,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -57,13 +58,14 @@ func (r *volumeReconciler) reconcile(ctx context.Context, resource *storagev1alp
 		return resultNil, err
 	}
 
-	if existingVolume.Status.Phase != storagev1alpha1.VolumePhaseReady {
-		logger.Info("Volume not ready yet", "name", existingVolume.Name, "phase", existingVolume.Status.Phase)
-		setStatusCondition(resource, storagev1alpha1.ObjectStorageConditionAvailable, metav1.ConditionFalse, "VolumeNotReady", "Backing volume is not yet ready")
+	volumeAvailable := meta.FindStatusCondition(existingVolume.Status.Conditions, string(storagev1alpha1.VolumeConditionAvailable))
+	if volumeAvailable == nil || volumeAvailable.Status == metav1.ConditionFalse || volumeAvailable.ObservedGeneration != existingVolume.Generation {
+		logger.Info("Volume not available", "name", existingVolume.Name)
+		setStatusCondition(resource, storagev1alpha1.ObjectStorageConditionAvailable, metav1.ConditionFalse, "VolumeNotAvailable", "Backing volume is not available")
 		setPhase(resource, storagev1alpha1.ObjectStoragePhasePending)
 		return resultStop, nil
 	}
-
 	resource.Status.VolumeName = existingVolume.Name
+	resource.Status.PVCName = existingVolume.Status.PvcName
 	return resultNil, nil
 }

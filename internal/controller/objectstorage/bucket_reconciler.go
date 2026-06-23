@@ -2,11 +2,14 @@ package objectstorage
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -42,7 +45,15 @@ func (c *s3BucketCreator) CreateBucket(ctx context.Context, bucket string) error
 	_, err := c.client.CreateBucket(ctx, &s3.CreateBucketInput{
 		Bucket: aws.String(bucket),
 	})
-	return err
+	if err != nil {
+		var alreadyOwned *s3types.BucketAlreadyOwnedByYou
+		var alreadyExists *s3types.BucketAlreadyExists
+		if errors.As(err, &alreadyOwned) || errors.As(err, &alreadyExists) {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 type bucketReconciler struct {
@@ -73,8 +84,8 @@ func (r *bucketReconciler) reconcile(ctx context.Context, resource *storagev1alp
 			return resultNil, err
 		}
 
-		accessKey := string(secret.Data["AWS_ACCESS_KEY_ID"])
-		secretKey := string(secret.Data["AWS_SECRET_ACCESS_KEY"])
+		accessKey := string(secret.Data[storagev1alpha1.ObjectStorageSecretKeyAWSAccessKey])
+		secretKey := string(secret.Data[storagev1alpha1.ObjectStorageSecretKeyAWSSecretKey])
 
 		var err error
 		creator, err = newS3BucketCreator(ctx, resource.Status.Endpoint, accessKey, secretKey)
@@ -94,9 +105,11 @@ func (r *bucketReconciler) reconcile(ctx context.Context, resource *storagev1alp
 			setStatusCondition(resource, storagev1alpha1.ObjectStorageConditionBucketsReady, metav1.ConditionFalse, "BucketCreationFailed", "Failed to create bucket: "+bucket.Name)
 			return resultStop, nil
 		}
+		bucketURL := fmt.Sprintf("%s/%s", resource.Status.Endpoint, bucket.Name)
 		resource.Status.Buckets = append(resource.Status.Buckets, storagev1alpha1.BucketStatus{
 			Name:    bucket.Name,
 			Created: true,
+			URL:     bucketURL,
 		})
 	}
 

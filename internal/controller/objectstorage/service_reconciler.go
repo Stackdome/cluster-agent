@@ -39,7 +39,7 @@ func (r *serviceReconciler) reconcile(ctx context.Context, resource *storagev1al
 			Ports: []corev1.ServicePort{
 				{
 					Name:     "s3",
-					Port:     7480,
+					Port:     storagev1alpha1.ObjectStorageContainerPort,
 					Protocol: corev1.ProtocolTCP,
 				},
 			},
@@ -59,6 +59,6 @@ func (r *serviceReconciler) reconcile(ctx context.Context, resource *storagev1al
 		return resultNil, err
 	}
 
-	resource.Status.Endpoint = fmt.Sprintf("http://%s.%s.svc.cluster.local:7480", existingService.Name, existingService.Namespace)
+	resource.Status.Endpoint = fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", existingService.Name, existingService.Namespace, storagev1alpha1.ObjectStorageContainerPort)
 	return resultNil, nil
 }

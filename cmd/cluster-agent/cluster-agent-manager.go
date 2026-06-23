@@ -231,7 +231,7 @@ func main() {
 	objectStorageReconciler := objectstoragecontroller.NewObjectStorageReconciler(
 		mgr.GetClient(),
 		mgr.GetScheme(),
-		config.S3gwImage,
+		config.RustFSImage,
 	)
 	if err := objectStorageReconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ObjectStorage")
