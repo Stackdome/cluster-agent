@@ -76,8 +76,8 @@ var _ = Describe("ObjectStorage", Ordered, func() {
 			secret, err := helpers.GetCredentialsSecretForObjectStorage(ctx, c, os.Namespace, os.Name)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(secret.Name).To(Equal(os.CredentialsSecretName()))
-			Expect(secret.Data).To(HaveKey("access_key_id"))
-			Expect(secret.Data).To(HaveKey("secret_access_key"))
+			Expect(secret.Data).To(HaveKey(storagev1alpha1.ObjectStorageSecretKeyAWSAccessKey))
+			Expect(secret.Data).To(HaveKey(storagev1alpha1.ObjectStorageSecretKeyAWSSecretKey))
 		})
 
 		It("should verify the Deployment was created", func() {
@@ -85,7 +85,7 @@ var _ = Describe("ObjectStorage", Ordered, func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(dep.Name).To(Equal(os.DeploymentName()))
 			Expect(dep.Spec.Template.Spec.Containers).To(HaveLen(1))
-			Expect(dep.Spec.Template.Spec.Containers[0].Image).To(ContainSubstring("s3gw"))
+			Expect(dep.Spec.Template.Spec.Containers[0].Image).To(ContainSubstring("rustfs"))
 		})
 
 		It("should verify the Service was created", func() {
@@ -166,17 +166,17 @@ var _ = Describe("ObjectStorage", Ordered, func() {
 				Name:      os.CredentialsSecretName(),
 				Namespace: os.Namespace,
 			}, secret)).To(Succeed())
-			accessKey := string(secret.Data["AWS_ACCESS_KEY_ID"])
-			secretKey := string(secret.Data["AWS_SECRET_ACCESS_KEY"])
+			accessKey := string(secret.Data[storagev1alpha1.ObjectStorageSecretKeyAWSAccessKey])
+			secretKey := string(secret.Data[storagev1alpha1.ObjectStorageSecretKeyAWSSecretKey])
 			Expect(accessKey).NotTo(BeEmpty())
 			Expect(secretKey).NotTo(BeEmpty())
 
-			By("Finding a running s3gw pod")
+			By("Finding a running rustfs pod")
 			podName, err := helpers.GetPodForDeployment(ctx, env.KubeClient, os.Namespace, os.DeploymentName())
 			Expect(err).NotTo(HaveOccurred())
 
-			By("Port-forwarding to the s3gw pod")
-			localPort, stop, err := helpers.PortForwardToPod(env.RestConfig, os.Namespace, podName, 7480)
+			By("Port-forwarding to the rustfs pod")
+			localPort, stop, err := helpers.PortForwardToPod(env.RestConfig, os.Namespace, podName, int(storagev1alpha1.ObjectStorageContainerPort))
 			Expect(err).NotTo(HaveOccurred())
 			stopChan = stop
 

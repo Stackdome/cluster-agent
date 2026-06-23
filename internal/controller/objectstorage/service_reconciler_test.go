@@ -4,7 +4,10 @@ import (
 	"context"
 	"testing"
 
+	"fmt"
+
 	"go.uber.org/mock/gomock"
+	storagev1alpha1 "stackdome.io/cluster-agent/api/storage/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -36,8 +39,8 @@ func TestServiceReconciler_CreatesService(t *testing.T) {
 			if svc.Name != resource.ServiceName() {
 				t.Errorf("expected service name %s, got %s", resource.ServiceName(), svc.Name)
 			}
-			if len(svc.Spec.Ports) != 1 || svc.Spec.Ports[0].Port != 7480 {
-				t.Error("expected port 7480")
+			if len(svc.Spec.Ports) != 1 || svc.Spec.Ports[0].Port != storagev1alpha1.ObjectStorageContainerPort {
+				t.Error("expected port matching ObjectStorageContainerPort")
 			}
 			if svc.Spec.Selector["app"] != resource.DeploymentName() {
 				t.Errorf("expected selector app=%s", resource.DeploymentName())
@@ -86,7 +89,7 @@ func TestServiceReconciler_SetsEndpointWhenExists(t *testing.T) {
 	if !result.resultNil {
 		t.Error("expected resultNil when Service already exists")
 	}
-	expected := "http://test-os-s3gw.default.svc.cluster.local:7480"
+	expected := fmt.Sprintf("http://test-os-objstore.default.svc.cluster.local:%d", storagev1alpha1.ObjectStorageContainerPort)
 	if resource.Status.Endpoint != expected {
 		t.Errorf("expected endpoint %s, got %s", expected, resource.Status.Endpoint)
 	}

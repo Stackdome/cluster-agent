@@ -36,7 +36,7 @@ func testObjectStorage() *storagev1alpha1.ObjectStorage {
 		},
 		Spec: storagev1alpha1.ObjectStorageSpec{
 			Capacity: "10Gi",
-			Ingress: storagev1alpha1.ObjectStorageIngressSpec{
+			Ingress: &storagev1alpha1.ObjectStorageIngressSpec{
 				Hostname: "s3.example.com",
 				TLS:      true,
 			},
@@ -134,7 +134,7 @@ func TestVolumeReconciler_ContinuesWhenVolumeReady(t *testing.T) {
 	resource := testObjectStorage()
 	ctx := context.Background()
 
-	// Volume exists and ready
+	// Volume exists and available
 	mockClient.EXPECT().Get(gomock.Any(), client.ObjectKey{
 		Name:      resource.VolumeName(),
 		Namespace: resource.Namespace,
@@ -144,6 +144,15 @@ func TestVolumeReconciler_ContinuesWhenVolumeReady(t *testing.T) {
 			vol.Name = key.Name
 			vol.Namespace = key.Namespace
 			vol.Status.Phase = storagev1alpha1.VolumePhaseReady
+			vol.Status.PvcName = key.Name
+			vol.Status.Conditions = []metav1.Condition{
+				{
+					Type:               string(storagev1alpha1.VolumeConditionAvailable),
+					Status:             metav1.ConditionTrue,
+					ObservedGeneration: vol.Generation,
+					Reason:             "Available",
+				},
+			}
 			return nil
 		},
 	)
@@ -154,9 +163,12 @@ func TestVolumeReconciler_ContinuesWhenVolumeReady(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !result.resultNil {
-		t.Error("expected resultNil when Volume is ready")
+		t.Error("expected resultNil when Volume is available")
 	}
 	if resource.Status.VolumeName != resource.VolumeName() {
 		t.Errorf("expected status.volumeName to be set")
+	}
+	if resource.Status.PVCName != resource.VolumeName() {
+		t.Errorf("expected status.pvcName to be set")
 	}
 }

@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"go.uber.org/mock/gomock"
+	storagev1alpha1 "stackdome.io/cluster-agent/api/storage/v1alpha1"
+	"stackdome.io/cluster-agent/pkg/config"
 	appsv1 "k8s.io/api/apps/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -21,13 +23,15 @@ func TestDeploymentReconciler_CreatesDeployment(t *testing.T) {
 	scheme := testScheme()
 	resource := testObjectStorage()
 	resource.Status.VolumeName = resource.VolumeName()
+	resource.Status.PVCName = resource.VolumeName()
 	resource.Status.CredentialsSecretName = resource.CredentialsSecretName()
 	ctx := context.Background()
 
+	// CreateOrUpdate does Get first — not found triggers Create
 	mockClient.EXPECT().Get(gomock.Any(), client.ObjectKey{
 		Name:      resource.DeploymentName(),
 		Namespace: resource.Namespace,
-	}, gomock.Any()).Return(apierrors.NewNotFound(schema.GroupResource{}, resource.DeploymentName()))
+	}, gomock.Any()).Return(apierrors.NewNotFound(schema.GroupResource{Group: "apps", Resource: "deployments"}, resource.DeploymentName()))
 
 	mockClient.EXPECT().Create(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
@@ -42,22 +46,23 @@ func TestDeploymentReconciler_CreatesDeployment(t *testing.T) {
 			if len(containers) != 1 {
 				t.Fatalf("expected 1 container, got %d", len(containers))
 			}
-			if containers[0].Image != "quay.io/s3gw/s3gw:latest" {
-				t.Errorf("expected s3gw image, got %s", containers[0].Image)
+			if containers[0].Image != config.RustFSImage {
+				t.Errorf("expected rustfs image, got %s", containers[0].Image)
 			}
-			if len(containers[0].Ports) == 0 || containers[0].Ports[0].ContainerPort != 7480 {
-				t.Error("expected port 7480")
+			if len(containers[0].Ports) == 0 || containers[0].Ports[0].ContainerPort != storagev1alpha1.ObjectStorageContainerPort {
+				t.Error("expected port matching ObjectStorageContainerPort")
 			}
 			return nil
 		},
 	)
 
-	rec := newDeploymentReconciler(mockClient, scheme, "quay.io/s3gw/s3gw:latest")
+	rec := newDeploymentReconciler(mockClient, scheme, config.RustFSImage)
 	result, err := rec.reconcile(ctx, resource)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !result.resultRequeue {
-		t.Error("expected resultRequeue after creating Deployment")
+	// After CreateOrUpdate creates a new deployment, it won't be available yet
+	if !result.resultStop {
+		t.Error("expected resultStop when newly created Deployment is not yet available")
 	}
 }

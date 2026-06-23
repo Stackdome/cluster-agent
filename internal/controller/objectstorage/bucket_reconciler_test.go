@@ -2,6 +2,7 @@ package objectstorage
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"go.uber.org/mock/gomock"
@@ -23,7 +24,7 @@ func TestBucketReconciler_CreatesBuckets(t *testing.T) {
 		{Name: "uploads"},
 		{Name: "assets"},
 	}
-	resource.Status.Endpoint = "http://test-os-s3gw.default.svc.cluster.local:7480"
+	resource.Status.Endpoint = fmt.Sprintf("http://test-os-objstore.default.svc.cluster.local:%d", storagev1alpha1.ObjectStorageContainerPort)
 	resource.Status.CredentialsSecretName = resource.CredentialsSecretName()
 	ctx := context.Background()
 

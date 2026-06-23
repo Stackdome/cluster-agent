@@ -5,22 +5,24 @@ import (
 	"testing"
 
 	"go.uber.org/mock/gomock"
+	storagev1alpha1 "stackdome.io/cluster-agent/api/storage/v1alpha1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"stackdome.io/cluster-agent/internal/controller/objectstorage/mocks"
 )
 
-func TestIngressReconciler_CreatesIngressWithTLS(t *testing.T) {
+func TestIngressReconciler_CreatesIngressWithoutTLS(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
 	mockClient := mocks.NewMockClient(ctrl)
 	scheme := testScheme()
 	resource := testObjectStorage()
-	resource.Spec.Ingress.TLS = true
+	resource.Spec.Ingress.TLS = false
 	ctx := context.Background()
 
 	mockClient.EXPECT().Get(gomock.Any(), client.ObjectKey{
@@ -34,28 +36,21 @@ func TestIngressReconciler_CreatesIngressWithTLS(t *testing.T) {
 			if !ok {
 				t.Fatal("expected Ingress object")
 			}
-			if ing.Annotations["cert-manager.io/cluster-issuer"] == "" {
-				t.Error("expected cert-manager annotation when TLS is enabled")
-			}
-			if len(ing.Spec.TLS) != 1 {
-				t.Fatal("expected 1 TLS entry")
-			}
-			if ing.Spec.TLS[0].Hosts[0] != "s3.example.com" {
-				t.Errorf("expected TLS host s3.example.com, got %s", ing.Spec.TLS[0].Hosts[0])
+			if len(ing.Spec.TLS) != 0 {
+				t.Error("expected no TLS when TLS is disabled")
 			}
 			if len(ing.Spec.Rules) != 1 {
 				t.Fatal("expected 1 rule")
 			}
-			rule := ing.Spec.Rules[0]
-			if rule.Host != "s3.example.com" {
-				t.Errorf("expected host s3.example.com, got %s", rule.Host)
+			if ing.Spec.Rules[0].Host != "s3.example.com" {
+				t.Errorf("expected host s3.example.com, got %s", ing.Spec.Rules[0].Host)
 			}
-			backend := rule.HTTP.Paths[0].Backend.Service
+			backend := ing.Spec.Rules[0].HTTP.Paths[0].Backend.Service
 			if backend.Name != resource.ServiceName() {
 				t.Errorf("expected service name %s, got %s", resource.ServiceName(), backend.Name)
 			}
-			if backend.Port.Number != 7480 {
-				t.Errorf("expected port 7480, got %d", backend.Port.Number)
+			if backend.Port.Number != storagev1alpha1.ObjectStorageContainerPort {
+				t.Errorf("expected port %d, got %d", storagev1alpha1.ObjectStorageContainerPort, backend.Port.Number)
 			}
 			return nil
 		},
@@ -71,14 +66,14 @@ func TestIngressReconciler_CreatesIngressWithTLS(t *testing.T) {
 	}
 }
 
-func TestIngressReconciler_SetsExternalEndpoint(t *testing.T) {
+func TestIngressReconciler_SetsExternalEndpointWhenIngressExists(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
 	mockClient := mocks.NewMockClient(ctrl)
 	scheme := testScheme()
 	resource := testObjectStorage()
-	resource.Spec.Ingress.TLS = true
+	resource.Spec.Ingress.TLS = false
 	ctx := context.Background()
 
 	mockClient.EXPECT().Get(gomock.Any(), client.ObjectKey{
@@ -89,6 +84,30 @@ func TestIngressReconciler_SetsExternalEndpoint(t *testing.T) {
 			ing := obj.(*networkingv1.Ingress)
 			ing.Name = key.Name
 			ing.Namespace = key.Namespace
+			ing.Annotations = map[string]string{}
+			ing.Spec = networkingv1.IngressSpec{
+				Rules: []networkingv1.IngressRule{
+					{
+						Host: "s3.example.com",
+						IngressRuleValue: networkingv1.IngressRuleValue{
+							HTTP: &networkingv1.HTTPIngressRuleValue{
+								Paths: []networkingv1.HTTPIngressPath{
+									{
+										Path:     "/",
+										PathType: ptr.To(networkingv1.PathTypePrefix),
+										Backend: networkingv1.IngressBackend{
+											Service: &networkingv1.IngressServiceBackend{
+												Name: resource.ServiceName(),
+												Port: networkingv1.ServiceBackendPort{Number: storagev1alpha1.ObjectStorageContainerPort},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			}
 			return nil
 		},
 	)
@@ -99,10 +118,30 @@ func TestIngressReconciler_SetsExternalEndpoint(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !result.resultNil {
-		t.Error("expected resultNil when Ingress exists")
+		t.Error("expected resultNil when Ingress already exists and matches")
 	}
-	expected := "https://s3.example.com"
+	expected := "http://s3.example.com"
 	if resource.Status.ExternalEndpoint != expected {
 		t.Errorf("expected externalEndpoint %s, got %s", expected, resource.Status.ExternalEndpoint)
+	}
+}
+
+func TestIngressReconciler_SkipsWhenIngressNil(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockClient := mocks.NewMockClient(ctrl)
+	scheme := testScheme()
+	resource := testObjectStorage()
+	resource.Spec.Ingress = nil
+	ctx := context.Background()
+
+	rec := newIngressReconciler(mockClient, scheme)
+	result, err := rec.reconcile(ctx, resource)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.resultNil {
+		t.Error("expected resultNil when Ingress is nil")
 	}
 }

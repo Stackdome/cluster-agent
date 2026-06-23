@@ -16,7 +16,7 @@ func SimpleObjectStorage(name string) *storagev1alpha1.ObjectStorage {
 		Spec: storagev1alpha1.ObjectStorageSpec{
 			Capacity:         defaultStorageSize,
 			StorageClassName: stringPtr(defaultStorageClass),
-			Ingress: storagev1alpha1.ObjectStorageIngressSpec{
+			Ingress: &storagev1alpha1.ObjectStorageIngressSpec{
 				Hostname: name + ".example.com",
 				TLS:      true,
 			},
