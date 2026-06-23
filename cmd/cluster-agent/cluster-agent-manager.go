@@ -36,6 +36,7 @@ import (
 	clusterinfocontroller "stackdome.io/cluster-agent/internal/controller/clusterinfo"
 	"stackdome.io/cluster-agent/internal/controller/imagebuild"
 	nfsservercontroller "stackdome.io/cluster-agent/internal/controller/nfsserver"
+	objectstoragecontroller "stackdome.io/cluster-agent/internal/controller/objectstorage"
 	"stackdome.io/cluster-agent/internal/controller/stack"
 	"stackdome.io/cluster-agent/internal/controller/stackresource"
 	"stackdome.io/cluster-agent/internal/controller/volume"
@@ -224,6 +225,16 @@ func main() {
 
 	if err := storageReconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "NFSServer")
+		os.Exit(1)
+	}
+
+	objectStorageReconciler := objectstoragecontroller.NewObjectStorageReconciler(
+		mgr.GetClient(),
+		mgr.GetScheme(),
+		config.S3gwImage,
+	)
+	if err := objectStorageReconciler.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ObjectStorage")
 		os.Exit(1)
 	}
 
