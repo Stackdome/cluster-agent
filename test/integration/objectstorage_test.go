@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	. "github.com/onsi/ginkgo/v2"
@@ -29,6 +28,17 @@ const (
 	osReadyTimeout  = 3 * time.Minute
 	osDeleteTimeout = 2 * time.Minute
 )
+
+func buildS3Client(endpoint, accessKey, secretKey string) *s3.Client {
+	cfg := aws.Config{
+		Region:      "us-east-1",
+		Credentials: credentials.NewStaticCredentialsProvider(accessKey, secretKey, ""),
+	}
+	return s3.NewFromConfig(cfg, func(o *s3.Options) {
+		o.BaseEndpoint = aws.String(endpoint)
+		o.UsePathStyle = true
+	})
+}
 
 var _ = Describe("ObjectStorage", Ordered, func() {
 	var (
@@ -183,15 +193,7 @@ var _ = Describe("ObjectStorage", Ordered, func() {
 			endpoint := fmt.Sprintf("http://localhost:%d", localPort)
 
 			By("Building S3 client")
-			cfg, err := awsconfig.LoadDefaultConfig(ctx,
-				awsconfig.WithRegion("us-east-1"),
-				awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKey, secretKey, "")),
-			)
-			Expect(err).NotTo(HaveOccurred())
-			s3Client := s3.NewFromConfig(cfg, func(o *s3.Options) {
-				o.BaseEndpoint = aws.String(endpoint)
-				o.UsePathStyle = true
-			})
+			s3Client := buildS3Client(endpoint, accessKey, secretKey)
 
 			By("Creating a bucket")
 			_, err = s3Client.CreateBucket(ctx, &s3.CreateBucketInput{
@@ -228,6 +230,106 @@ var _ = Describe("ObjectStorage", Ordered, func() {
 			}
 			if os != nil {
 				By("Cleaning up S3 smoke test ObjectStorage")
+				_ = c.Delete(ctx, os)
+				_ = helpers.WaitForObjectStorageDeleted(ctx, c, client.ObjectKeyFromObject(os), osDeleteTimeout)
+			}
+		})
+	})
+
+	Context("ObjectStorage credential rotation", func() {
+		var (
+			os       *storagev1alpha1.ObjectStorage
+			stopChan chan struct{}
+		)
+
+		It("should rotate credentials and invalidate old ones", func() {
+			os = fixtures.SimpleObjectStorage("os-cred-rotate")
+
+			By("Creating the ObjectStorage CR")
+			Expect(c.Create(ctx, os)).To(Succeed())
+
+			By("Waiting for Available condition")
+			readyOS, err := helpers.WaitForObjectStorageReady(ctx, c, client.ObjectKeyFromObject(os), osReadyTimeout)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(readyOS.Status.Phase).To(Equal(storagev1alpha1.ObjectStoragePhaseReady))
+
+			By("Reading old credentials")
+			oldSecret := &corev1.Secret{}
+			Expect(c.Get(ctx, client.ObjectKey{
+				Name:      os.CredentialsSecretName(),
+				Namespace: os.Namespace,
+			}, oldSecret)).To(Succeed())
+			oldAccessKey := string(oldSecret.Data[storagev1alpha1.ObjectStorageSecretKeyAWSAccessKey])
+			oldSecretKey := string(oldSecret.Data[storagev1alpha1.ObjectStorageSecretKeyAWSSecretKey])
+
+			By("Port-forwarding to the rustfs pod")
+			podName, err := helpers.GetPodForDeployment(ctx, env.KubeClient, os.Namespace, os.DeploymentName())
+			Expect(err).NotTo(HaveOccurred())
+			localPort, stop, err := helpers.PortForwardToPod(env.RestConfig, os.Namespace, podName, int(storagev1alpha1.ObjectStorageContainerPort))
+			Expect(err).NotTo(HaveOccurred())
+			stopChan = stop
+			endpoint := fmt.Sprintf("http://localhost:%d", localPort)
+
+			By("Verifying old credentials work")
+			oldClient := buildS3Client(endpoint, oldAccessKey, oldSecretKey)
+			_, err = oldClient.CreateBucket(ctx, &s3.CreateBucketInput{
+				Bucket: aws.String("pre-rotation-bucket"),
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Requesting credential rotation")
+			Expect(c.Get(ctx, client.ObjectKeyFromObject(os), os)).To(Succeed())
+			now := metav1.Now()
+			os.Spec.CredentialRotationRequestedAt = &now
+			Expect(c.Update(ctx, os)).To(Succeed())
+
+			By("Waiting for ObjectStorage to become Available again after rotation")
+			close(stopChan)
+			stopChan = nil
+			readyOS, err = helpers.WaitForObjectStorageReady(ctx, c, client.ObjectKeyFromObject(os), osReadyTimeout)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(readyOS.Status.LastCredentialRotationTime).NotTo(BeNil())
+
+			By("Reading new credentials")
+			newSecret := &corev1.Secret{}
+			Expect(c.Get(ctx, client.ObjectKey{
+				Name:      os.CredentialsSecretName(),
+				Namespace: os.Namespace,
+			}, newSecret)).To(Succeed())
+			newAccessKey := string(newSecret.Data[storagev1alpha1.ObjectStorageSecretKeyAWSAccessKey])
+			newSecretKey := string(newSecret.Data[storagev1alpha1.ObjectStorageSecretKeyAWSSecretKey])
+			Expect(newAccessKey).NotTo(Equal(oldAccessKey))
+			Expect(newSecretKey).NotTo(Equal(oldSecretKey))
+
+			By("Port-forwarding to the new rustfs pod")
+			Eventually(func() error {
+				podName, err = helpers.GetPodForDeployment(ctx, env.KubeClient, os.Namespace, os.DeploymentName())
+				return err
+			}, 60*time.Second, 5*time.Second).Should(Succeed())
+			localPort, stop, err = helpers.PortForwardToPod(env.RestConfig, os.Namespace, podName, int(storagev1alpha1.ObjectStorageContainerPort))
+			Expect(err).NotTo(HaveOccurred())
+			stopChan = stop
+			endpoint = fmt.Sprintf("http://localhost:%d", localPort)
+
+			By("Verifying old credentials no longer work")
+			staleClient := buildS3Client(endpoint, oldAccessKey, oldSecretKey)
+			_, err = staleClient.ListBuckets(ctx, &s3.ListBucketsInput{})
+			Expect(err).To(HaveOccurred())
+
+			By("Verifying new credentials work")
+			freshClient := buildS3Client(endpoint, newAccessKey, newSecretKey)
+			_, err = freshClient.CreateBucket(ctx, &s3.CreateBucketInput{
+				Bucket: aws.String("post-rotation-bucket"),
+			})
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		AfterAll(func() {
+			if stopChan != nil {
+				close(stopChan)
+			}
+			if os != nil {
+				By("Cleaning up credential rotation ObjectStorage")
 				_ = c.Delete(ctx, os)
 				_ = helpers.WaitForObjectStorageDeleted(ctx, c, client.ObjectKeyFromObject(os), osDeleteTimeout)
 			}

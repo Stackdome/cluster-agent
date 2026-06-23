@@ -42,7 +42,7 @@ func WaitForObjectStorageReady(ctx context.Context, c client.Client, key client.
 				continue
 			}
 			cond := meta.FindStatusCondition(os.Status.Conditions, storagev1alpha1.ObjectStorageConditionAvailable)
-			if cond != nil && cond.Status == metav1.ConditionTrue {
+			if cond != nil && cond.Status == metav1.ConditionTrue && cond.ObservedGeneration == os.Generation {
 				return os, nil
 			}
 		}
