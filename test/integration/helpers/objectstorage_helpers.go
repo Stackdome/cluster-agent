@@ -3,6 +3,8 @@ package helpers
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/url"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -11,6 +13,11 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/portforward"
+	"k8s.io/client-go/transport/spdy"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	storagev1alpha1 "stackdome.io/cluster-agent/api/storage/v1alpha1"
@@ -167,4 +174,66 @@ func GetIngressForObjectStorage(ctx context.Context, c client.Client, namespace,
 		Namespace: namespace,
 	}, ingress)
 	return ingress, err
+}
+
+// GetPodForDeployment finds a Running pod owned by the given deployment.
+func GetPodForDeployment(ctx context.Context, kubeClient kubernetes.Interface, namespace, deploymentName string) (string, error) {
+	selector := labels.Set{"app": deploymentName}.AsSelector()
+	pods, err := kubeClient.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: selector.String(),
+	})
+	if err != nil {
+		return "", fmt.Errorf("listing pods for deployment %s: %w", deploymentName, err)
+	}
+	for _, pod := range pods.Items {
+		if pod.Status.Phase == corev1.PodRunning {
+			return pod.Name, nil
+		}
+	}
+	return "", fmt.Errorf("no running pod found for deployment %s", deploymentName)
+}
+
+// PortForwardToPod sets up port-forwarding to a pod and returns the local port and a stop channel.
+func PortForwardToPod(cfg *rest.Config, namespace, podName string, remotePort int) (uint16, chan struct{}, error) {
+	roundTripper, upgrader, err := spdy.RoundTripperFor(cfg)
+	if err != nil {
+		return 0, nil, fmt.Errorf("creating round tripper: %w", err)
+	}
+
+	path := fmt.Sprintf("/api/v1/namespaces/%s/pods/%s/portforward", namespace, podName)
+	hostURL, err := url.Parse(cfg.Host)
+	if err != nil {
+		return 0, nil, fmt.Errorf("parsing host URL: %w", err)
+	}
+	hostURL.Path = path
+
+	dialer := spdy.NewDialer(upgrader, &http.Client{Transport: roundTripper}, http.MethodPost, hostURL)
+
+	stopChan := make(chan struct{}, 1)
+	readyChan := make(chan struct{})
+
+	ports := []string{fmt.Sprintf("0:%d", remotePort)}
+	fw, err := portforward.New(dialer, ports, stopChan, readyChan, nil, nil)
+	if err != nil {
+		return 0, nil, fmt.Errorf("creating port forwarder: %w", err)
+	}
+
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- fw.ForwardPorts()
+	}()
+
+	select {
+	case <-readyChan:
+	case err := <-errChan:
+		return 0, nil, fmt.Errorf("port forward failed: %w", err)
+	}
+
+	forwardedPorts, err := fw.GetPorts()
+	if err != nil {
+		close(stopChan)
+		return 0, nil, fmt.Errorf("getting forwarded ports: %w", err)
+	}
+
+	return forwardedPorts[0].Local, stopChan, nil
 }

@@ -11,12 +11,14 @@ import (
 	"github.com/go-logr/stdr"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 type Environment struct {
 	Client          client.Client
 	KubeClient      kubernetes.Interface
+	RestConfig      *rest.Config
 	Scheme          *k8sruntime.Scheme
 	TestNamespace   string
 	ObjectStoreName string
@@ -61,6 +63,7 @@ func Setup(env *Environment, ctx context.Context) error {
 	env.Scheme = scheme
 
 	restConfig := cm.GetDevCluster().RestConfig
+	env.RestConfig = restConfig
 	c, err := client.New(restConfig, client.Options{Scheme: scheme})
 	if err != nil {
 		return fmt.Errorf("creating controller-runtime client: %w", err)
