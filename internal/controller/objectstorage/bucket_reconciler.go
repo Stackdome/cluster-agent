@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
@@ -26,19 +25,16 @@ type s3BucketCreator struct {
 	client *s3.Client
 }
 
-func newS3BucketCreator(ctx context.Context, endpoint, accessKey, secretKey string) (*s3BucketCreator, error) {
-	cfg, err := awsconfig.LoadDefaultConfig(ctx,
-		awsconfig.WithRegion("us-east-1"),
-		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKey, secretKey, "")),
-	)
-	if err != nil {
-		return nil, err
+func newS3BucketCreator(endpoint, accessKey, secretKey string) *s3BucketCreator {
+	cfg := aws.Config{
+		Region:      "us-east-1",
+		Credentials: credentials.NewStaticCredentialsProvider(accessKey, secretKey, ""),
 	}
 	s3Client := s3.NewFromConfig(cfg, func(o *s3.Options) {
 		o.BaseEndpoint = aws.String(endpoint)
 		o.UsePathStyle = true
 	})
-	return &s3BucketCreator{client: s3Client}, nil
+	return &s3BucketCreator{client: s3Client}
 }
 
 func (c *s3BucketCreator) CreateBucket(ctx context.Context, bucket string) error {
@@ -74,8 +70,7 @@ func (r *bucketReconciler) reconcile(ctx context.Context, resource *storagev1alp
 
 	logger := log.FromContext(ctx)
 
-	creator := r.bucketCreator
-	if creator == nil {
+	if r.bucketCreator == nil {
 		secret := &corev1.Secret{}
 		if err := r.client.Get(ctx, client.ObjectKey{
 			Name:      resource.Status.CredentialsSecretName,
@@ -87,16 +82,12 @@ func (r *bucketReconciler) reconcile(ctx context.Context, resource *storagev1alp
 		accessKey := string(secret.Data[storagev1alpha1.ObjectStorageSecretKeyAWSAccessKey])
 		secretKey := string(secret.Data[storagev1alpha1.ObjectStorageSecretKeyAWSSecretKey])
 
-		var err error
-		creator, err = newS3BucketCreator(ctx, resource.Status.Endpoint, accessKey, secretKey)
-		if err != nil {
-			return resultNil, err
-		}
+		r.bucketCreator = newS3BucketCreator(resource.Status.Endpoint, accessKey, secretKey)
 	}
 
 	resource.Status.Buckets = make([]storagev1alpha1.BucketStatus, 0, len(resource.Spec.Buckets))
 	for _, bucket := range resource.Spec.Buckets {
-		if err := creator.CreateBucket(ctx, bucket.Name); err != nil {
+		if err := r.bucketCreator.CreateBucket(ctx, bucket.Name); err != nil {
 			logger.Error(err, "Failed to create bucket", "bucket", bucket.Name)
 			resource.Status.Buckets = append(resource.Status.Buckets, storagev1alpha1.BucketStatus{
 				Name:    bucket.Name,

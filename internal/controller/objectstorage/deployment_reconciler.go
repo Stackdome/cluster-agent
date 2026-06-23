@@ -44,8 +44,12 @@ func (r *deploymentReconciler) reconcile(ctx context.Context, resource *storagev
 	op, err := controllerutil.CreateOrUpdate(ctx, r.client, deployment, func() error {
 		deployment.Spec.Replicas = ptr.To(int32(1))
 		deployment.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
+		templateAnnotations := map[string]string{}
+		if resource.Status.LastCredentialRotationTime != nil {
+			templateAnnotations["objectstorage.stackdome.io/credentials-rotated-at"] = resource.Status.LastCredentialRotationTime.Format("2006-01-02T15:04:05Z")
+		}
 		deployment.Spec.Template = corev1.PodTemplateSpec{
-			ObjectMeta: metav1.ObjectMeta{Labels: labels},
+			ObjectMeta: metav1.ObjectMeta{Labels: labels, Annotations: templateAnnotations},
 			Spec: corev1.PodSpec{
 				Containers: []corev1.Container{
 					{
@@ -89,14 +93,28 @@ func (r *deploymentReconciler) reconcile(ctx context.Context, resource *storagev
 
 	logger.Info("ObjectStorage Deployment reconciled", "operation", op)
 
-	if !controller.DeploymentAvailable(deployment) {
-		logger.Info("ObjectStorage Deployment not available yet", "name", deployment.Name)
+	if !controller.DeploymentAvailable(deployment) || !deploymentRolloutComplete(deployment) {
+		logger.Info("ObjectStorage Deployment not ready", "name", deployment.Name,
+			"available", controller.DeploymentAvailable(deployment),
+			"updatedReplicas", deployment.Status.UpdatedReplicas,
+			"readyReplicas", deployment.Status.ReadyReplicas,
+			"desiredReplicas", *deployment.Spec.Replicas)
 		setStatusCondition(resource, storagev1alpha1.ObjectStorageConditionAvailable, metav1.ConditionFalse, "DeploymentNotReady", fmt.Sprintf("ObjectStorage deployment %s is not yet available", deployment.Name))
 		setPhase(resource, storagev1alpha1.ObjectStoragePhasePending)
 		return resultStop, nil
 	}
 
 	return resultNil, nil
+}
+
+func deploymentRolloutComplete(deployment *appsv1.Deployment) bool {
+	if deployment.Spec.Replicas == nil {
+		return false
+	}
+	desired := *deployment.Spec.Replicas
+	return deployment.Status.UpdatedReplicas == desired &&
+		deployment.Status.ReadyReplicas == desired &&
+		deployment.Status.AvailableReplicas == desired
 }
 
 func resourcesForSpec(resource *storagev1alpha1.ObjectStorage) corev1.ResourceRequirements {

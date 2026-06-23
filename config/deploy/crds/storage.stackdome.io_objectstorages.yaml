@@ -57,6 +57,9 @@ spec:
                 x-kubernetes-validations:
                 - message: capacity is immutable
                   rule: self == oldSelf
+              credentialRotationRequestedAt:
+                format: date-time
+                type: string
               ingress:
                 properties:
                   hostname:
@@ -213,6 +216,9 @@ spec:
               endpoint:
                 type: string
               externalEndpoint:
+                type: string
+              lastCredentialRotationTime:
+                format: date-time
                 type: string
               observedGeneration:
                 format: int64

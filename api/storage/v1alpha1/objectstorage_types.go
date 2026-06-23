@@ -43,6 +43,9 @@ type ObjectStorageSpec struct {
 
 	// +optional
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// +optional
+	CredentialRotationRequestedAt *metav1.Time `json:"credentialRotationRequestedAt,omitempty"`
 }
 
 type BucketSpec struct {
@@ -72,12 +75,13 @@ type ObjectStorageStatus struct {
 	Phase      string             `json:"phase,omitempty"`
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
-	Endpoint              string         `json:"endpoint,omitempty"`
-	ExternalEndpoint      string         `json:"externalEndpoint,omitempty"`
-	CredentialsSecretName string         `json:"credentialsSecretName,omitempty"`
-	VolumeName            string         `json:"volumeName,omitempty"`
-	PVCName               string         `json:"pvcName,omitempty"`
-	Buckets               []BucketStatus `json:"buckets,omitempty"`
+	Endpoint                   string         `json:"endpoint,omitempty"`
+	ExternalEndpoint           string         `json:"externalEndpoint,omitempty"`
+	CredentialsSecretName      string         `json:"credentialsSecretName,omitempty"`
+	LastCredentialRotationTime *metav1.Time   `json:"lastCredentialRotationTime,omitempty"`
+	VolumeName                 string         `json:"volumeName,omitempty"`
+	PVCName                    string         `json:"pvcName,omitempty"`
+	Buckets                    []BucketStatus `json:"buckets,omitempty"`
 }
 
 type BucketStatus struct {
