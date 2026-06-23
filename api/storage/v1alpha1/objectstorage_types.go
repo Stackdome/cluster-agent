@@ -1,6 +1,7 @@
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -9,8 +10,16 @@ const (
 	ObjectStoragePhaseReady    = "Ready"
 	ObjectStoragePhaseDeletion = "Deleting"
 
-	ObjectStorageConditionAvailable    = "Available"
-	ObjectStorageConditionBucketsReady = "BucketsReady"
+	ObjectStorageConditionAvailable     = "Available"
+	ObjectStorageConditionBucketsReady  = "BucketsReady"
+	ObjectStorageConditionTLSConfigured = "TLSConfigured"
+
+	ObjectStorageSecretKeyAccessKey    = "RUSTFS_ACCESS_KEY"
+	ObjectStorageSecretKeySecretKey    = "RUSTFS_SECRET_KEY"
+	ObjectStorageSecretKeyAWSAccessKey = "AWS_ACCESS_KEY_ID"
+	ObjectStorageSecretKeyAWSSecretKey = "AWS_SECRET_ACCESS_KEY"
+
+	ObjectStorageContainerPort = 9000
 )
 
 // ObjectStorageSpec defines the desired state of ObjectStorage.
@@ -29,8 +38,11 @@ type ObjectStorageSpec struct {
 	// +optional
 	Buckets []BucketSpec `json:"buckets,omitempty"`
 
-	// +required
-	Ingress ObjectStorageIngressSpec `json:"ingress"`
+	// +optional
+	Ingress *ObjectStorageIngressSpec `json:"ingress,omitempty"`
+
+	// +optional
+	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
 }
 
 type BucketSpec struct {
@@ -55,21 +67,23 @@ type ObjectStorageIngressSpec struct {
 
 // ObjectStorageStatus defines the observed state of ObjectStorage.
 type ObjectStorageStatus struct {
-	ObservedGeneration int64              `json:"observedGeneration,omitempty"`
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 	// +kubebuilder:default=Pending
-	Phase              string             `json:"phase,omitempty"`
-	Conditions         []metav1.Condition `json:"conditions,omitempty"`
+	Phase      string             `json:"phase,omitempty"`
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
 	Endpoint              string         `json:"endpoint,omitempty"`
 	ExternalEndpoint      string         `json:"externalEndpoint,omitempty"`
 	CredentialsSecretName string         `json:"credentialsSecretName,omitempty"`
 	VolumeName            string         `json:"volumeName,omitempty"`
+	PVCName               string         `json:"pvcName,omitempty"`
 	Buckets               []BucketStatus `json:"buckets,omitempty"`
 }
 
 type BucketStatus struct {
 	Name    string `json:"name"`
 	Created bool   `json:"created"`
+	URL     string `json:"url,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -86,23 +100,23 @@ type ObjectStorage struct {
 
 // Helper methods for naming child resources.
 func (o *ObjectStorage) VolumeName() string {
-	return o.Name + "-s3gw-vol"
+	return o.Name + "-objstore-vol"
 }
 
 func (o *ObjectStorage) CredentialsSecretName() string {
-	return o.Name + "-s3gw-credentials"
+	return o.Name + "-objstore-credentials"
 }
 
 func (o *ObjectStorage) DeploymentName() string {
-	return o.Name + "-s3gw"
+	return o.Name + "-objstore"
 }
 
 func (o *ObjectStorage) ServiceName() string {
-	return o.Name + "-s3gw"
+	return o.Name + "-objstore"
 }
 
 func (o *ObjectStorage) IngressName() string {
-	return o.Name + "-s3gw"
+	return o.Name + "-objstore"
 }
 
 // +kubebuilder:object:root=true
