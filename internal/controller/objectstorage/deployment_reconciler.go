@@ -105,4 +105,3 @@ func resourcesForSpec(resource *storagev1alpha1.ObjectStorage) corev1.ResourceRe
 	}
 	return corev1.ResourceRequirements{}
 }
-

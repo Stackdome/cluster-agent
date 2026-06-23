@@ -31,11 +31,11 @@ func TestClusterInfoController(t *testing.T) {
 
 var _ = Describe("ClusterInfoReconciler", func() {
 	var (
-		mockCtrl              *gomock.Controller
-		mockClient            *mocks.MockClient
-		mockStatusWriter      *mocks.MockSubResourceWriter
-		reconciler            *clusterinfo.ClusterInfoReconciler
-		ctx                   context.Context
+		mockCtrl         *gomock.Controller
+		mockClient       *mocks.MockClient
+		mockStatusWriter *mocks.MockSubResourceWriter
+		reconciler       *clusterinfo.ClusterInfoReconciler
+		ctx              context.Context
 	)
 
 	BeforeEach(func() {

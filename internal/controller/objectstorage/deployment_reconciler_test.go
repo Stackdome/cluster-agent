@@ -5,12 +5,12 @@ import (
 	"testing"
 
 	"go.uber.org/mock/gomock"
-	storagev1alpha1 "stackdome.io/cluster-agent/api/storage/v1alpha1"
-	"stackdome.io/cluster-agent/pkg/config"
 	appsv1 "k8s.io/api/apps/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	storagev1alpha1 "stackdome.io/cluster-agent/api/storage/v1alpha1"
+	"stackdome.io/cluster-agent/pkg/config"
 
 	"stackdome.io/cluster-agent/internal/controller/objectstorage/mocks"
 )

@@ -54,8 +54,8 @@ func (r *credentialsReconciler) reconcile(ctx context.Context, resource *storage
 				Namespace: resource.Namespace,
 			},
 			Data: map[string][]byte{
-				storagev1alpha1.ObjectStorageSecretKeyAccessKey: []byte(accessKey),
-				storagev1alpha1.ObjectStorageSecretKeySecretKey: []byte(secretKey),
+				storagev1alpha1.ObjectStorageSecretKeyAccessKey:    []byte(accessKey),
+				storagev1alpha1.ObjectStorageSecretKeySecretKey:    []byte(secretKey),
 				storagev1alpha1.ObjectStorageSecretKeyAWSAccessKey: []byte(accessKey),
 				storagev1alpha1.ObjectStorageSecretKeyAWSSecretKey: []byte(secretKey),
 			},

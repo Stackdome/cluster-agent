@@ -24,8 +24,8 @@ const (
 	RegistryName      = "int-test-registry"
 	RegistryNamespace = "stackdome-registry"
 
-	registryName      = RegistryName
-	registryNamespace = RegistryNamespace
+	registryName       = RegistryName
+	registryNamespace  = RegistryNamespace
 	registryCredSecret = "registry-creds"
 	registryPort       = int32(5000)
 	registryUsername   = "admin"

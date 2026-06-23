@@ -47,15 +47,15 @@ type subReconciler interface {
 
 type ObjectStorageReconciler struct {
 	client.Client
-	Scheme         *runtime.Scheme
-	ObjectStorageImage      string
-	subReconcilers []subReconciler
+	Scheme             *runtime.Scheme
+	ObjectStorageImage string
+	subReconcilers     []subReconciler
 }
 
 func NewObjectStorageReconciler(c client.Client, scheme *runtime.Scheme, objectStorageImage string) *ObjectStorageReconciler {
 	r := &ObjectStorageReconciler{
-		Client:    c,
-		Scheme:    scheme,
+		Client:             c,
+		Scheme:             scheme,
 		ObjectStorageImage: objectStorageImage,
 	}
 

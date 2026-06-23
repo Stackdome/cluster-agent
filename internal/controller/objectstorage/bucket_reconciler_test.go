@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"go.uber.org/mock/gomock"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	storagev1alpha1 "stackdome.io/cluster-agent/api/storage/v1alpha1"
 	"stackdome.io/cluster-agent/internal/controller/objectstorage/mocks"
