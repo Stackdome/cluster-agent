@@ -114,7 +114,9 @@ func (r *ObjectStorageReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 func (r *ObjectStorageReconciler) initializeStatusAndPhase(resource *storagev1alpha1.ObjectStorage) {
 	resource.Status.ObservedGeneration = resource.Generation
-	resource.Status.Phase = storagev1alpha1.ObjectStoragePhasePending
+	if resource.Status.Phase == "" {
+		resource.Status.Phase = storagev1alpha1.ObjectStoragePhasePending
+	}
 	cond := meta.FindStatusCondition(resource.Status.Conditions, storagev1alpha1.ObjectStorageConditionAvailable)
 	if cond == nil {
 		meta.SetStatusCondition(&resource.Status.Conditions, metav1.Condition{
@@ -160,9 +162,7 @@ func (r *ObjectStorageReconciler) reconcile(ctx context.Context, resource *stora
 func (r *ObjectStorageReconciler) reconcileDelete(ctx context.Context, resource *storagev1alpha1.ObjectStorage) error {
 	logger := log.FromContext(ctx)
 	logger.Info("Reconciling ObjectStorage deletion", "name", resource.Name, "namespace", resource.Namespace)
-	setStatusCondition(resource, storagev1alpha1.ObjectStorageConditionAvailable, metav1.ConditionFalse, "Deleted", "ObjectStorage has been deleted")
-	setPhase(resource, storagev1alpha1.ObjectStoragePhaseDeletion)
-	return r.Status().Update(ctx, resource)
+	return nil
 }
 
 func (r *ObjectStorageReconciler) SetupWithManager(mgr ctrl.Manager) error {

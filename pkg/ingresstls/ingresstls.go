@@ -15,6 +15,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	corev1alpha1 "stackdome.io/cluster-agent/api/core/v1alpha1"
 )
 
 const (
@@ -22,8 +24,6 @@ const (
 	TraefikEntrypointsAnnotation       = "traefik.ingress.kubernetes.io/router.entrypoints"
 	TraefikMiddlewaresAnnotation       = "traefik.ingress.kubernetes.io/router.middlewares"
 	RedirectMiddlewareName             = "redirect-https"
-
-	ClusterIssuerAnnotation = "core.stackdome.io/cluster-issuer"
 )
 
 var ManagedAnnotations = []string{
@@ -36,10 +36,10 @@ var ManagedAnnotations = []string{
 // verifies the ClusterIssuer exists, and returns its name. Returns ("", false)
 // with a reason/message pair if the issuer cannot be resolved.
 func ResolveClusterIssuer(ctx context.Context, c client.Client, logger logr.Logger, annotations map[string]string) (issuerName string, ok bool, reason string, message string) {
-	issuerName = annotations[ClusterIssuerAnnotation]
+	issuerName = annotations[corev1alpha1.ClusterIssuerAnnotation]
 	if issuerName == "" {
 		logger.Info("missing cluster-issuer annotation, skipping TLS")
-		return "", false, "ClusterIssuerNotConfigured", fmt.Sprintf("Missing annotation %s", ClusterIssuerAnnotation)
+		return "", false, "ClusterIssuerNotConfigured", fmt.Sprintf("Missing annotation %s", corev1alpha1.ClusterIssuerAnnotation)
 	}
 
 	if err := c.Get(ctx, types.NamespacedName{Name: issuerName}, &cmv1.ClusterIssuer{}); err != nil {

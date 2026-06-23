@@ -109,7 +109,7 @@ func (r *credentialsReconciler) createCredentialsSecret(ctx context.Context, log
 }
 
 func generateRandomKey(length int) (string, error) {
-	bytes := make([]byte, length)
+	bytes := make([]byte, (length+1)/2)
 	if _, err := rand.Read(bytes); err != nil {
 		return "", err
 	}

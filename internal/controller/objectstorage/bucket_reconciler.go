@@ -70,7 +70,8 @@ func (r *bucketReconciler) reconcile(ctx context.Context, resource *storagev1alp
 
 	logger := log.FromContext(ctx)
 
-	if r.bucketCreator == nil {
+	creator := r.bucketCreator
+	if creator == nil {
 		secret := &corev1.Secret{}
 		if err := r.client.Get(ctx, client.ObjectKey{
 			Name:      resource.Status.CredentialsSecretName,
@@ -82,12 +83,12 @@ func (r *bucketReconciler) reconcile(ctx context.Context, resource *storagev1alp
 		accessKey := string(secret.Data[storagev1alpha1.ObjectStorageSecretKeyAWSAccessKey])
 		secretKey := string(secret.Data[storagev1alpha1.ObjectStorageSecretKeyAWSSecretKey])
 
-		r.bucketCreator = newS3BucketCreator(resource.Status.Endpoint, accessKey, secretKey)
+		creator = newS3BucketCreator(resource.Status.Endpoint, accessKey, secretKey)
 	}
 
 	resource.Status.Buckets = make([]storagev1alpha1.BucketStatus, 0, len(resource.Spec.Buckets))
 	for _, bucket := range resource.Spec.Buckets {
-		if err := r.bucketCreator.CreateBucket(ctx, bucket.Name); err != nil {
+		if err := creator.CreateBucket(ctx, bucket.Name); err != nil {
 			logger.Error(err, "Failed to create bucket", "bucket", bucket.Name)
 			resource.Status.Buckets = append(resource.Status.Buckets, storagev1alpha1.BucketStatus{
 				Name:    bucket.Name,
