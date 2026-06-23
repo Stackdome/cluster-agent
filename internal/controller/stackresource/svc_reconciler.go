@@ -4,15 +4,10 @@ import (
 	"context"
 	"fmt"
 
-	cmv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
-	"github.com/samber/lo"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
-	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/meta"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -22,21 +17,7 @@ import (
 
 	"stackdome.io/cluster-agent/api/core/v1alpha1"
 	"stackdome.io/cluster-agent/internal/controller"
-)
-
-const (
-	certManagerClusterIssuerAnnotation = "cert-manager.io/cluster-issuer"
-	traefikEntrypointsAnnotation       = "traefik.ingress.kubernetes.io/router.entrypoints"
-	traefikMiddlewaresAnnotation       = "traefik.ingress.kubernetes.io/router.middlewares"
-	traefikRedirectMiddlewareName      = "redirect-https"
-)
-
-var (
-	managedIngressAnnotations = []string{
-		certManagerClusterIssuerAnnotation,
-		traefikEntrypointsAnnotation,
-		traefikMiddlewaresAnnotation,
-	}
+	"stackdome.io/cluster-agent/pkg/ingresstls"
 )
 
 type svcReconciler struct {
@@ -49,8 +30,6 @@ func ResourceSVCName(resource *v1alpha1.StackResource) string {
 }
 
 func (r *svcReconciler) reconcile(ctx context.Context, resource *v1alpha1.StackResource) (subReconcilerResult, error) {
-	// For worker type we dont create ingress or svc. We just report ready when the workload is ready. This is because
-	//  worker type workloads are meant for background processing.
 	if resource.Spec.WorkloadType == v1alpha1.WorkloadTypeWorker {
 		reportStackResourceReady(resource)
 		return resultNil, nil
@@ -114,8 +93,24 @@ func (r *svcReconciler) reconcileIngress(
 	resource *v1alpha1.StackResource,
 	svc *corev1.Service,
 ) (map[int]string, error) {
+	logger := controller.LoggerFromContext(ctx)
 	portFqdnMap, tlsHosts := collectExposedPorts(resource)
-	annotations, tls := r.buildTLSConfig(ctx, resource, tlsHosts)
+
+	var annotations map[string]string
+	var tls []networkingv1.IngressTLS
+
+	if len(tlsHosts) > 0 {
+		issuerName, ok, reason, message := ingresstls.ResolveClusterIssuer(ctx, r.Client, logger, resource.Annotations)
+		if !ok {
+			setTLSCondition(resource, v1.ConditionFalse, reason, message)
+			annotations = map[string]string{}
+		} else {
+			annotations, tls = ingresstls.BuildTLSConfig(issuerName, tlsHosts, resource.Namespace, fmt.Sprintf("%s-tls", resource.Name))
+		}
+	} else {
+		annotations = map[string]string{}
+	}
+
 	rules := buildIngressRules(portFqdnMap, svc.Name)
 
 	desired := &networkingv1.Ingress{
@@ -140,7 +135,7 @@ func (r *svcReconciler) reconcileIngress(
 				return nil, err
 			}
 			if len(tls) > 0 {
-				if err := r.ensureRedirectMiddleware(ctx, resource.Namespace); err != nil {
+				if err := ingresstls.EnsureRedirectMiddleware(ctx, r.Client, resource.Namespace); err != nil {
 					return nil, err
 				}
 			}
@@ -150,16 +145,16 @@ func (r *svcReconciler) reconcileIngress(
 		return nil, err
 	}
 
-	if r.ingressNeedsUpdate(desired, existing) {
+	if ingresstls.IngressNeedsUpdate(desired, existing) {
 		existing.Spec = desired.Spec
-		r.syncManagedIngressAnnotations(existing, annotations)
+		ingresstls.SyncManagedAnnotations(existing, annotations)
 		if err := r.Client.Update(ctx, existing); err != nil {
 			return nil, err
 		}
 	}
 
 	if len(tls) > 0 {
-		if err := r.ensureRedirectMiddleware(ctx, resource.Namespace); err != nil {
+		if err := ingresstls.EnsureRedirectMiddleware(ctx, r.Client, resource.Namespace); err != nil {
 			return nil, err
 		}
 	}
@@ -167,109 +162,12 @@ func (r *svcReconciler) reconcileIngress(
 	return portFqdnMap, nil
 }
 
-func (r *svcReconciler) buildTLSConfig(
-	ctx context.Context,
-	resource *v1alpha1.StackResource,
-	tlsHosts []string,
-) (annotations map[string]string, tls []networkingv1.IngressTLS) {
-	annotations = map[string]string{}
-	if len(tlsHosts) == 0 {
-		return
-	}
-
-	issuerName, ok := r.resolveClusterIssuer(ctx, resource)
-	if !ok {
-		return
-	}
-
-	annotations[certManagerClusterIssuerAnnotation] = issuerName
-	annotations[traefikEntrypointsAnnotation] = "web,websecure"
-	annotations[traefikMiddlewaresAnnotation] = fmt.Sprintf("%s-%s@kubernetescrd", resource.Namespace, traefikRedirectMiddlewareName)
-	tls = []networkingv1.IngressTLS{{
-		Hosts:      lo.Uniq(tlsHosts),
-		SecretName: fmt.Sprintf("%s-tls", resource.Name),
-	}}
-	return
-}
-
-func (r *svcReconciler) ingressNeedsUpdate(desired, existing *networkingv1.Ingress) bool {
-	if !equality.Semantic.DeepEqual(desired.Spec, existing.Spec) {
-		return true
-	}
-	for _, key := range managedIngressAnnotations {
-		if desired.Annotations[key] != existing.Annotations[key] {
-			return true
-		}
-	}
-	return false
-}
-
-func (r *svcReconciler) syncManagedIngressAnnotations(ingress *networkingv1.Ingress, desired map[string]string) {
-	if ingress.Annotations == nil {
-		ingress.Annotations = map[string]string{}
-	}
-	for _, key := range managedIngressAnnotations {
-		if value := desired[key]; value != "" {
-			ingress.Annotations[key] = value
-		} else {
-			delete(ingress.Annotations, key)
-		}
-	}
-}
-
-func (r *svcReconciler) ensureRedirectMiddleware(ctx context.Context, namespace string) error {
-	desired := buildRedirectMiddleware(namespace)
-	existing := &unstructured.Unstructured{}
-	existing.SetGroupVersionKind(desired.GroupVersionKind())
-	key := types.NamespacedName{Name: desired.GetName(), Namespace: desired.GetNamespace()}
-	if err := r.Client.Get(ctx, key, existing); err != nil {
-		if apierrors.IsNotFound(err) {
-			return r.Client.Create(ctx, desired)
-		}
-		return err
-	}
-	if !equality.Semantic.DeepEqual(desired.Object["spec"], existing.Object["spec"]) {
-		existing.Object["spec"] = desired.Object["spec"]
-		return r.Client.Update(ctx, existing)
-	}
-	return nil
-}
-
 func (r *svcReconciler) setTLSConfiguredIfEnabled(resource *v1alpha1.StackResource, annotations map[string]string) {
-	issuerName := annotations[certManagerClusterIssuerAnnotation]
+	issuerName := annotations[ingresstls.CertManagerClusterIssuerAnnotation]
 	if issuerName != "" {
 		setTLSCondition(resource, v1.ConditionTrue, "TLSConfigured",
 			fmt.Sprintf("Using ClusterIssuer %q", issuerName))
 	}
-}
-
-// --- TLS / ClusterIssuer resolution ---
-
-func (r *svcReconciler) resolveClusterIssuer(ctx context.Context, resource *v1alpha1.StackResource) (string, bool) {
-	logger := controller.LoggerFromContext(ctx)
-
-	issuerName := resource.Annotations[v1alpha1.ClusterIssuerAnnotation]
-	if issuerName == "" {
-		logger.Info("StackResource missing cluster-issuer annotation, skipping TLS")
-		setTLSCondition(resource, v1.ConditionFalse, "ClusterIssuerNotConfigured",
-			fmt.Sprintf("Missing annotation %s", v1alpha1.ClusterIssuerAnnotation))
-		return "", false
-	}
-
-	if err := r.Client.Get(ctx, types.NamespacedName{Name: issuerName}, &cmv1.ClusterIssuer{}); err != nil {
-		if apierrors.IsNotFound(err) {
-			logger.Info("ClusterIssuer not found, skipping TLS", "clusterIssuer", issuerName)
-			setTLSCondition(resource, v1.ConditionFalse, "ClusterIssuerNotFound",
-				fmt.Sprintf("ClusterIssuer %q does not exist", issuerName))
-			return "", false
-		}
-		logger.Error(err, "failed to get ClusterIssuer", "clusterIssuer", issuerName)
-		setTLSCondition(resource, v1.ConditionFalse, "ClusterIssuerLookupFailed",
-			fmt.Sprintf("Failed to look up ClusterIssuer %q: %v", issuerName, err))
-		return "", false
-	}
-
-	return issuerName, true
 }
 
 // --- Service reconciliation ---
@@ -347,33 +245,7 @@ func collectExposedPorts(resource *v1alpha1.StackResource) (portFqdnMap map[int]
 }
 
 func setTLSCondition(resource *v1alpha1.StackResource, status v1.ConditionStatus, reason, message string) {
-	meta.SetStatusCondition(&resource.Status.Conditions, v1.Condition{
-		Type:               string(v1alpha1.StackResourceTLSConfigured),
-		Status:             status,
-		ObservedGeneration: resource.Generation,
-		Reason:             reason,
-		Message:            message,
-	})
-}
-
-func buildRedirectMiddleware(namespace string) *unstructured.Unstructured {
-	mw := &unstructured.Unstructured{
-		Object: map[string]interface{}{
-			"apiVersion": "traefik.io/v1alpha1",
-			"kind":       "Middleware",
-			"metadata": map[string]interface{}{
-				"name":      traefikRedirectMiddlewareName,
-				"namespace": namespace,
-			},
-			"spec": map[string]interface{}{
-				"redirectScheme": map[string]interface{}{
-					"scheme":    "https",
-					"permanent": true,
-				},
-			},
-		},
-	}
-	return mw
+	ingresstls.SetTLSCondition(&resource.Status.Conditions, resource.Generation, string(v1alpha1.StackResourceTLSConfigured), status, reason, message)
 }
 
 func buildIngressRules(portFqdnMap map[int]string, serviceName string) []networkingv1.IngressRule {
