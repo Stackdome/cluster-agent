@@ -30,6 +30,7 @@ func ResourceSVCName(resource *v1alpha1.StackResource) string {
 }
 
 func (r *svcReconciler) reconcile(ctx context.Context, resource *v1alpha1.StackResource) (subReconcilerResult, error) {
+	// Worker-type workloads don't need a Service or Ingress.
 	if resource.Spec.WorkloadType == v1alpha1.WorkloadTypeWorker {
 		reportStackResourceReady(resource)
 		return resultNil, nil
