@@ -4,6 +4,15 @@ import (
 	"testing"
 )
 
+func TestBuildJobName_BranchCollisionFixed(t *testing.T) {
+	// This is the bug we're fixing - truncation made these identical
+	a := BuildJobName("app", "create-stackfile-42010165d15be77adc3a6ae05563a40e5ca9bb5d")
+	b := BuildJobName("app", "create-stackfile-e3eb341d3a9aa5a89e7c4a0cc4fd7c9e10d7d58d")
+	if a == b {
+		t.Errorf("different commits on same long branch should produce different names, both = %q", a)
+	}
+}
+
 func TestBuildJobName(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -16,21 +25,21 @@ func TestBuildJobName(t *testing.T) {
 			name:           "short name stays as-is",
 			resourceName:   "my-app",
 			sourceRevision: "abc123def456",
-			wantName:       "my-app-abc123de-build",
+			wantName:       "my-app-e861b2ea-build",
 			wantMaxLen:     63,
 		},
 		{
 			name:           "full 40-char SHA is truncated to 8",
 			resourceName:   "frontend",
 			sourceRevision: "20d73f323a4d95ff5a3847717892e1740a5a81b6",
-			wantName:       "frontend-20d73f32-build",
+			wantName:       "frontend-3bfc284a-build",
 			wantMaxLen:     63,
 		},
 		{
 			name:           "long resource name from the issue",
 			resourceName:   "broken-app-broken-dockerfile",
 			sourceRevision: "20d73f323a4d95ff5a3847717892e1740a5a81b6",
-			wantName:       "broken-app-broken-dockerfile-20d73f32-build",
+			wantName:       "broken-app-broken-dockerfile-3bfc284a-build",
 			wantMaxLen:     63,
 		},
 		{
@@ -40,37 +49,37 @@ func TestBuildJobName(t *testing.T) {
 			wantMaxLen:     63,
 		},
 		{
-			name:           "short revision used as-is",
+			name:           "short revision used as-is (hashed)",
 			resourceName:   "app",
 			sourceRevision: "abc",
-			wantName:       "app-abc-build",
+			wantName:       "app-ba7816bf-build",
 			wantMaxLen:     63,
 		},
 		{
 			name:           "branch name with slash and uppercase",
 			resourceName:   "app",
 			sourceRevision: "Feature/Cool-Stuff",
-			wantName:       "app-feature-build",
+			wantName:       "app-9d30e60e-build",
 			wantMaxLen:     63,
 		},
 		{
 			name:           "branch name with dots and underscores",
 			resourceName:   "app",
 			sourceRevision: "v1.2.3_beta",
-			wantName:       "app-v1-2-3-b-build",
+			wantName:       "app-0b506316-build",
 			wantMaxLen:     63,
 		},
 		{
 			name:           "non-ASCII UTF-8 branch name",
 			resourceName:   "app",
 			sourceRevision: "feature/日本語",
-			wantName:       "app-feature-build", // "日本語" gets replaced with "-" which is trimmed
+			wantName:       "app-ffc43221-build",
 			wantMaxLen:     63,
 		},
 		{
-			name:           "empty or only invalid characters in revision falls back to rev",
+			name:           "empty revision falls back to rev",
 			resourceName:   "app",
-			sourceRevision: "///",
+			sourceRevision: "",
 			wantName:       "app-rev-build",
 			wantMaxLen:     63,
 		},
