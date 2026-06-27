@@ -73,8 +73,6 @@ func (r *StackResourceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 	originalStatus := stackResource.Status.DeepCopy()
 
-	// Initialize the status and phase of the stack resource
-	r.initializeStatusAndPhase(stackResource)
 	res, err := r.reconcile(ctx, stackResource)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -93,27 +91,6 @@ func (r *StackResourceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 
 	return res, nil
-}
-
-func (r *StackResourceReconciler) initializeStatusAndPhase(resource *v1alpha1.StackResource) {
-	resource.Status.ObservedGeneration = resource.Generation
-	resource.Status.Phase = v1alpha1.StackResourcePhasePending
-	resource.Status.ExternalAddress = nil // this is actually a no-op; maybe skip?
-	resource.Status.InternalAddress = nil // same here
-	resource.Status.ImageSourceRevision = ""
-	resource.Status.CurrentBuild = nil
-	// NOTE: LastFailureDetails is intentionally NOT cleared here. It persists
-	// across reconciles and is managed by the workload reconciler.
-	cond := meta.FindStatusCondition(resource.Status.Conditions, string(v1alpha1.StackResourceStatusAvailable))
-	if cond == nil {
-		meta.SetStatusCondition(&resource.Status.Conditions, metav1.Condition{
-			Type:               string(v1alpha1.StackResourceStatusAvailable),
-			Status:             metav1.ConditionUnknown,
-			ObservedGeneration: resource.Generation,
-			Reason:             "StackResourceStausUnknown",
-			Message:            "StackResource status is unknown",
-		})
-	}
 }
 
 func (r *StackResourceReconciler) reconcile(ctx context.Context, resource *v1alpha1.StackResource) (ctrl.Result, error) {
@@ -147,8 +124,6 @@ func reportStackResourceNotReady(resource *v1alpha1.StackResource, reason, msg s
 	}
 	resource.Status.ObservedGeneration = resource.Generation
 	resource.Status.Phase = v1alpha1.StackResourcePhasePending
-	resource.Status.ExternalAddress = nil
-	resource.Status.InternalAddress = nil
 	meta.SetStatusCondition(&resource.Status.Conditions, metav1.Condition{
 		Type:               string(v1alpha1.StackResourceStatusAvailable),
 		Status:             metav1.ConditionFalse,

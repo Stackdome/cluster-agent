@@ -3,18 +3,41 @@ package integration
 import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	corev1alpha1 "stackdome.io/cluster-agent/api/core/v1alpha1"
+	storagev1alpha1 "stackdome.io/cluster-agent/api/storage/v1alpha1"
 	"stackdome.io/cluster-agent/test/integration/fixtures"
 	"stackdome.io/cluster-agent/test/integration/helpers"
 )
 
+// Stack convergence tests exercise the full convergence hierarchy end-to-end:
+//
+//   StackResource.Converged=True → Stack.ResourcesReady=True → Stack.Available=True → Phase=Ready
+//
+// Convergence is strictly stronger than availability: a StackResource can be Available
+// (old pods serving traffic) but not Converged (new pods failing). The Stack controller
+// aggregates child states into phase by priority: Failed > Progressing > Degraded > Ready > Pending.
+//
+// Key invariants tested here:
+//   - Orphans (children not in spec.resourceNames) block Available without affecting ResourcesReady
+//   - Per-child revision tokens allow independent rollouts; Stack converges only when all match
+//   - lastConverged is write-once per revision+releaseID — a sticky checkpoint of the last known-good state
+//   - Degraded = all children serving but not all converged (requires prior convergence; first deploy is Progressing)
+//   - MinReadySeconds prevents the deployment controller from scaling down the old RS when a new pod
+//     briefly starts then crashes (pod must stay Ready for 10s before counting as available)
+//   - Addresses (external/internal) persist when a workload goes unhealthy because the Service/Ingress
+//     still exist in the cluster; only the pods are down
 var _ = Describe("Stack convergence", func() {
 
+	// Orphan detection: a StackResource that exists in the cluster but is NOT listed in
+	// spec.resourceNames should block Stack.Available (orphan = pending deletion) without
+	// affecting ResourcesReady (the named children are still healthy).
 	Context("Orphan detection", Ordered, func() {
 		var stack *corev1alpha1.Stack
 
@@ -92,6 +115,9 @@ var _ = Describe("Stack convergence", func() {
 		})
 	})
 
+	// Per-child revision tokens: in managed mode, each child independently echoes its own
+	// revision annotation. The Stack only converges when ALL children have observed their
+	// respective tokens. A broken child C does not invalidate the convergence of child B.
 	Context("Per-child revision token convergence", Ordered, func() {
 		const (
 			stackName    = "rev-conv-stack"
@@ -240,6 +266,8 @@ var _ = Describe("Stack convergence", func() {
 		})
 	})
 
+	// Missing child: a resourceName in spec with no corresponding StackResource CR is Pending,
+	// not Progressing — we can't progress what doesn't exist.
 	Context("Missing child detection", func() {
 		It("should report Pending with missing resource", func() {
 			stack := &corev1alpha1.Stack{
@@ -281,6 +309,8 @@ var _ = Describe("Stack convergence", func() {
 		})
 	})
 
+	// Unannotated child in managed mode: a child without the revision annotation cannot
+	// satisfy isConverged (rev == ""), so the Stack blocks with a specific message.
 	Context("Managed stack with unannotated child stays Pending", func() {
 		It("should block convergence with a specific message", func() {
 			stackName := "managed-unannotated"
@@ -331,6 +361,8 @@ var _ = Describe("Stack convergence", func() {
 		})
 	})
 
+	// Rollback: lastConverged is keyed on revision+releaseID. Changing the releaseID (same
+	// revision) is a distinct convergence event — the write-once guard fires again.
 	Context("Rollback produces new lastConverged record", Ordered, func() {
 		const (
 			stackName = "rollback-stack"
@@ -407,6 +439,10 @@ var _ = Describe("Stack convergence", func() {
 		})
 	})
 
+	// Partial failure: when one child gets a broken image, lastConverged stays sticky at the
+	// previous revision. The healthy child converges independently. The Stack is Progressing
+	// (new revision active) + Degraded (all children serving via old pods). The broken child
+	// reports Phase=Degraded with enriched convergence condition and captured failure details.
 	Context("Partial failure preserves last-converged revision", Ordered, func() {
 		const (
 			stackName    = "partial-fail-stack"
@@ -639,6 +675,8 @@ var _ = Describe("Stack convergence", func() {
 		})
 	})
 
+	// Standalone mode: a Stack without revision annotations reaches Ready based purely on
+	// child readiness (deploymentConverged). No lastConverged tracking, no targetRevision.
 	Context("Standalone stack converges on readiness alone", func() {
 		It("should reach Ready without any revision annotations", func() {
 			stackName := "standalone-stack"
@@ -665,6 +703,243 @@ var _ = Describe("Stack convergence", func() {
 
 			By("Cleanup")
 			helpers.CleanupStack(ctx, c, swr.Stack)
+		})
+	})
+
+	Context("MinReadySeconds prevents premature old RS scale-down", Ordered, func() {
+		// This test verifies that MinReadySeconds protects the old ReplicaSet during
+		// a failed rolling update. Without MinReadySeconds, a pod that starts but
+		// crashes within seconds would briefly be marked Ready, causing Kubernetes to
+		// consider the rollout complete and scale down the old (healthy) RS. With
+		// MinReadySeconds=10, the pod must stay Ready for 10 continuous seconds before
+		// the deployment controller counts it as "available." A pod that crashes at 5s
+		// never reaches that threshold, so the old RS is preserved.
+		const (
+			stackName    = "min-ready-stack"
+			resourceName = "min-ready-app"
+		)
+		var stack *corev1alpha1.Stack
+
+		It("should keep old RS alive when new pod crashes within MinReadySeconds window", func() {
+			By("Creating a Stack with a working image and an exposed public port")
+			// Start with a healthy nginx deployment so we have a known-good RS
+			// with addresses populated (external + internal).
+			swr := fixtures.NewStack(stackName,
+				fixtures.NewResource(stackName, resourceName,
+					fixtures.WithImage("nginxinc/nginx-unprivileged:1.25-alpine"),
+					fixtures.WithPorts(corev1alpha1.Port{
+						Name: "http", Number: 8080, Protocol: "http",
+						ExposeToPublic: true, FQDN: resourceName + ".local",
+					})))
+			Expect(fixtures.CreateStackWithResources(ctx, c, swr)).To(Succeed())
+			stack = swr.Stack
+
+			By("Waiting for Stack to reach Ready")
+			_, err := helpers.WaitForStackReady(ctx, c, client.ObjectKeyFromObject(stack), readyTimeout)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Verifying the deployment has MinReadySeconds=10")
+			// This is the setting that protects us — without it, the rollout
+			// would complete the instant the new pod's container starts.
+			dep, err := helpers.GetDeploymentForResource(ctx, c, stack.Namespace, resourceName)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(dep.Spec.MinReadySeconds).To(Equal(int32(10)))
+
+			By("Recording the current external and internal addresses")
+			sr := &corev1alpha1.StackResource{}
+			Expect(c.Get(ctx, client.ObjectKey{Name: resourceName, Namespace: stack.Namespace}, sr)).To(Succeed())
+			Expect(sr.Status.ExternalAddress).NotTo(BeEmpty(), "should have external address before update")
+			Expect(sr.Status.InternalAddress).NotTo(BeNil(), "should have internal address before update")
+
+			By("Updating the StackResource to a busybox image that crashes after 5 seconds")
+			// sleep 5 + exit 1 means the container runs for 5 seconds, which is
+			// within the 10-second MinReadySeconds window. The pod becomes Ready
+			// instantly (no readiness probe), but since it crashes before 10s,
+			// the deployment controller never counts it as "available." Therefore
+			// the old RS (nginx) must NOT be scaled down.
+			Eventually(func() error {
+				if err := c.Get(ctx, client.ObjectKey{Name: resourceName, Namespace: stack.Namespace}, sr); err != nil {
+					return err
+				}
+				sr.Spec.ImageSpec = &corev1alpha1.ImageSpec{Image: "busybox:1.36"}
+				sr.Spec.Command = []string{"sh"}
+				sr.Spec.Args = []string{"-c", "sleep 5; exit 1"}
+				return c.Update(ctx, sr)
+			}, "30s", "1s").Should(Succeed())
+
+			By("Waiting for the new RS to appear with unavailable replicas")
+			// Once the deployment controller creates the new RS and the pod starts
+			// crashing, we'll see UnavailableReplicas > 0. This confirms the rollout
+			// is in progress but stuck.
+			Eventually(func() int32 {
+				dep, err := helpers.GetDeploymentForResource(ctx, c, stack.Namespace, resourceName)
+				if err != nil {
+					return 0
+				}
+				return dep.Status.UnavailableReplicas
+			}, readyTimeout, "5s").Should(BeNumerically(">=", 1))
+
+			By("Verifying the old RS still has replicas — MinReadySeconds prevented scale-down")
+			// The critical assertion: the old RS must still be serving. If
+			// MinReadySeconds were 0, the old RS would already be at 0 replicas
+			// because the new pod was briefly Ready before crashing.
+			dep, err = helpers.GetDeploymentForResource(ctx, c, stack.Namespace, resourceName)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(dep.Status.AvailableReplicas).To(BeNumerically(">=", 1),
+				"old RS pods must still be available — MinReadySeconds prevented the old RS from being scaled down")
+
+			By("Verifying the deployment is still Available (old pods serving)")
+			available := false
+			for _, cond := range dep.Status.Conditions {
+				if cond.Type == appsv1.DeploymentAvailable && cond.Status == corev1.ConditionTrue {
+					available = true
+				}
+			}
+			Expect(available).To(BeTrue(), "deployment should still be Available via old RS")
+
+			By("Verifying StackResource still has addresses (not cleared during failed rollout)")
+			Expect(c.Get(ctx, client.ObjectKey{Name: resourceName, Namespace: stack.Namespace}, sr)).To(Succeed())
+			Expect(sr.Status.ExternalAddress).NotTo(BeEmpty(),
+				"external address must persist — the Service and Ingress still exist")
+			Expect(sr.Status.ExternalAddress[0].Address).To(HavePrefix("http://"),
+				"external address should have http:// scheme prefix")
+			Expect(sr.Status.InternalAddress).NotTo(BeNil(),
+				"internal address must persist — the Service still exists")
+		})
+
+		AfterAll(func() {
+			helpers.CleanupStack(ctx, c, stack)
+		})
+	})
+
+	Context("Address persistence after runtime crash", Ordered, func() {
+		// This test verifies that external and internal addresses persist in the
+		// StackResource status even after the workload enters CrashLoopBackOff with
+		// no healthy pods. Previously, initializeStatusAndPhase cleared these fields
+		// on every reconcile, so a crashing workload would lose its addresses — bad
+		// UX for the hub since the URLs disappear even though the Service/Ingress
+		// still exist in the cluster.
+		//
+		// The test uses a marker file in a PVC-backed volume to control crash behavior:
+		//   - First run: no marker file exists → create it → sleep 60s → exit 1
+		//     This gives MinReadySeconds (10s) time to pass, so the rollout completes,
+		//     the svc reconciler runs, and addresses are populated.
+		//   - Subsequent runs: marker file exists → sleep 3s → exit 1
+		//     This crashes within MinReadySeconds (10s), but since the rollout already
+		//     completed (no old RS to protect), the pod just CrashLoopBackOff's. The
+		//     deployment goes Available=False. We assert addresses persist.
+		const (
+			stackName    = "addr-persist-stack"
+			resourceName = "addr-persist-app"
+			volumeName   = "addr-persist-marker"
+		)
+		var stack *corev1alpha1.Stack
+
+		It("should preserve addresses when pod enters CrashLoopBackOff after initial convergence", func() {
+			By("Creating an empty Volume CR for the marker file")
+			// The Volume CRD with no Source and NeedsSyncBeforeUse=false creates a
+			// blank PVC. We mount it into the container at /marker so the marker file
+			// persists across container restarts (emptyDir equivalent via PVC).
+			vol := &storagev1alpha1.Volume{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      volumeName,
+					Namespace: env.TestNamespace,
+				},
+				Spec: storagev1alpha1.VolumeSpec{
+					Size:               "1Mi",
+					AccessMode:         corev1.ReadWriteOnce,
+					NeedsSyncBeforeUse: false,
+				},
+			}
+			Expect(c.Create(ctx, vol)).To(Succeed())
+
+			By("Waiting for Volume to be Ready (PVC created)")
+			Eventually(func() storagev1alpha1.VolumePhase {
+				v := &storagev1alpha1.Volume{}
+				if err := c.Get(ctx, client.ObjectKey{Name: volumeName, Namespace: env.TestNamespace}, v); err != nil {
+					return ""
+				}
+				return v.Status.Phase
+			}, readyTimeout, "5s").Should(Equal(storagev1alpha1.VolumePhaseReady))
+
+			By("Creating Stack with a resource that uses the marker-file crash pattern")
+			// The command implements a two-phase crash pattern:
+			//   Phase 1 (first run): Creates /marker/ran, sleeps 60s, then exits.
+			//     The 60s sleep exceeds MinReadySeconds (10s), so the deployment
+			//     controller considers the rollout complete. The svc reconciler runs,
+			//     populates ExternalAddress and InternalAddress.
+			//   Phase 2 (restarts): /marker/ran exists, so it sleeps only 3s then exits.
+			//     3s < MinReadySeconds (10s), but since the rollout already completed
+			//     (there's no old RS), this just causes CrashLoopBackOff. During the
+			//     backoff windows, the deployment has 0 Ready pods → Available=False.
+			sr := fixtures.NewResource(stackName, resourceName,
+				fixtures.WithImage("busybox:1.36"),
+				fixtures.WithCommand(
+					[]string{"sh"},
+					[]string{"-c", "if [ -f /marker/ran ]; then sleep 3; exit 1; fi; touch /marker/ran; sleep 60; exit 1"},
+				),
+				fixtures.WithPorts(corev1alpha1.Port{
+					Name: "http", Number: 8080, Protocol: "http",
+					ExposeToPublic: true, FQDN: resourceName + ".local",
+				}),
+			)
+			sr.Spec.VolumeMounts = []corev1alpha1.VolumeMount{
+				{SourceVolume: volumeName, Destination: "/marker"},
+			}
+
+			swr := fixtures.NewStack(stackName, sr)
+			Expect(fixtures.CreateStackWithResources(ctx, c, swr)).To(Succeed())
+			stack = swr.Stack
+
+			By("Waiting for Stack to reach Ready (first run: 60s healthy)")
+			// During the first 60 seconds the pod is Running and Ready. The deployment
+			// passes MinReadySeconds after 10s, the rollout completes, and the svc
+			// reconciler creates the Service + Ingress and populates addresses.
+			_, err := helpers.WaitForStackReady(ctx, c, client.ObjectKeyFromObject(stack), readyTimeout)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Verifying addresses are populated while healthy")
+			sr = &corev1alpha1.StackResource{}
+			Expect(c.Get(ctx, client.ObjectKey{Name: resourceName, Namespace: stack.Namespace}, sr)).To(Succeed())
+			Expect(sr.Status.ExternalAddress).NotTo(BeEmpty(), "external address should be set after convergence")
+			Expect(sr.Status.ExternalAddress[0].Address).To(HavePrefix("http://"),
+				"external address should have http:// scheme prefix")
+			Expect(sr.Status.InternalAddress).NotTo(BeNil(), "internal address should be set after convergence")
+
+			By("Waiting for the pod to crash and SR to go not-Available")
+			// After the first 60s, the container exits. Kubernetes restarts it. The
+			// marker file persists in the PVC, so the new container sees /marker/ran
+			// and exits after 3s. This is within MinReadySeconds, so the pod is never
+			// counted as available. After 2-3 restarts with increasing backoff, there
+			// are periods where the deployment has 0 Ready pods.
+			Eventually(func() bool {
+				sr := &corev1alpha1.StackResource{}
+				if err := c.Get(ctx, client.ObjectKey{Name: resourceName, Namespace: stack.Namespace}, sr); err != nil {
+					return false
+				}
+				return !helpers.StackResourceIsAvailable(sr)
+			}, readyTimeout, "5s").Should(BeTrue(),
+				"SR should become not-Available after the pod enters CrashLoopBackOff")
+
+			By("Verifying addresses persist despite no healthy pods")
+			// This is the key assertion. Previously, initializeStatusAndPhase cleared
+			// ExternalAddress and InternalAddress on every reconcile, so they would be
+			// nil here. After our fix, addresses persist because the Service and Ingress
+			// still exist in the cluster — only the pods are down.
+			Expect(c.Get(ctx, client.ObjectKey{Name: resourceName, Namespace: stack.Namespace}, sr)).To(Succeed())
+			Expect(sr.Status.ExternalAddress).NotTo(BeEmpty(),
+				"external address must persist even with no healthy pods — the Service and Ingress still exist")
+			Expect(sr.Status.ExternalAddress[0].Address).To(HavePrefix("http://"),
+				"scheme prefix must persist")
+			Expect(sr.Status.InternalAddress).NotTo(BeNil(),
+				"internal address must persist — the Service still exists")
+		})
+
+		AfterAll(func() {
+			helpers.CleanupStack(ctx, c, stack)
+			_ = c.Delete(ctx, &storagev1alpha1.Volume{
+				ObjectMeta: metav1.ObjectMeta{Name: volumeName, Namespace: env.TestNamespace},
+			})
 		})
 	})
 })

@@ -385,7 +385,7 @@ var _ = Describe("Stack basics", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(sr.Status.ExternalAddress).To(HaveLen(1))
 			Expect(sr.Status.ExternalAddress[0].TargetPort).To(Equal(int32(80)))
-			Expect(sr.Status.ExternalAddress[0].Address).To(Equal(srName + ".example.com"))
+			Expect(sr.Status.ExternalAddress[0].Address).To(Equal("http://" + srName + ".example.com"))
 		})
 
 		AfterAll(func() { helpers.CleanupStack(ctx, c, stack) })

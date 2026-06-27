@@ -418,6 +418,85 @@ var _ = Describe("svcReconciler Ingress TLS", func() {
 	})
 })
 
+var _ = Describe("buildExternalAddresses", func() {
+	It("should prefix http:// when TLS is false", func() {
+		resource := &v1alpha1.StackResource{
+			Spec: v1alpha1.StackResourceSpec{
+				Ports: []v1alpha1.Port{
+					{Name: "http", Number: 8080, Protocol: "http", ExposeToPublic: true, FQDN: "app.local.dev", TLS: false},
+				},
+			},
+		}
+		addresses := buildExternalAddresses(resource, map[int]string{8080: "app.local.dev"})
+		Expect(addresses).To(HaveLen(1))
+		Expect(addresses[0].Address).To(Equal("http://app.local.dev"))
+		Expect(addresses[0].TargetPort).To(Equal(int32(8080)))
+	})
+
+	It("should prefix https:// when TLS is true", func() {
+		resource := &v1alpha1.StackResource{
+			Spec: v1alpha1.StackResourceSpec{
+				Ports: []v1alpha1.Port{
+					{Name: "http", Number: 443, Protocol: "http", ExposeToPublic: true, FQDN: "app.example.com", TLS: true},
+				},
+			},
+		}
+		addresses := buildExternalAddresses(resource, map[int]string{443: "app.example.com"})
+		Expect(addresses).To(HaveLen(1))
+		Expect(addresses[0].Address).To(Equal("https://app.example.com"))
+	})
+
+	It("should handle mixed TLS and non-TLS ports", func() {
+		resource := &v1alpha1.StackResource{
+			Spec: v1alpha1.StackResourceSpec{
+				Ports: []v1alpha1.Port{
+					{Name: "http", Number: 8080, Protocol: "http", ExposeToPublic: true, FQDN: "app.local.dev", TLS: false},
+					{Name: "https", Number: 443, Protocol: "http", ExposeToPublic: true, FQDN: "app.example.com", TLS: true},
+				},
+			},
+		}
+		addresses := buildExternalAddresses(resource, map[int]string{
+			8080: "app.local.dev",
+			443:  "app.example.com",
+		})
+		Expect(addresses).To(HaveLen(2))
+		addrMap := map[string]string{}
+		for _, a := range addresses {
+			addrMap[a.Address] = a.Address
+		}
+		Expect(addrMap).To(HaveKey("http://app.local.dev"))
+		Expect(addrMap).To(HaveKey("https://app.example.com"))
+	})
+})
+
+var _ = Describe("address persistence", func() {
+	It("reportStackResourceNotReady should not clear addresses", func() {
+		resource := &v1alpha1.StackResource{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:       "my-app",
+				Namespace:  "test-ns",
+				Generation: 1,
+			},
+			Status: v1alpha1.StackResourceStatus{
+				InternalAddress: strPtr("my-app"),
+				ExternalAddress: []v1alpha1.ExternalAddress{
+					{TargetPort: 8080, Address: "http://app.local.dev"},
+				},
+			},
+		}
+
+		reportStackResourceNotReady(resource, "DeploymentNotReady", "pods crashing")
+
+		Expect(resource.Status.Phase).To(Equal(v1alpha1.StackResourcePhasePending))
+		Expect(resource.Status.InternalAddress).NotTo(BeNil())
+		Expect(*resource.Status.InternalAddress).To(Equal("my-app"))
+		Expect(resource.Status.ExternalAddress).To(HaveLen(1))
+		Expect(resource.Status.ExternalAddress[0].Address).To(Equal("http://app.local.dev"))
+	})
+})
+
+func strPtr(s string) *string { return &s }
+
 func findCondition(conditions []metav1.Condition, condType string) *metav1.Condition {
 	for i := range conditions {
 		if conditions[i].Type == condType {

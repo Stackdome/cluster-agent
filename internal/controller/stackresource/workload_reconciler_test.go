@@ -368,6 +368,7 @@ var _ = Describe("workloadReconciler", func() {
 					Expect(d.Spec.Template.Spec.Containers[0].Image).To(Equal("busybox:latest"))
 					Expect(d.Spec.Template.Spec.Containers[0].Name).To(Equal("test-resource"))
 					Expect(*d.Spec.ProgressDeadlineSeconds).To(Equal(int32(300)))
+					Expect(d.Spec.MinReadySeconds).To(Equal(int32(deploymentMinReadySeconds)))
 					// Simulate k8s populating the deployment after creation
 					d.Generation = 1
 					d.Annotations = map[string]string{deploymentRevisionAnnotation: "1"}
@@ -412,6 +413,7 @@ var _ = Describe("workloadReconciler", func() {
 						},
 					},
 					ProgressDeadlineSeconds: ptr.To(int32(300)),
+					MinReadySeconds:         deploymentMinReadySeconds,
 					Template: corev1.PodTemplateSpec{
 						ObjectMeta: metav1.ObjectMeta{
 							Labels: map[string]string{"resource": "test-resource"},
@@ -482,6 +484,7 @@ var _ = Describe("workloadReconciler", func() {
 						},
 					},
 					ProgressDeadlineSeconds: ptr.To(int32(300)),
+					MinReadySeconds:         deploymentMinReadySeconds,
 					Template: corev1.PodTemplateSpec{
 						ObjectMeta: metav1.ObjectMeta{
 							Labels: map[string]string{"resource": "test-resource"},
