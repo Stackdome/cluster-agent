@@ -22,9 +22,10 @@ const (
 type StackResourcePhase string
 
 const (
-	StackResourcePhasePending StackResourcePhase = "Pending"
-	StackResourcePhaseReady   StackResourcePhase = "Ready"
-	StackResourcePhaseFailed  StackResourcePhase = "Failed"
+	StackResourcePhasePending  StackResourcePhase = "Pending"
+	StackResourcePhaseReady    StackResourcePhase = "Ready"
+	StackResourcePhaseDegraded StackResourcePhase = "Degraded"
+	StackResourcePhaseFailed   StackResourcePhase = "Failed"
 )
 
 type StackResourceStatusCondition string

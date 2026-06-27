@@ -539,9 +539,39 @@ var _ = Describe("Stack convergence", func() {
 			Expect(convergedA).NotTo(BeNil())
 			Expect(convergedA.Status).To(Equal(metav1.ConditionFalse),
 				"SR-A must NOT be Converged — it never rolled out at rev2")
+			Expect(convergedA.Message).To(ContainSubstring("rollout not converged"),
+				"Converged condition should include descriptive replica details")
+			Expect(convergedA.Message).To(ContainSubstring("unavailable"),
+				"Converged condition should mention unavailable replicas")
 			Expect(srA.Status.LastConverged).NotTo(BeNil())
 			Expect(srA.Status.LastConverged.Revision).To(Equal(revA1),
 				"SR-A lastConverged must be sticky at rev1 — it never became Ready at rev2")
+
+			By("Verifying SR-A has Phase=Degraded (serving old revision but new rollout stuck)")
+			Expect(srA.Status.Phase).To(Equal(corev1alpha1.StackResourcePhaseDegraded),
+				"SR-A should be Degraded — serving traffic on old revision, new rollout not converged")
+
+			By("Verifying SR-A Available condition indicates previous revision")
+			availableA := meta.FindStatusCondition(srA.Status.Conditions, string(corev1alpha1.StackResourceStatusAvailable))
+			Expect(availableA).NotTo(BeNil())
+			Expect(availableA.Status).To(Equal(metav1.ConditionTrue))
+			Expect(availableA.Message).To(ContainSubstring("previous revision"),
+				"Available message should indicate serving on previous revision")
+
+			By("Verifying SR-A has LastFailureDetails populated from crashing new pods")
+			Eventually(func() []corev1alpha1.LastFailureDetail {
+				sr := &corev1alpha1.StackResource{}
+				if err := c.Get(ctx, client.ObjectKey{Name: resA, Namespace: stack.Namespace}, sr); err != nil {
+					return nil
+				}
+				return sr.Status.LastFailureDetails
+			}, readyTimeout, "5s").ShouldNot(BeEmpty(),
+				"LastFailureDetails should capture failures from the new ReplicaSet's pods (e.g. ImagePullBackOff)")
+
+			Expect(c.Get(ctx, client.ObjectKey{Name: resA, Namespace: stack.Namespace}, srA)).To(Succeed())
+			Expect(srA.Status.LastFailureDetails[0].LastTerminationReason).To(
+				BeElementOf("ImagePullBackOff", "ErrImagePull"),
+				"Failure reason should be ImagePullBackOff or ErrImagePull")
 
 			By("Verifying SR-A still has available replicas from rev1 (old pods kept alive during failed rollout)")
 			Expect(srA.Status.AvailableReplicas).To(BeNumerically(">=", 1),

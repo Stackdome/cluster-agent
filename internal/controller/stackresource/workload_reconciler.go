@@ -267,9 +267,24 @@ func (r *workloadReconciler) reconcileDeployment(ctx context.Context, resource *
 	// Ingress. Convergence (checked above) is the stricter signal used by the
 	// Stack controller for release gating.
 	if deploymentServing(deployment) {
-		setResourceCondition(resource, v1alpha1.StackResourceWorkloadAvailable, true, "DeploymentServing", "deployment serving at minimum availability")
-		resource.Status.LastFailureDetails = nil
-		resource.Status.LastFailureDeploymentRevision = ""
+		setResourceCondition(
+			resource,
+			v1alpha1.StackResourceWorkloadAvailable,
+			true,
+			"DeploymentServing",
+			"deployment serving at minimum availability",
+		)
+		if deploymentConverged(deployment) {
+			resource.Status.LastFailureDetails = nil
+			resource.Status.LastFailureDeploymentRevision = ""
+			return resultNil, nil
+		}
+		currentDeploymentRevision := deployment.Annotations[deploymentRevisionAnnotation]
+		r.captureFailureDetailsOnce(ctx, resource, currentDeploymentRevision)
+		if len(resource.Status.LastFailureDetails) == 0 && !controller.DeploymentRolloutSettled(deployment, deploymentGracePeriodAfterNewReplicaSetAvailable) {
+			d := 10 * time.Second
+			return subReconcilerResult{deferredRequeueAfter: &d}, nil
+		}
 		return resultNil, nil
 	}
 
@@ -387,11 +402,29 @@ func (r *workloadReconciler) applyDeploymentSpec(
 // Status evaluation helpers
 // ---------------------------------------------------------------------------
 
+func convergenceMessage(deployment *appsv1.Deployment) string {
+	desired := int32(1)
+	if deployment.Spec.Replicas != nil {
+		desired = *deployment.Spec.Replicas
+	}
+	msg := fmt.Sprintf("rollout not converged: %d/%d updated, %d/%d ready, %d unavailable",
+		deployment.Status.UpdatedReplicas, desired,
+		deployment.Status.ReadyReplicas, desired,
+		deployment.Status.UnavailableReplicas)
+	for _, c := range deployment.Status.Conditions {
+		if c.Type == appsv1.DeploymentProgressing && c.Status == corev1.ConditionFalse {
+			msg += "; " + c.Reason
+			break
+		}
+	}
+	return msg
+}
+
 // evaluateConvergence sets the Converged condition and stamps LastConverged
 // when the deployment reaches full convergence on the current revision.
 func (r *workloadReconciler) evaluateConvergence(resource *v1alpha1.StackResource, deployment *appsv1.Deployment) {
 	if !deploymentConverged(deployment) {
-		setResourceCondition(resource, v1alpha1.StackResourceConverged, false, "NotConverged", "deployment has not fully rolled out at full availability")
+		setResourceCondition(resource, v1alpha1.StackResourceConverged, false, "NotConverged", convergenceMessage(deployment))
 		return
 	}
 	setResourceCondition(resource, v1alpha1.StackResourceConverged, true, "FullyConverged", "all replicas updated and available on the target revision")
