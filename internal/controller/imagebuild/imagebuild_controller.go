@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"golang.org/x/sync/errgroup"
 	batchv1 "k8s.io/api/batch/v1"
 	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -52,6 +53,11 @@ func (r *ImageBuildReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 func (r *ImageBuildReconciler) reconcile(ctx context.Context, buildConfig *buildsv1alpha1.ImageBuild) (ctrl.Result, error) {
 	logger := controller.LoggerFromContext(ctx)
 	logger.Info("reconciling image build")
+
+	if buildConfig.Spec.Cancelled {
+		return r.reconcileCancellation(ctx, buildConfig)
+	}
+
 	switch {
 	case buildConfig.Spec.BuildContext.ContextSource.Git != nil:
 		return r.reconcileImageBuildWithGitSource(ctx, buildConfig)
@@ -61,6 +67,36 @@ func (r *ImageBuildReconciler) reconcile(ctx context.Context, buildConfig *build
 		logger.Info("no context source specified for image build")
 		return ctrl.Result{}, fmt.Errorf("no context source specified for image build")
 	}
+}
+
+func (r *ImageBuildReconciler) reconcileCancellation(ctx context.Context, buildConfig *buildsv1alpha1.ImageBuild) (ctrl.Result, error) {
+	logger := controller.LoggerFromContext(ctx)
+
+	var jobs batchv1.JobList
+	if err := r.Client.List(ctx, &jobs, client.InNamespace(buildConfig.Namespace)); err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to list Jobs for cancellation: %w", err)
+	}
+
+	var errGroup errgroup.Group
+	for i := range jobs.Items {
+		job := &jobs.Items[i]
+		if !metav1.IsControlledBy(job, buildConfig) {
+			continue
+		}
+
+		errGroup.Go(func() error {
+			logger.Info("deleting build job for cancelled ImageBuild", "job", job.Name)
+			if err := r.Client.Delete(ctx, job, client.PropagationPolicy(metav1.DeletePropagationBackground)); err != nil &&
+				!apierrors.IsNotFound(err) {
+				return fmt.Errorf("failed to delete build job %s: %w", job.Name, err)
+			}
+			return nil
+		})
+	}
+
+	buildConfig.Status.Phase = buildsv1alpha1.BuildPhaseCancelled
+	reportImageBuildStatus(buildConfig, buildsv1alpha1.BuildCancelled, metav1.ConditionTrue, "BuildCancelled")
+	return ctrl.Result{}, errGroup.Wait()
 }
 
 func (r *ImageBuildReconciler) reconcileImageBuildWithVolumeSource(ctx context.Context, buildConfig *buildsv1alpha1.ImageBuild) (ctrl.Result, error) {
