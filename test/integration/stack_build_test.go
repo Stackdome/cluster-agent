@@ -8,6 +8,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -432,6 +433,64 @@ var _ = Describe("Stack build from source", func() {
 			detail := imageBuild.Status.LastBuildFailureDetail
 			Expect(detail.LastTerminationExitCode).NotTo(BeNil())
 			Expect(detail.LastTerminationMessage).NotTo(BeEmpty())
+		})
+
+		AfterAll(func() { helpers.CleanupStack(ctx, c, stack) })
+	})
+
+	Context("BuildSpec - source revision update cancels in-progress build", Ordered, func() {
+		var stack *corev1alpha1.Stack
+		var swr *fixtures.StackWithResources
+		var firstBuildName string
+
+		BeforeAll(func() {
+			swr = fixtures.SimpleBuildStack("cancel-stale-build", env.RegistryURL)
+			Expect(fixtures.CreateStackWithResources(ctx, c, swr)).To(Succeed())
+			stack = swr.Stack
+		})
+
+		It("should cancel the in-progress ImageBuild when source revision is updated", func() {
+			srName := stack.Spec.ResourceNames[0]
+			sr := swr.Resources[0]
+			initialRevision := sr.Spec.BuildSpec.SourceRevision.GetSourceRevisionString()
+			firstBuildName = buildsv1alpha1.ImageBuildName(srName, initialRevision)
+			firstBuildKey := client.ObjectKey{Name: firstBuildName, Namespace: env.TestNamespace}
+
+			By("Waiting for initial ImageBuild to be created")
+			_, err := helpers.WaitForImageBuild(ctx, c, firstBuildKey, imageBuildTimeout)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Updating the source revision immediately while the build is still in progress")
+			liveSR := &corev1alpha1.StackResource{}
+			Expect(c.Get(ctx, client.ObjectKey{Name: srName, Namespace: stack.Namespace}, liveSR)).To(Succeed())
+			liveSR.Spec.BuildSpec.SourceRevision.GitRepo.Branch.HeadSha = "cancel-test-sha"
+			Expect(c.Update(ctx, liveSR)).To(Succeed())
+
+			By("Waiting for the old ImageBuild to have Spec.Cancelled=true")
+			Eventually(func() bool {
+				old := &buildsv1alpha1.ImageBuild{}
+				if err := c.Get(ctx, firstBuildKey, old); err != nil {
+					return false
+				}
+				return old.Spec.Cancelled
+			}, imageBuildTimeout, 5*time.Second).Should(BeTrue(),
+				"old ImageBuild %q should have Spec.Cancelled=true", firstBuildName)
+
+			By("Verifying a new ImageBuild was created")
+			newRevision := liveSR.Spec.BuildSpec.SourceRevision.GetSourceRevisionString()
+			newBuildName := buildsv1alpha1.ImageBuildName(srName, newRevision)
+			newBuildKey := client.ObjectKey{Name: newBuildName, Namespace: env.TestNamespace}
+			_, err = helpers.WaitForImageBuild(ctx, c, newBuildKey, imageBuildTimeout)
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		It("should delete the old build Job when ImageBuild is cancelled", func() {
+			By("Verifying the old build's Job no longer exists")
+			Eventually(func() bool {
+				_, err := helpers.GetBuildJob(ctx, c, env.TestNamespace, firstBuildName)
+				return apierrors.IsNotFound(err)
+			}, imageBuildTimeout, 5*time.Second).Should(BeTrue(),
+				"build Job for cancelled ImageBuild %q should be deleted", firstBuildName)
 		})
 
 		AfterAll(func() { helpers.CleanupStack(ctx, c, stack) })

@@ -277,7 +277,7 @@ func stackResourceAvailable(resource *v1alpha1.StackResource) bool {
 	return false
 }
 
-func NewStackResourceReconciler(client client.Client, scheme *runtime.Scheme, uncachedClient client.Client) *StackResourceReconciler {
+func NewStackResourceReconciler(client client.Client, scheme *runtime.Scheme, uncachedClient client.Client, imageBuildHistoryLimit int) *StackResourceReconciler {
 	w := &StackResourceReconciler{
 		Client: client,
 		Scheme: scheme,
@@ -292,8 +292,9 @@ func NewStackResourceReconciler(client client.Client, scheme *runtime.Scheme, un
 			scheme: scheme,
 		},
 		&imageBuildReconciler{
-			Client: client,
-			scheme: scheme,
+			Client:       client,
+			scheme:       scheme,
+			historyLimit: imageBuildHistoryLimit,
 		},
 		&workloadReconciler{
 			Client:            client,

@@ -11,10 +11,17 @@ import (
 	buildsv1alpha1 "stackdome.io/cluster-agent/api/builds/v1alpha1"
 )
 
+// WaitForImageBuild polls until an ImageBuild with the exact name exists.
+func WaitForImageBuild(ctx context.Context, c client.Client, key client.ObjectKey, timeout time.Duration) (*buildsv1alpha1.ImageBuild, error) {
+	return WaitFor(ctx, c, key, &buildsv1alpha1.ImageBuild{}, func(_ *buildsv1alpha1.ImageBuild) bool {
+		return true
+	}, timeout)
+}
+
 // WaitForImageBuildCreated polls until an ImageBuild CR with the given prefix exists.
 func WaitForImageBuildCreated(ctx context.Context, c client.Client, namespace, namePrefix string, timeout time.Duration) (*buildsv1alpha1.ImageBuild, error) {
 	deadline := time.After(timeout)
-	tick := time.NewTicker(5 * time.Second)
+	tick := time.NewTicker(1 * time.Second)
 	defer tick.Stop()
 
 	for {

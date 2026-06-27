@@ -230,7 +230,7 @@ func (r *workloadReconciler) applyDeployment(ctx context.Context, resource *v1al
 	probes, err := buildProbes(resource)
 	if err != nil {
 		reportStackResourceFailed(resource, "InvalidSpec", err.Error())
-		return nil, false, err
+		return nil, false, nil
 	}
 
 	deployment := &appsv1.Deployment{

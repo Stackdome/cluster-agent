@@ -26,6 +26,7 @@ require (
 	github.com/samber/lo v1.51.0
 	go.uber.org/mock v0.5.2
 	golang.org/x/crypto v0.49.0
+	golang.org/x/sync v0.20.0
 	gopkg.in/yaml.v2 v2.4.0
 	k8s.io/api v0.35.2
 	k8s.io/apimachinery v0.35.2
@@ -125,7 +126,6 @@ require (
 	golang.org/x/mod v0.33.0 // indirect
 	golang.org/x/net v0.52.0 // indirect
 	golang.org/x/oauth2 v0.35.0 // indirect
-	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/term v0.41.0 // indirect
 	golang.org/x/text v0.35.0 // indirect
