@@ -25,10 +25,11 @@ import (
 )
 
 type subReconcilerResult struct {
-	resultNil          bool
-	resultStop         bool
-	resultRequeue      bool
-	resultRequeueAfter *time.Duration
+	resultNil            bool
+	resultStop           bool
+	resultRequeue        bool
+	resultRequeueAfter   *time.Duration
+	deferredRequeueAfter *time.Duration
 }
 
 var (
@@ -37,6 +38,10 @@ var (
 	resultRequeue      = subReconcilerResult{resultRequeue: true}
 	resultRequeueAfter = func(t time.Duration) subReconcilerResult {
 		return subReconcilerResult{resultRequeueAfter: &t}
+	}
+	resultContinue        = resultNil // alias: continue to next sub-reconciler
+	resultDeferredRequeue = func(t time.Duration) subReconcilerResult {
+		return subReconcilerResult{deferredRequeueAfter: &t}
 	}
 )
 
@@ -112,6 +117,7 @@ func (r *StackResourceReconciler) initializeStatusAndPhase(resource *v1alpha1.St
 }
 
 func (r *StackResourceReconciler) reconcile(ctx context.Context, resource *v1alpha1.StackResource) (ctrl.Result, error) {
+	var deferredRequeue *time.Duration
 	for _, subReconciler := range r.subReconcilers {
 		subReconcilerRes, err := subReconciler.reconcile(ctx, resource)
 		switch {
@@ -124,6 +130,12 @@ func (r *StackResourceReconciler) reconcile(ctx context.Context, resource *v1alp
 		case subReconcilerRes.resultRequeueAfter != nil:
 			return ctrl.Result{RequeueAfter: *subReconcilerRes.resultRequeueAfter}, nil
 		}
+		if subReconcilerRes.deferredRequeueAfter != nil {
+			deferredRequeue = subReconcilerRes.deferredRequeueAfter
+		}
+	}
+	if deferredRequeue != nil {
+		return ctrl.Result{RequeueAfter: *deferredRequeue}, nil
 	}
 	return ctrl.Result{}, nil
 }
@@ -208,13 +220,26 @@ func reportStackResourceReady(resource *v1alpha1.StackResource) {
 	if rev, ok := resource.Annotations[v1alpha1.RevisionAnnotation]; ok {
 		resource.Status.ObservedRevision = rev
 	}
-	resource.Status.Phase = v1alpha1.StackResourcePhaseReady
+
+	notConverged := !isResourceConverged(resource)
+
+	if notConverged {
+		resource.Status.Phase = v1alpha1.StackResourcePhaseDegraded
+	} else {
+		resource.Status.Phase = v1alpha1.StackResourcePhaseReady
+	}
+
+	availableMsg := "StackResource is available"
+	if notConverged {
+		availableMsg = "available on previous revision; current rollout not converged"
+	}
+
 	meta.SetStatusCondition(&resource.Status.Conditions, metav1.Condition{
 		Type:               string(v1alpha1.StackResourceStatusAvailable),
 		Status:             metav1.ConditionTrue,
 		ObservedGeneration: resource.Generation,
 		Reason:             "StackResourceAvailable",
-		Message:            "StackResource is available",
+		Message:            availableMsg,
 	})
 	meta.SetStatusCondition(&resource.Status.Conditions, metav1.Condition{
 		Type:               string(v1alpha1.StackResourceStalled),
@@ -224,6 +249,11 @@ func reportStackResourceReady(resource *v1alpha1.StackResource) {
 		Message:            "StackResource is available",
 	})
 	resource.Status.StatusHash = resource.StatusHash()
+}
+
+func isResourceConverged(resource *v1alpha1.StackResource) bool {
+	cond := meta.FindStatusCondition(resource.Status.Conditions, string(v1alpha1.StackResourceConverged))
+	return cond != nil && cond.Status == metav1.ConditionTrue && cond.ObservedGeneration == resource.Generation
 }
 
 func (r *StackResourceReconciler) getImageBuildStatus(ctx context.Context, resource *v1alpha1.StackResource) (*v1alpha1.BuildStatus, error) {

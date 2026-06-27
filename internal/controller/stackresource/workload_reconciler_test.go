@@ -65,12 +65,19 @@ func deploymentWithConditions(revision string, conditions []appsv1.DeploymentCon
 }
 
 func availableDeployment(revision string) *appsv1.Deployment {
-	return deploymentWithConditions(revision, []appsv1.DeploymentCondition{
+	deploy := deploymentWithConditions(revision, []appsv1.DeploymentCondition{
 		{
 			Type:   appsv1.DeploymentAvailable,
 			Status: corev1.ConditionTrue,
 		},
 	})
+	deploy.Spec.Replicas = ptr.To(int32(1))
+	deploy.Status.Replicas = 1
+	deploy.Status.UpdatedReplicas = 1
+	deploy.Status.ReadyReplicas = 1
+	deploy.Status.AvailableReplicas = 1
+	deploy.Status.UnavailableReplicas = 0
+	return deploy
 }
 
 func notReadyDeployment(revision string) *appsv1.Deployment {
@@ -139,6 +146,64 @@ func setupEmptyUncachedList(mockUncached *mocks.MockClient) {
 	mockUncached.EXPECT().
 		List(gomock.Any(), gomock.AssignableToTypeOf(&appsv1.ReplicaSetList{}), gomock.Any(), gomock.Any()).
 		Return(nil)
+}
+
+func setupImagePullBackOffPods(mockUncached *mocks.MockClient, revision string) {
+	rs := appsv1.ReplicaSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-resource-def456",
+			Namespace: "test-ns",
+			Annotations: map[string]string{
+				deploymentRevisionAnnotation: revision,
+			},
+			Labels: map[string]string{
+				"pod-template-hash": "def456",
+			},
+		},
+		Spec: appsv1.ReplicaSetSpec{
+			Selector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					"resource": "test-resource",
+				},
+			},
+		},
+	}
+
+	mockUncached.EXPECT().
+		List(gomock.Any(), gomock.AssignableToTypeOf(&appsv1.ReplicaSetList{}), gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, list client.ObjectList, _ ...client.ListOption) error {
+			list.(*appsv1.ReplicaSetList).Items = []appsv1.ReplicaSet{rs}
+			return nil
+		})
+
+	pod := corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "test-resource-def456-xyz",
+			Namespace:         "test-ns",
+			CreationTimestamp: metav1.Now(),
+		},
+		Status: corev1.PodStatus{
+			ContainerStatuses: []corev1.ContainerStatus{
+				{
+					Name:         "test-resource",
+					RestartCount: 0,
+					State: corev1.ContainerState{
+						Waiting: &corev1.ContainerStateWaiting{
+							Reason:  "ImagePullBackOff",
+							Message: "Back-off pulling image",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	mockUncached.EXPECT().
+		List(gomock.Any(), gomock.AssignableToTypeOf(&corev1.PodList{}), gomock.Any(), gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, list client.ObjectList, _ ...client.ListOption) error {
+			list.(*corev1.PodList).Items = []corev1.Pod{pod}
+			return nil
+		})
 }
 
 func setupCrashingPods(mockUncached *mocks.MockClient, revision string) {
@@ -307,6 +372,10 @@ var _ = Describe("workloadReconciler", func() {
 					d.Generation = 1
 					d.Annotations = map[string]string{deploymentRevisionAnnotation: "1"}
 					d.Status.ObservedGeneration = 1
+					d.Status.Replicas = 1
+					d.Status.UpdatedReplicas = 1
+					d.Status.ReadyReplicas = 1
+					d.Status.AvailableReplicas = 1
 					d.Status.Conditions = []appsv1.DeploymentCondition{
 						{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionTrue},
 					}
@@ -361,7 +430,12 @@ var _ = Describe("workloadReconciler", func() {
 					},
 				},
 				Status: appsv1.DeploymentStatus{
-					ObservedGeneration: 1,
+					ObservedGeneration:  1,
+					Replicas:            1,
+					UpdatedReplicas:     1,
+					ReadyReplicas:       1,
+					AvailableReplicas:   1,
+					UnavailableReplicas: 0,
 					Conditions: []appsv1.DeploymentCondition{
 						{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionTrue},
 					},
@@ -426,7 +500,12 @@ var _ = Describe("workloadReconciler", func() {
 					},
 				},
 				Status: appsv1.DeploymentStatus{
-					ObservedGeneration: 1,
+					ObservedGeneration:  1,
+					Replicas:            1,
+					UpdatedReplicas:     1,
+					ReadyReplicas:       1,
+					AvailableReplicas:   1,
+					UnavailableReplicas: 0,
 					Conditions: []appsv1.DeploymentCondition{
 						{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionTrue},
 					},
@@ -607,6 +686,7 @@ var _ = Describe("workloadReconciler", func() {
 			deploy.Spec.Replicas = ptr.To(int32(1))
 
 			setupCreateOrUpdate(mockClient, deploy)
+			setupCrashingPods(mockUncached, "2")
 
 			result, err := reconciler.reconcile(ctx, resource)
 
@@ -620,6 +700,51 @@ var _ = Describe("workloadReconciler", func() {
 			convergedCond := findCondition(resource.Status.Conditions, string(v1alpha1.StackResourceConverged))
 			Expect(convergedCond).NotTo(BeNil())
 			Expect(convergedCond.Status).To(Equal(metav1.ConditionFalse), "not converged: old RS pods still present")
+			Expect(convergedCond.Message).To(ContainSubstring("rollout not converged"))
+			Expect(convergedCond.Message).To(ContainSubstring("unavailable"))
+
+			Expect(resource.Status.LastFailureDetails).To(HaveLen(1))
+			Expect(resource.Status.LastFailureDetails[0].ContainerName).To(Equal("test-resource"))
+			Expect(resource.Status.LastFailureDetails[0].LastTerminationReason).To(Equal("Error"))
+		})
+
+		It("should capture ImagePullBackOff failure details and include ProgressDeadlineExceeded in convergence message", func() {
+			deploy := deploymentWithConditions("2", []appsv1.DeploymentCondition{
+				{
+					Type:   appsv1.DeploymentAvailable,
+					Status: corev1.ConditionTrue,
+				},
+				{
+					Type:   appsv1.DeploymentProgressing,
+					Status: corev1.ConditionFalse,
+					Reason: "ProgressDeadlineExceeded",
+				},
+			})
+			deploy.Spec.Replicas = ptr.To(int32(1))
+			deploy.Status.Replicas = 2
+			deploy.Status.UpdatedReplicas = 1
+			deploy.Status.ReadyReplicas = 1
+			deploy.Status.AvailableReplicas = 1
+			deploy.Status.UnavailableReplicas = 1
+
+			setupCreateOrUpdate(mockClient, deploy)
+			setupImagePullBackOffPods(mockUncached, "2")
+
+			result, err := reconciler.reconcile(ctx, resource)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal(resultNil))
+
+			convergedCond := findCondition(resource.Status.Conditions, string(v1alpha1.StackResourceConverged))
+			Expect(convergedCond).NotTo(BeNil())
+			Expect(convergedCond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(convergedCond.Message).To(ContainSubstring("1/1 updated"))
+			Expect(convergedCond.Message).To(ContainSubstring("1 unavailable"))
+			Expect(convergedCond.Message).To(ContainSubstring("ProgressDeadlineExceeded"))
+
+			Expect(resource.Status.LastFailureDetails).To(HaveLen(1))
+			Expect(resource.Status.LastFailureDetails[0].ContainerName).To(Equal("test-resource"))
+			Expect(resource.Status.LastFailureDetails[0].LastTerminationReason).To(Equal("ImagePullBackOff"))
 		})
 	})
 
