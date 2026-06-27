@@ -39,6 +39,10 @@ var (
 	resultRequeueAfter = func(t time.Duration) subReconcilerResult {
 		return subReconcilerResult{resultRequeueAfter: &t}
 	}
+	resultContinue        = resultNil // alias: continue to next sub-reconciler
+	resultDeferredRequeue = func(t time.Duration) subReconcilerResult {
+		return subReconcilerResult{deferredRequeueAfter: &t}
+	}
 )
 
 type subReconciler interface {

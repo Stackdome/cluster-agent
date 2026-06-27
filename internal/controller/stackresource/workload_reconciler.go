@@ -179,27 +179,40 @@ func (r *workloadReconciler) reconcile(ctx context.Context, resource *v1alpha1.S
 // Deployment reconciliation
 // ---------------------------------------------------------------------------
 
-// reconcileDeployment creates or updates the Deployment for a StackResource,
-// then evaluates the rollout status to set conditions and decide whether to
-// continue to the next sub-reconciler (svc) or requeue.
-//
-// Status flow:
-//  1. Apply desired deployment spec via CreateOrUpdate
-//  2. Sync replica counts from the Deployment into StackResource status
-//  3. Evaluate Converged condition (all replicas updated, ready, available)
-//  4. Evaluate Available condition (rollout complete and serving traffic)
-//  5. If not available: capture crash details and decide requeue vs stop
 func (r *workloadReconciler) reconcileDeployment(ctx context.Context, resource *v1alpha1.StackResource) (subReconcilerResult, error) {
 	logger := controller.LoggerFromContext(ctx)
 
-	volumeMountInfo, err := r.getVolumeMountInfoMap(ctx, resource)
+	deployment, restartAnnotationApplied, err := r.applyDeployment(ctx, resource)
 	if err != nil {
 		return resultNil, err
+	}
+	if deployment == nil {
+		return resultStop, nil
+	}
+
+	if restartAnnotationApplied {
+		resource.Status.LastRestartRequestProcessedAt = ptr.To(v1.NewTime(time.Now().UTC()))
+		reportStackResourceNotReady(resource, "StackResourceDeploymentNotReady", "StackResource deployment restart requested")
+		return resultStop, nil
+	}
+
+	logger.Info("deployment reconciled")
+	return r.evaluateDeploymentStatus(ctx, resource, deployment), nil
+}
+
+// applyDeployment resolves inputs and creates or updates the Deployment for a
+// StackResource. Returns (nil, nil) when the spec is invalid (terminal failure
+// already reported on the resource).
+func (r *workloadReconciler) applyDeployment(ctx context.Context, resource *v1alpha1.StackResource) (
+	*appsv1.Deployment, bool, error) {
+	volumeMountInfo, err := r.getVolumeMountInfoMap(ctx, resource)
+	if err != nil {
+		return nil, false, err
 	}
 
 	image, err := r.getImageForResource(ctx, resource)
 	if err != nil {
-		return resultNil, err
+		return nil, false, err
 	}
 
 	envVars := buildEnvVars(resource)
@@ -213,10 +226,8 @@ func (r *workloadReconciler) reconcileDeployment(ctx context.Context, resource *
 	probes, err := buildProbes(resource)
 	if err != nil {
 		reportStackResourceFailed(resource, "InvalidSpec", err.Error())
-		return resultStop, nil
+		return nil, false, err
 	}
-
-	// --- Apply desired deployment spec ---
 
 	deployment := &appsv1.Deployment{
 		ObjectMeta: v1.ObjectMeta{
@@ -225,7 +236,7 @@ func (r *workloadReconciler) reconcileDeployment(ctx context.Context, resource *
 		},
 	}
 
-	op, err := controllerutil.CreateOrUpdate(ctx, r.Client, deployment, func() error {
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, deployment, func() error {
 		r.applyDeploymentSpec(deployment, resource, *image, replicas, envVars, probes, volumeMountInfo, needsRestart)
 		if err := r.setImagePullSecret(ctx, resource, deployment); err != nil {
 			return err
@@ -233,78 +244,72 @@ func (r *workloadReconciler) reconcileDeployment(ctx context.Context, resource *
 		return controllerutil.SetControllerReference(resource, deployment, r.Scheme)
 	})
 	if err != nil {
-		return resultNil, err
+		return nil, false, err
 	}
 
-	// A restart forces a pod template annotation change; mark not-ready so the
-	// next reconcile re-evaluates once the rollout begins.
-	if needsRestart {
-		resource.Status.LastRestartRequestProcessedAt = ptr.To(v1.NewTime(time.Now().UTC()))
-		reportStackResourceNotReady(resource, "StackResourceDeploymentNotReady", "StackResourceDeploymentNotReady")
-		return resultStop, nil
-	}
+	return deployment, needsRestart, nil
+}
 
-	logger.Info("deployment reconciled", "operation", op)
-
+// evaluateDeploymentStatus syncs replica counts, evaluates convergence and
+// availability conditions, captures failure details, and returns the
+// appropriate sub-reconciler result.
+func (r *workloadReconciler) evaluateDeploymentStatus(ctx context.Context, resource *v1alpha1.StackResource, deployment *appsv1.Deployment) subReconcilerResult {
 	// --- Sync replica counts ---
 	resource.Status.Replicas = deployment.Status.Replicas
 	resource.Status.AvailableReplicas = deployment.Status.AvailableReplicas
 	resource.Status.UpdatedReplicas = deployment.Status.UpdatedReplicas
 
-	// --- Evaluate convergence ---
-	//
-	// Converged = every replica is on the new spec, ready, and available.
-	// This is the condition the Stack controller uses to determine if a child
-	// StackResource is healthy. It's strictly stronger than Available: a
-	// scale-up in progress can be Available (serving traffic) but not Converged.
-	r.evaluateConvergence(resource, deployment)
+	converged := deploymentConverged(deployment)
+	serving := deploymentServing(deployment)
 
-	// --- Evaluate availability ---
-	//
-	// Serving = deployment controller has observed the current generation AND
-	// at least minAvailable pods are up (Available=True condition). This gates
-	// whether the svc reconciler runs next to create/update the Service and
-	// Ingress. Convergence (checked above) is the stricter signal used by the
-	// Stack controller for release gating.
-	if deploymentServing(deployment) {
-		setResourceCondition(
-			resource,
-			v1alpha1.StackResourceWorkloadAvailable,
-			true,
-			"DeploymentServing",
-			"deployment serving at minimum availability",
-		)
-		if deploymentConverged(deployment) {
+	// --- Convergence condition ---
+	if converged {
+		setResourceCondition(resource, v1alpha1.StackResourceConverged, true, "FullyConverged", "all replicas updated and available on the target revision")
+		r.stampLastConverged(resource)
+	} else {
+		setResourceCondition(resource, v1alpha1.StackResourceConverged, false, "NotConverged", convergenceMessage(deployment))
+	}
+
+	// --- Serving: deployment has minimum availability ---
+	if serving {
+		setResourceCondition(resource, v1alpha1.StackResourceWorkloadAvailable, true, "DeploymentServing", "deployment serving at minimum availability")
+		if converged {
 			resource.Status.LastFailureDetails = nil
 			resource.Status.LastFailureDeploymentRevision = ""
-			return resultNil, nil
+		} else {
+			r.captureFailureDetailsOnce(ctx, resource, deployment.Annotations[deploymentRevisionAnnotation])
+			if len(resource.Status.LastFailureDetails) == 0 && !controller.DeploymentRolloutSettled(deployment, deploymentGracePeriodAfterNewReplicaSetAvailable) {
+				return resultDeferredRequeue(10 * time.Second)
+			}
 		}
-		currentDeploymentRevision := deployment.Annotations[deploymentRevisionAnnotation]
-		r.captureFailureDetailsOnce(ctx, resource, currentDeploymentRevision)
-		if len(resource.Status.LastFailureDetails) == 0 && !controller.DeploymentRolloutSettled(deployment, deploymentGracePeriodAfterNewReplicaSetAvailable) {
-			d := 10 * time.Second
-			return subReconcilerResult{deferredRequeueAfter: &d}, nil
-		}
-		return resultNil, nil
+		return resultContinue
 	}
 
-	// --- Not serving: capture failures and decide requeue ---
-	logger.Info("deployment not serving")
+	// --- Not serving: capture failures, requeue until settled ---
+	controller.LoggerFromContext(ctx).Info("deployment not serving")
 	setResourceCondition(resource, v1alpha1.StackResourceWorkloadAvailable, false, "DeploymentNotAvailable", "deployment is not yet available")
-
-	currentDeploymentRevision := deployment.Annotations[deploymentRevisionAnnotation]
-	r.captureFailureDetailsOnce(ctx, resource, currentDeploymentRevision)
-
+	r.captureFailureDetailsOnce(ctx, resource, deployment.Annotations[deploymentRevisionAnnotation])
 	reportStackResourceNotReady(resource, "StackResourceDeploymentNotReady", "StackResourceDeploymentNotReady")
 
-	// Requeue every 10s until the rollout settles (NewReplicaSetAvailable + grace
-	// period, or ProgressDeadlineExceeded). This gives pods time to crash so the
-	// failure capture above has multiple chances to catch the failure state.
 	if !controller.DeploymentRolloutSettled(deployment, deploymentGracePeriodAfterNewReplicaSetAvailable) {
-		return resultRequeueAfter(10 * time.Second), nil
+		return resultRequeueAfter(10 * time.Second)
 	}
+	return resultStop
+}
 
-	return resultStop, nil
+// stampLastConverged records the convergence timestamp for the current revision,
+// write-once per revision.
+func (r *workloadReconciler) stampLastConverged(resource *v1alpha1.StackResource) {
+	rev, ok := resource.Annotations[v1alpha1.RevisionAnnotation]
+	if !ok {
+		return
+	}
+	if lc := resource.Status.LastConverged; lc == nil || lc.Revision != rev {
+		resource.Status.LastConverged = &v1alpha1.StackResourceConvergenceRecord{
+			Revision: rev,
+			At:       v1.Now(),
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -418,28 +423,6 @@ func convergenceMessage(deployment *appsv1.Deployment) string {
 		}
 	}
 	return msg
-}
-
-// evaluateConvergence sets the Converged condition and stamps LastConverged
-// when the deployment reaches full convergence on the current revision.
-func (r *workloadReconciler) evaluateConvergence(resource *v1alpha1.StackResource, deployment *appsv1.Deployment) {
-	if !deploymentConverged(deployment) {
-		setResourceCondition(resource, v1alpha1.StackResourceConverged, false, "NotConverged", convergenceMessage(deployment))
-		return
-	}
-	setResourceCondition(resource, v1alpha1.StackResourceConverged, true, "FullyConverged", "all replicas updated and available on the target revision")
-
-	// Write-once per revision: only stamp LastConverged when the revision changes.
-	rev, ok := resource.Annotations[v1alpha1.RevisionAnnotation]
-	if !ok {
-		return
-	}
-	if lc := resource.Status.LastConverged; lc == nil || lc.Revision != rev {
-		resource.Status.LastConverged = &v1alpha1.StackResourceConvergenceRecord{
-			Revision: rev,
-			At:       v1.Now(),
-		}
-	}
 }
 
 // captureFailureDetailsOnce records crash/error details from pods for the
