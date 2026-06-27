@@ -27,6 +27,10 @@ const (
 	// After a new ReplicaSet becomes available, wait this long before declaring the
 	// rollout settled. Gives pods time to crash so we can capture failure details.
 	deploymentGracePeriodAfterNewReplicaSetAvailable = 3 * time.Minute
+	// Pods must stay Ready for this many seconds before the deployment controller
+	// counts them as available. Prevents the old ReplicaSet from being scaled down
+	// when a new pod starts but crashes shortly after.
+	deploymentMinReadySeconds = 10
 )
 
 type DependencyChecker interface {
@@ -337,6 +341,7 @@ func (r *workloadReconciler) applyDeploymentSpec(
 		MaxSurge:       ptr.To(intstr.FromString("25%")),
 	}
 	deployment.Spec.ProgressDeadlineSeconds = ptr.To(int32(300))
+	deployment.Spec.MinReadySeconds = deploymentMinReadySeconds
 
 	deployment.Spec.Template.ObjectMeta.Labels = mergeLabels(GetDeploymentLabelForResource(resource), identityLabels(resource))
 
