@@ -38,9 +38,10 @@ const (
 type BuildPhase string
 
 const (
-	BuildPhaseSuccess BuildPhase = "Success"
-	BuildPhaseFailed  BuildPhase = "Failed"
-	BuildPhasePending BuildPhase = "Pending"
+	BuildPhaseSuccess   BuildPhase = "Success"
+	BuildPhaseFailed    BuildPhase = "Failed"
+	BuildPhasePending   BuildPhase = "Pending"
+	BuildPhaseCancelled BuildPhase = "Cancelled"
 )
 
 type BuildStatusCondition string
@@ -49,6 +50,7 @@ const (
 	BuildAvailable  BuildStatusCondition = "Available"
 	BuildFailed     BuildStatusCondition = "Failed"
 	BuildJobCreated BuildStatusCondition = "BuildJobCreated"
+	BuildCancelled  BuildStatusCondition = "Cancelled"
 )
 
 // ImageBuildSpec defines the desired state of a Build
@@ -73,6 +75,12 @@ type ImageBuildSpec struct {
 	// Build arguments passed to the Docker build as --build-arg flags.
 	// +optional
 	BuildArgs []corev1alpha1.BuildArg `json:"buildArgs,omitempty"`
+	// When set to true, the build is cancelled and its build job will be deleted.
+	// This field is immutable once set to true.
+	// +optional
+	// +kubebuilder:default=false
+	// +kubebuilder:validation:XValidation:rule="!oldSelf || self",message="cancelled is immutable once set to true"
+	Cancelled bool `json:"cancelled,omitempty"`
 }
 
 // RegistryAuth contains the registry authentication details

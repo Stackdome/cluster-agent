@@ -231,6 +231,15 @@ spec:
                 required:
                 - contextSource
                 type: object
+              cancelled:
+                default: false
+                description: |-
+                  When set to true, the build is cancelled and its build job will be deleted.
+                  This field is immutable once set to true.
+                type: boolean
+                x-kubernetes-validations:
+                - message: cancelled is immutable once set to true
+                  rule: '!oldSelf || self'
               insecureRegistry:
                 description: Is registry insecure
                 type: boolean
