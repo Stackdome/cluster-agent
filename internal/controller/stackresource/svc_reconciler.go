@@ -59,7 +59,7 @@ func (r *svcReconciler) reconcile(ctx context.Context, resource *v1alpha1.StackR
 		return r.serviceNotReady(ctx, resource, "Ingress for stack resource not created")
 	}
 
-	resource.Status.ExternalAddress = buildExternalAddresses(portFqdnMap)
+	resource.Status.ExternalAddress = buildExternalAddresses(resource, portFqdnMap)
 	if resource.Spec.HasExposedPort() {
 		setResourceCondition(resource, v1alpha1.StackResourceIngressReady, true, "IngressConfigured", "ingress routes configured for public ports")
 	}
@@ -76,12 +76,22 @@ func (r *svcReconciler) serviceNotReady(ctx context.Context, resource *v1alpha1.
 	return resultRequeue, nil
 }
 
-func buildExternalAddresses(portFqdnMap map[int]string) []v1alpha1.ExternalAddress {
+func buildExternalAddresses(resource *v1alpha1.StackResource, portFqdnMap map[int]string) []v1alpha1.ExternalAddress {
+	tlsPorts := make(map[int32]bool, len(resource.Spec.Ports))
+	for _, p := range resource.Spec.Ports {
+		if p.TLS {
+			tlsPorts[p.Number] = true
+		}
+	}
 	addresses := make([]v1alpha1.ExternalAddress, 0, len(portFqdnMap))
 	for port, fqdn := range portFqdnMap {
+		scheme := "http://"
+		if tlsPorts[int32(port)] {
+			scheme = "https://"
+		}
 		addresses = append(addresses, v1alpha1.ExternalAddress{
 			TargetPort: int32(port),
-			Address:    fqdn,
+			Address:    scheme + fqdn,
 		})
 	}
 	return addresses
