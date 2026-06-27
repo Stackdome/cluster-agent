@@ -17,6 +17,7 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"hash/fnv"
 	"regexp"
@@ -193,19 +194,20 @@ const (
 
 func BuildJobName(resourceName string, sourceRevision string) string {
 	cleanName := SanitizeDNSLabel(resourceName, "app")
-	cleanRev := SanitizeDNSLabel(sourceRevision, "rev")
 
-	if len(cleanRev) > shortRevisionLen {
-		cleanRev = cleanRev[:shortRevisionLen]
-		cleanRev = strings.TrimSuffix(cleanRev, "-")
-	}
 	if len(cleanName) > maxResourceNameInJob {
 		cleanName = cleanName[:maxResourceNameInJob]
 		cleanName = strings.TrimSuffix(cleanName, "-")
 	}
-	if cleanRev == "" {
+
+	var cleanRev string
+	if sourceRevision == "" {
 		cleanRev = "rev"
+	} else {
+		hash := sha256.Sum256([]byte(sourceRevision))
+		cleanRev = fmt.Sprintf("%x", hash)[:shortRevisionLen]
 	}
+
 	return fmt.Sprintf("%s-%s%s", cleanName, cleanRev, buildJobSuffix)
 }
 
