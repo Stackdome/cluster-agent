@@ -29,38 +29,30 @@ spec:
         args:
         - "--repo={{ .RepoUrl }}"
         - "--root=/data"
-        - "--dest={{ .DestDir }}"
+        - "--link={{ .DestDir }}"
         - "--one-time"
-        {{- if .Branch }}
-        - "--branch={{ .Branch }}"
-        {{- end }}
-        {{- if .Tag }}
-        - "--rev=refs/tags/{{ .Tag }}"
-        {{- end }}
-        {{- if .Commit }}
-        - "--rev={{ .Commit }}"
-        {{- end }}
+        - "--ref={{ .Commit }}"
         volumeMounts:
         - name: target-volume
           mountPath: /data
         {{- if .HasAuth }}
         env:
         {{- if .UsernamePasswordAuth }}
-        - name: GIT_SYNC_USERNAME
+        - name: GITSYNC_USERNAME
           valueFrom:
             secretKeyRef:
               name: {{ .SecretName }}
               key: {{ .UsernameKey }}
-        - name: GIT_SYNC_PASSWORD
+        - name: GITSYNC_PASSWORD
           valueFrom:
             secretKeyRef:
               name: {{ .SecretName }}
               key: {{ .PasswordKey }}
         {{- end }}
         {{- if .PersonalAccessTokenAuth }}
-        - name: GIT_SYNC_USERNAME
+        - name: GITSYNC_USERNAME
           value: "git"
-        - name: GIT_SYNC_PASSWORD
+        - name: GITSYNC_PASSWORD
           valueFrom:
             secretKeyRef:
               name: {{ .SecretName }}
@@ -80,8 +72,6 @@ type GitSyncParams struct {
 	Namespace               string
 	PvcName                 string
 	RepoUrl                 string
-	Branch                  string
-	Tag                     string
 	Commit                  string
 	HasAuth                 bool
 	UsernamePasswordAuth    bool
@@ -154,16 +144,10 @@ func BuildGitSyncParams(volume *v1alpha1.Volume, destinationDir string) (GitSync
 		DestDir:   destinationDir,
 	}
 
-	// Set the reference type (branch, tag, or commit)
-	if gitSource.Revision.Branch != "" {
-		params.Branch = gitSource.Revision.Branch
-	} else if gitSource.Revision.Tag != "" {
-		params.Tag = gitSource.Revision.Tag
-	} else if gitSource.Revision.Commit != "" {
-		params.Commit = gitSource.Revision.Commit
-	} else {
-		return params, fmt.Errorf("git repository source must specify either branch, tag, or commit")
+	if gitSource.Revision.Commit == "" {
+		return params, fmt.Errorf("git repository source must specify a commit")
 	}
+	params.Commit = gitSource.Revision.Commit
 
 	// Configure authentication if provided
 	if gitSource.Auth != nil {
