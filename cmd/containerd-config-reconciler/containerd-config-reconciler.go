@@ -262,7 +262,7 @@ func (c *ContainerdConfigReconciler) updateContainerdConfig(registries []Registr
 	}
 
 	// Update hosts config
-	if err := c.reconcileHostsConfig(hostsConfigDir, registries); err != nil {
+	if _, err := c.reconcileHostsConfig(hostsConfigDir, registries); err != nil {
 		return false, err
 	}
 
@@ -300,7 +300,7 @@ func (c *ContainerdConfigReconciler) createBootstrapConfig(registries []Registry
 		},
 	}
 
-	if err := c.reconcileHostsConfig(hostConfigDir, registries); err != nil {
+	if _, err := c.reconcileHostsConfig(hostConfigDir, registries); err != nil {
 		return false, err
 	}
 
@@ -345,27 +345,32 @@ func (c *ContainerdConfigReconciler) ensureMapExists(parent map[string]interface
 }
 
 // updateHostsConfig updates the containerd hosts configuration
-func (c *ContainerdConfigReconciler) reconcileHostsConfig(hostsConfigDir string, registries []Registry) error {
+func (c *ContainerdConfigReconciler) reconcileHostsConfig(hostsConfigDir string, registries []Registry) (bool, error) {
+	changed := false
 	for _, registry := range registries {
 		u, err := url.Parse(registry.Endpoint)
 		if err != nil {
-			return err
+			return false, err
 		}
 		currentHostDir := filepath.Join(hostsConfigDir, u.Hostname())
 		if err := os.MkdirAll(currentHostDir, 0755); err != nil {
-			return fmt.Errorf("failed to create hosts config directory: %w", err)
+			return false, fmt.Errorf("failed to create hosts config directory: %w", err)
 		}
 		currentHostsFilePath := filepath.Join(currentHostDir, "hosts.toml")
 
-		if err := c.ensureHostsConfig(currentHostsFilePath, registry); err != nil {
-			return err
+		wrote, err := c.ensureHostsConfig(currentHostsFilePath, registry)
+		if err != nil {
+			return false, err
+		}
+		if wrote {
+			changed = true
 		}
 	}
-	return nil
+	return changed, nil
 }
 
 // createHostsConfig creates a new hosts config file
-func (c *ContainerdConfigReconciler) ensureHostsConfig(path string, registry Registry) error {
+func (c *ContainerdConfigReconciler) ensureHostsConfig(path string, registry Registry) (bool, error) {
 	hostsConfig := make(map[string]interface{})
 
 	hostsConfig[fmt.Sprintf("http://%s", registry.ServiceIp)] = map[string]interface{}{
@@ -380,15 +385,15 @@ func (c *ContainerdConfigReconciler) ensureHostsConfig(path string, registry Reg
 
 	var buf strings.Builder
 	if err := toml.NewEncoder(&buf).Encode(config); err != nil {
-		return fmt.Errorf("failed to encode hosts config: %w", err)
+		return false, fmt.Errorf("failed to encode hosts config: %w", err)
 	}
 	desired := buf.String()
 
 	if existing, err := os.ReadFile(path); err == nil && string(existing) == desired {
-		return nil
+		return false, nil
 	}
 
-	return c.writeConfigTOML(path, config)
+	return true, c.writeConfigTOML(path, config)
 }
 
 // writeConfigTOML writes config to TOML file atomically
@@ -454,7 +459,16 @@ func (c *ContainerdConfigReconciler) reloadContainerd() error {
 
 func (c *ContainerdConfigReconciler) reconcileK3sRegistries(registries []Registry) error {
 	hostsTomlDir := filepath.Join(*k3sHostsDir, "containerd", "certs.d")
-	return c.reconcileHostsConfig(hostsTomlDir, registries)
+	changed, err := c.reconcileHostsConfig(hostsTomlDir, registries)
+	if err != nil {
+		return err
+	}
+	if changed {
+		c.Logger.Println("updated k3s registry hosts config")
+	} else {
+		c.Logger.Println("k3s registry hosts config already in expected state")
+	}
+	return nil
 }
 
 func main() {
