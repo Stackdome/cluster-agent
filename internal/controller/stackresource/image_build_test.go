@@ -34,11 +34,12 @@ func newBuildTestResource(sourceRevision string) *v1alpha1.StackResource {
 				DockerFilePath: "Dockerfile",
 				SourceRevision: v1alpha1.SourceRevisionSpec{
 					Volume: &v1alpha1.VolumeRevision{
-						CurrentVolumeHash: sourceRevision,
+						RevisionString: sourceRevision,
 					},
 				},
-				Registry: v1alpha1.RegistrySpec{
-					RepositoryURL: "registry.local/test",
+				Repository: v1alpha1.ImageRepositorySpec{
+					External:   &v1alpha1.ExternalRegistrySpec{Host: "registry.local"},
+					Repository: "test",
 				},
 			},
 		},

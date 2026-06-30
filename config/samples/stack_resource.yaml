@@ -13,9 +13,12 @@ spec:
       gitRepo:
         branch:
           name: main
-    registry:
-      repositoryUrl: cluster-registry.stackdome-registry.svc.cluster.local/ashish/todo-app
-      insecure: true
+    repository:
+      external:
+        host: cluster-registry.stackdome-registry.svc.cluster.local
+        tls:
+          insecure: true
+      repository: ashish/todo-app
   ports:
   - number: 3000
     exposeToPublic: true

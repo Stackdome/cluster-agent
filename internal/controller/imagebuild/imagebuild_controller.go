@@ -3,6 +3,7 @@ package imagebuild
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"golang.org/x/sync/errgroup"
 	batchv1 "k8s.io/api/batch/v1"
@@ -23,6 +24,7 @@ import (
 
 	"stackdome.io/cluster-agent/internal/controller"
 	"stackdome.io/cluster-agent/pkg/imagebuilder"
+	"stackdome.io/cluster-agent/pkg/registry"
 )
 
 // ImageBuildReconciler reconciles a ImageBuild object
@@ -155,14 +157,18 @@ func (r *ImageBuildReconciler) reconcileImageBuildWithVolumeSource(ctx context.C
 		},
 	}
 
+	resolved, err := r.resolveDestination(ctx, buildConfig)
+	if err != nil {
+		reportImageBuildStatus(buildConfig, buildsv1alpha1.BuildAvailable, metav1.ConditionFalse, "RepositoryResolveFailed")
+		return ctrl.Result{}, err
+	}
+
 	imageBuilderParams := imagebuilder.
 		NewBuildParamsBuilder().
 		WithJobName(jobName).
 		WithNamespace(buildConfig.Namespace).
-		WithRegistryURL(buildConfig.Spec.RegistryURL).
-		WithImageName(buildConfig.Spec.ResourceName).
-		WithTag(sourceRevision).
-		WithInsecureRegistry(buildConfig.Spec.InsecureRegistry).
+		WithDestination(resolved.Reference()).
+		WithInsecureRegistry(resolved.Insecure).
 		WithDockerfilePath(buildConfig.Spec.BuildContext.DockerfilePath).
 		WithContextPath(buildConfig.Spec.BuildContext.ContextPath).
 		WithSource(buildSource).
@@ -186,6 +192,13 @@ func (r *ImageBuildReconciler) reconcileImageBuildWithGitSource(ctx context.Cont
 	if buildConfig.Spec.BuildContext.ContextSource.Git == nil {
 		return ctrl.Result{}, fmt.Errorf("no git source specified for image build")
 	}
+
+	if err := validateGitRevision(buildConfig.Spec.SourceRevision.GitRepo); err != nil {
+		reportImageBuildStatus(buildConfig, buildsv1alpha1.BuildFailed, metav1.ConditionTrue, "SourceRevisionInvalid")
+		buildConfig.Status.Phase = buildsv1alpha1.BuildPhaseFailed
+		return ctrl.Result{}, nil
+	}
+
 	logger := controller.LoggerFromContext(ctx)
 	logger.Info("reconciling image build with git source")
 
@@ -208,14 +221,18 @@ func (r *ImageBuildReconciler) reconcileImageBuildWithGitSource(ctx context.Cont
 		},
 	}
 
+	resolved, err := r.resolveDestination(ctx, buildConfig)
+	if err != nil {
+		reportImageBuildStatus(buildConfig, buildsv1alpha1.BuildAvailable, metav1.ConditionFalse, "RepositoryResolveFailed")
+		return ctrl.Result{}, err
+	}
+
 	imageBuilderParams := imagebuilder.
 		NewBuildParamsBuilder().
 		WithJobName(jobName).
 		WithNamespace(buildConfig.Namespace).
-		WithRegistryURL(buildConfig.Spec.RegistryURL).
-		WithImageName(buildConfig.Spec.ResourceName).
-		WithTag(sourceRevision).
-		WithInsecureRegistry(buildConfig.Spec.InsecureRegistry).
+		WithDestination(resolved.Reference()).
+		WithInsecureRegistry(resolved.Insecure).
 		WithDockerfilePath(buildConfig.Spec.BuildContext.DockerfilePath).
 		WithContextPath(buildConfig.Spec.BuildContext.ContextPath).
 		WithSource(buildSource).
@@ -292,21 +309,39 @@ func (r *ImageBuildReconciler) reconcileBuildJob(ctx context.Context, buildConfi
 	return ctrl.Result{}, nil
 }
 
+func (r *ImageBuildReconciler) resolveDestination(ctx context.Context, bc *buildsv1alpha1.ImageBuild) (registry.ResolvedRepository, error) {
+	return registry.ResolveImageRepository(ctx, r.Client, bc.Namespace,
+		bc.Spec.Repository, bc.Spec.SourceRevision.GetSourceRevisionString())
+}
+
 func (r *ImageBuildReconciler) getRegistryAuthSecrets(ctx context.Context, buildConfig *buildsv1alpha1.ImageBuild) (*v1.Secret, string, error) {
-	if buildConfig.Spec.Auth == nil {
+	if buildConfig.Spec.Repository.Auth == nil {
 		return nil, "", nil
 	}
 
-	auth := buildConfig.Spec.Auth
-	switch auth.Type {
-	case stackv1alpha1.RegistryAuthTypeDockerHub, stackv1alpha1.RegistryAuthTypeInClusterZotRegistry:
-		dockerConfigSecret, err := r.getDockerConfigSecret(ctx, auth.DockerConfigAuthSecret)
+	auth := buildConfig.Spec.Repository.Auth
+	switch {
+	case auth.DockerConfig != nil:
+		secret, err := r.getDockerConfigSecret(ctx, auth.DockerConfig)
 		if err != nil {
 			return nil, "", err
 		}
-		return dockerConfigSecret, auth.DockerConfigAuthSecret.SecretKey, nil
+		return secret, auth.DockerConfig.SecretKey, nil
+	case auth.Basic != nil:
+		secretName := stackv1alpha1.SynthesizedDockerConfigSecretName(buildConfig.Spec.ResourceName)
+		secret := &v1.Secret{}
+		if err := r.Client.Get(ctx, types.NamespacedName{
+			Name:      secretName,
+			Namespace: buildConfig.Namespace,
+		}, secret); err != nil {
+			if apierrors.IsNotFound(err) {
+				return nil, "", fmt.Errorf("synthesized docker config secret %q not found", secretName)
+			}
+			return nil, "", err
+		}
+		return secret, v1.DockerConfigJsonKey, nil
 	default:
-		return nil, "", fmt.Errorf("unsupported registry auth type: %s", auth.Type)
+		return nil, "", nil
 	}
 }
 
@@ -450,6 +485,21 @@ func setBuildJobAnnotations(job *batchv1.Job, resourceName, sourceRevision, dock
 	job.Annotations[buildsv1alpha1.AnnotationResourceName] = resourceName
 	job.Annotations[buildsv1alpha1.AnnotationSourceRevision] = sourceRevision
 	job.Annotations[buildsv1alpha1.AnnotationDockerfilePath] = dockerfilePath
+}
+
+func validateGitRevision(rev *stackv1alpha1.GitRepoRevision) error {
+	if rev == nil {
+		return fmt.Errorf("git source revision is required")
+	}
+	commit := strings.TrimSpace(strings.ToLower(rev.Commit))
+	if commit == "" || commit == "head" {
+		return fmt.Errorf("git source revision must include a concrete commit SHA, got %q", rev.Commit)
+	}
+	hasFetchRef := rev.Branch != "" || rev.Tag != ""
+	if !hasFetchRef {
+		return fmt.Errorf("git source revision must include a branch or tag as a fetchable ref")
+	}
+	return nil
 }
 
 // SetupWithManager sets up the controller with the Manager.

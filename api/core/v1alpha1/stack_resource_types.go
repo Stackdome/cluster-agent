@@ -3,7 +3,6 @@ package v1alpha1
 import (
 	"fmt"
 	"hash/fnv"
-	"net/url"
 	"strings"
 
 	"github.com/davecgh/go-spew/spew"
@@ -237,9 +236,9 @@ type StackResourceBuildSpec struct {
 	// Current source revision for the build context.
 	// +required
 	SourceRevision SourceRevisionSpec `json:"sourceRevision"`
-	// Registry specification for pushing the built image.
+	// Repository is the structured push target.
 	// +required
-	Registry RegistrySpec `json:"registry"`
+	Repository ImageRepositorySpec `json:"repository"`
 	// Build arguments passed to the Docker build as --build-arg flags.
 	// +optional
 	BuildArgs []BuildArg `json:"buildArgs,omitempty"`
@@ -247,10 +246,9 @@ type StackResourceBuildSpec struct {
 
 // Current source revision for the build context.
 // Can be :
-// - git commit hash
+// - volumeRevisionString of the source directory
 // - git branch name + sha of the branch head
-// - git tag name
-// - sha of the source directory (if using a synced volume)
+// - git tag name + sha of the tag
 type SourceRevisionSpec struct {
 	// +optional
 	Volume *VolumeRevision `json:"volume,omitempty"`
@@ -261,7 +259,7 @@ type SourceRevisionSpec struct {
 func (s *SourceRevisionSpec) GetSourceRevisionString() string {
 	switch {
 	case s.Volume != nil:
-		return s.Volume.CurrentVolumeHash
+		return s.Volume.RevisionString
 	case s.GitRepo != nil:
 		return s.GitRepo.GetGitRevisionString()
 	}
@@ -269,35 +267,33 @@ func (s *SourceRevisionSpec) GetSourceRevisionString() string {
 }
 
 type VolumeRevision struct {
-	// Hash of the contents of the volume.
+	// VolumeRevisionString is the string representation of the volume revision.
+	// Can be:
+	// - sha of the source directory (if using a synced volume)
+	// - git branch name + sha of the branch head
+	// - git tag name + sha of the tag
 	// +required
-	CurrentVolumeHash string `json:"currentVolumeHash"`
+	RevisionString string `json:"revisionString"`
 }
 
-// Can be one of the following:
-// - git commit hash
-// - git branch name
-// - git tag name
+// GitRepoRevision identifies a point-in-time in a git repository.
+// Commit is the authoritative immutable identity (a full or abbreviated SHA).
+// Branch or Tag is the fetchable ref used to clone; at least one must be set.
+// +kubebuilder:validation:XValidation:rule="has(self.branch) || has(self.tag)",message="at least one of branch or tag must be set as a fetchable ref"
 type GitRepoRevision struct {
 	// +optional
-	Branch *GitBranch `json:"branch"`
+	Branch string `json:"branch,omitempty"`
 	// +optional
-	Tag string `json:"tag"`
-	// +optional
+	Tag string `json:"tag,omitempty"`
+	// +required
+	// +kubebuilder:validation:MinLength=7
+	// +kubebuilder:validation:MaxLength=40
+	// +kubebuilder:validation:Pattern=`^[0-9a-f]+$`
 	Commit string `json:"commit"`
 }
 
 func (s *GitRepoRevision) GetGitRevisionString() string {
-	if s.Commit != "" {
-		return s.Commit
-	}
-	if s.Tag != "" {
-		return s.Tag
-	}
-	if s.Branch != nil {
-		return fmt.Sprintf("%s-%s", strings.ToLower(s.Branch.Name), strings.ToLower(s.Branch.HeadSha))
-	}
-	return ""
+	return s.Commit
 }
 
 type BuildContextSource struct {
@@ -319,33 +315,9 @@ type GitRepoSource struct {
 	Auth *GitAuth `json:"auth"`
 }
 
-type GitBranch struct {
-	// Name of the branch
-	// +required
-	Name string `json:"name"`
-	// Current commit hash of the branch head.
-	// default is head
-	// +kubebuilder:default=HEAD
-	// +required
-	HeadSha string `json:"HeadSha"`
-}
-
 type GitAuth struct {
 	UsernamePasswordAuthRef *CredentialSecretKeyPair `json:"usernamePasswordAuthRef,omitempty"`
 	PersonalAccessTokenRef  *CredentialSecretKeyPair `json:"personalAccessTokenRef,omitempty"`
-}
-
-type RegistrySpec struct {
-	// Repository URL for constructing the image tag (e.g., docker.io/myorg)
-	// +required
-	// +kubebuilder:validation:MinLength=3
-	RepositoryURL string `json:"repositoryUrl"`
-	// Is the registry insecure
-	// +optional
-	// +kubebuilder:default=false
-	Insecure bool `json:"insecure"`
-	// +optional
-	Auth *RegistryAuth `json:"auth"`
 }
 
 type RegistryAuth struct {
@@ -379,6 +351,72 @@ func (r *RegistryAuth) GetAuthURL(registryHost string) string {
 		}
 		return fmt.Sprintf("http://%s", registryHost)
 	}
+}
+
+// ImageRepositorySpec describes where a built image is pushed.
+// Exactly one registry source must be set: clusterRegistryRef or external.
+// +kubebuilder:validation:XValidation:rule="has(self.clusterRegistryRef) != has(self.external)",message="exactly one of clusterRegistryRef or external must be set"
+type ImageRepositorySpec struct {
+	// Cluster registry is cluster scoped.
+	// +optional
+	ClusterRegistryRef *corev1.LocalObjectReference `json:"clusterRegistryRef,omitempty"`
+	// +optional
+	External *ExternalRegistrySpec `json:"external,omitempty"`
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:Pattern=`^[a-z0-9][a-z0-9._/-]*[a-z0-9]$|^[a-z0-9]$`
+	Repository string `json:"repository"`
+	// +optional
+	TagPolicy *ImageTagPolicy `json:"tagPolicy,omitempty"`
+	// +optional
+	Auth *RegistryCredentialsSpec `json:"auth,omitempty"`
+}
+
+type ExternalRegistrySpec struct {
+	// +required
+	Host string `json:"host"`
+	// +optional
+	TLS *RegistryTLSSpec `json:"tls,omitempty"`
+}
+
+type RegistryTLSSpec struct {
+	// +optional
+	// +kubebuilder:default=false
+	Insecure bool `json:"insecure,omitempty"`
+}
+
+type ImageTagPolicy struct {
+	// +optional
+	SourceRevision *SourceRevisionTagPolicy `json:"sourceRevision,omitempty"`
+	// +optional
+	Fixed *FixedTagPolicy `json:"fixed,omitempty"`
+}
+
+type SourceRevisionTagPolicy struct {
+	// +optional
+	// +kubebuilder:default=true
+	Sanitize bool `json:"sanitize,omitempty"`
+}
+
+type FixedTagPolicy struct {
+	// +required
+	Tag string `json:"tag"`
+}
+
+type RegistryCredentialsSpec struct {
+	// +optional
+	DockerConfig *DockerConfigAuth `json:"dockerConfig,omitempty"`
+	// +optional
+	Basic *BasicAuthCredentials `json:"basic,omitempty"`
+}
+
+type BasicAuthCredentials struct {
+	// +required
+	SecretRef corev1.SecretReference `json:"secretRef"`
+	// +required
+	UsernameKey string `json:"usernameKey"`
+	// +required
+	PasswordKey string `json:"passwordKey"`
 }
 
 type ImageSpec struct {
@@ -460,38 +498,22 @@ func (w *StackResource) NeedsPullSecret() bool {
 	if w.Spec.ImageSpec != nil && w.Spec.ImageSpec.PullAuth != nil {
 		return true
 	}
-	if w.Spec.BuildSpec != nil && w.Spec.BuildSpec.Registry.Auth != nil {
+	if w.Spec.BuildSpec != nil && w.Spec.BuildSpec.Repository.Auth != nil {
 		return true
 	}
 	return false
 }
 
-func (w *StackResource) InitContainerName() string {
-	return fmt.Sprintf("%s-init", w.Name)
+func (w *StackResource) SynthesizedDockerConfigSecretName() string {
+	return SynthesizedDockerConfigSecretName(w.Name)
 }
 
-func (w *StackResource) RegistryAuthUrl() (string, error) {
-	var registryHost string
-	var err error
-	if w.Spec.ImageSpec != nil {
-		registryHost, err = getHostFromURL(w.Spec.ImageSpec.Image)
-		if err != nil {
-			return "", err
-		}
-	} else {
-		registryHost, err = getHostFromURL(w.Spec.BuildSpec.Registry.RepositoryURL)
-		if err != nil {
-			return "", err
-		}
-	}
+func SynthesizedDockerConfigSecretName(resourceName string) string {
+	return resourceName + "-dockercfg"
+}
 
-	if w.Spec.ImageSpec != nil && w.Spec.ImageSpec.PullAuth != nil {
-		return w.Spec.ImageSpec.PullAuth.GetAuthURL(registryHost), nil
-	}
-	if w.Spec.BuildSpec != nil && w.Spec.BuildSpec.Registry.Auth != nil {
-		return w.Spec.BuildSpec.Registry.Auth.GetAuthURL(registryHost), nil
-	}
-	return "", fmt.Errorf("missing registry auth url")
+func (w *StackResource) InitContainerName() string {
+	return fmt.Sprintf("%s-init", w.Name)
 }
 
 func (w *StackResource) HasBuildSpec() bool {
@@ -500,30 +522,6 @@ func (w *StackResource) HasBuildSpec() bool {
 
 func (w *StackResource) HasImageSpec() bool {
 	return w.Spec.ImageSpec != nil
-}
-
-func (w *StackResource) RegistryAuthType() RegistryAuthType {
-	if w.Spec.ImageSpec != nil && w.Spec.ImageSpec.PullAuth != nil {
-		return w.Spec.ImageSpec.PullAuth.Type
-	}
-	if w.Spec.BuildSpec != nil && w.Spec.BuildSpec.Registry.Auth != nil {
-		return w.Spec.BuildSpec.Registry.Auth.Type
-	}
-	return ""
-}
-
-func getHostFromURL(urlString string) (string, error) {
-	// Handle URLs that might not have a scheme
-	if !strings.HasPrefix(urlString, "http://") && !strings.HasPrefix(urlString, "https://") {
-		urlString = "http://" + urlString
-	}
-
-	parsedURL, err := url.Parse(urlString)
-	if err != nil {
-		return "", err
-	}
-
-	return parsedURL.Host, nil
 }
 
 func (w *StackResource) StatusHash() string {

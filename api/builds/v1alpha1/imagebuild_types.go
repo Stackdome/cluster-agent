@@ -63,15 +63,9 @@ type ImageBuildSpec struct {
 	// Build context.
 	// +required
 	BuildContext BuildContextSpec `json:"buildContext"`
-	// Registry details for pushing the built image
+	// Repository is the structured push target.
 	// +required
-	RegistryURL string `json:"registryUrl"`
-	// Is registry insecure
-	// +required
-	InsecureRegistry bool `json:"insecureRegistry"`
-	// This is populated by the WorkspaceResource controller before creating the build job.
-	// +optional
-	Auth *RegistryAuth `json:"auth,omitempty"`
+	Repository corev1alpha1.ImageRepositorySpec `json:"repository"`
 	// Build arguments passed to the Docker build as --build-arg flags.
 	// +optional
 	BuildArgs []corev1alpha1.BuildArg `json:"buildArgs,omitempty"`
@@ -81,17 +75,6 @@ type ImageBuildSpec struct {
 	// +kubebuilder:default=false
 	// +kubebuilder:validation:XValidation:rule="!oldSelf || self",message="cancelled is immutable once set to true"
 	Cancelled bool `json:"cancelled,omitempty"`
-}
-
-// RegistryAuth contains the registry authentication details
-type RegistryAuth struct {
-	// Type of the registry authentication
-	// +kubebuilder:validation:Enum=DockerHub;InClusterZotRegistry
-	// +required
-	Type corev1alpha1.RegistryAuthType `json:"type"`
-	// DockerConfigAuth contains the Docker config authentication details
-	// +optional
-	DockerConfigAuthSecret *corev1alpha1.DockerConfigAuth `json:"dockerConfigAuthSecret,omitempty"`
 }
 
 type BuildContextSpec struct {

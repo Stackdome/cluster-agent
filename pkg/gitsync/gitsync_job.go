@@ -155,8 +155,8 @@ func BuildGitSyncParams(volume *v1alpha1.Volume, destinationDir string) (GitSync
 	}
 
 	// Set the reference type (branch, tag, or commit)
-	if gitSource.Revision.Branch != nil {
-		params.Branch = gitSource.Revision.Branch.Name
+	if gitSource.Revision.Branch != "" {
+		params.Branch = gitSource.Revision.Branch
 	} else if gitSource.Revision.Tag != "" {
 		params.Tag = gitSource.Revision.Tag
 	} else if gitSource.Revision.Commit != "" {

@@ -82,16 +82,19 @@ spec:
           buildContext: "/backend"
           dockerFilePath: "/backend/Dockerfile.dev"
           buildSourceHash: "aeff1eeb0c3f2a4d1e5c7f8a9b6rrd2c"
-          registry:
-            repositoryUrl: "cluster-registry.stackdome-registry.svc.cluster.local/infisical-backend"
+          repository:
+            external:
+              host: cluster-registry.stackdome-registry.svc.cluster.local
+              tls:
+                insecure: true
+            repository: infisical-backend
             auth:
-              type: "InClusterZotRegistry"
-              dockerConfigAuth:
-                credentialsRef:
-                  secretName: registry-creds
-                  secretNamespace: stackdome-registry
-                  usernameKey: username
-                  passwordKey: password
+              basic:
+                secretRef:
+                  name: registry-creds
+                  namespace: stackdome-registry
+                usernameKey: username
+                passwordKey: password
         command: ["/bin/sh", "-c"]
         args:
           - "npm run migration:latest && npm run dev:docker"
@@ -124,16 +127,19 @@ spec:
           buildContext: "/frontend"
           dockerFilePath: "/frontend/Dockerfile.dev"
           buildSourceHash: "aeff1eeb0c3f2a4d1e5c7f8a9b6rrd2c"
-          registry:
-            repositoryUrl: "cluster-registry.stackdome-registry.svc.cluster.local/infisical-frontend"
+          repository:
+            external:
+              host: cluster-registry.stackdome-registry.svc.cluster.local
+              tls:
+                insecure: true
+            repository: infisical-frontend
             auth:
-              type: "InClusterZotRegistry"
-              dockerConfigAuth:
-                credentialsRef:
-                  secretName: registry-creds
-                  secretNamespace: stackdome-registry
-                  usernameKey: username
-                  passwordKey: password
+              basic:
+                secretRef:
+                  name: registry-creds
+                  namespace: stackdome-registry
+                usernameKey: username
+                passwordKey: password
         dependsOn:
           - backend
           - redis

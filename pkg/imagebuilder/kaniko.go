@@ -32,14 +32,12 @@ spec:
         {{- if .IsGitSource }}
         - "--dockerfile={{ .DockerfilePath }}"
         - "--context={{ .GitContextUrl }}"
-        - "--destination={{ .RegistryURL }}/{{ .ImageName }}:{{ .Tag }}"
-        - "--insecure-registry={{ .Insecure }}"
-        - "--insecure={{ .Insecure }}"
-        - "--insecure-pull={{ .Insecure }}"
         {{- else }}
         - "--dockerfile={{ .DockerfilePath }}"
         - "--context=dir://{{ .Context }}"
-        - "--destination={{ .RegistryURL }}/{{ .ImageName }}:{{ .Tag }}"
+        {{- end }}
+        - "--destination={{ .ImageUrl }}"
+        {{- if .Insecure }}
         - "--insecure-registry={{ .Insecure }}"
         - "--insecure={{ .Insecure }}"
         - "--insecure-pull={{ .Insecure }}"
@@ -61,7 +59,7 @@ spec:
         {{- range .VolumeMounts }}
         - name: {{ .PvcName }}
           mountPath: {{ .ContainerMountPath }}
-          {{- if ne (len .SubPath) 0  }}	
+          {{- if ne (len .SubPath) 0  }}
           subPath: {{ .SubPath }}
           {{- end }}
         {{- end }}
@@ -115,21 +113,9 @@ func (b *buildParamsBuilder) WithContextPath(path string) *buildParamsBuilder {
 	return b
 }
 
-// WithRegistryURL sets the registry URL
-func (b *buildParamsBuilder) WithRegistryURL(url string) *buildParamsBuilder {
-	b.params.RegistryURL = url
-	return b
-}
-
-// WithImageName sets the image name
-func (b *buildParamsBuilder) WithImageName(name string) *buildParamsBuilder {
-	b.params.ImageName = name
-	return b
-}
-
-// WithTag sets the image tag
-func (b *buildParamsBuilder) WithTag(tag string) *buildParamsBuilder {
-	b.params.Tag = tag
+// WithDestination sets the full OCI destination reference
+func (b *buildParamsBuilder) WithDestination(ref string) *buildParamsBuilder {
+	b.params.Destination = ref
 	return b
 }
 
@@ -168,11 +154,9 @@ type BuildParams struct {
 	Namespace             string
 	DockerfilePath        string
 	Context               string
-	RegistryURL           string
+	Destination           string
 	DockerConfigSecret    *corev1.Secret
 	DockerConfigSecretKey string
-	ImageName             string
-	Tag                   string
 	Insecure              bool
 	UniqueVolumes         []string
 	VolumeMounts          []VolumeMount
@@ -222,7 +206,6 @@ type ResolvedBuildArg struct {
 
 // Converts GitRepoSource to a Kaniko Git context URL
 func buildGitContextUrl(repo *corev1alpha1.GitRepoSource, revision *corev1alpha1.GitRepoRevision) string {
-	// Convert https:// URLs to git:// format
 	gitUrl := repo.RepoUrl
 	if strings.HasPrefix(gitUrl, "https://") {
 		gitUrl = "git://" + strings.TrimPrefix(gitUrl, "https://")
@@ -230,22 +213,15 @@ func buildGitContextUrl(repo *corev1alpha1.GitRepoSource, revision *corev1alpha1
 		gitUrl = "git://" + gitUrl
 	}
 
-	// Add reference if specified
-	if revision.Branch != nil && len(revision.Branch.Name) > 0 {
-		gitUrl += fmt.Sprintf("#refs/heads/%s", revision.Branch.Name)
-	} else if revision.Tag != "" {
+	switch {
+	case revision.Branch != "":
+		gitUrl += fmt.Sprintf("#refs/heads/%s", revision.Branch)
+	case revision.Tag != "":
 		gitUrl += fmt.Sprintf("#refs/tags/%s", revision.Tag)
 	}
 
-	// Add commit if specified
 	if revision.Commit != "" {
-		// If we already have a branch/tag reference, add the commit
-		if strings.Contains(gitUrl, "#") {
-			gitUrl += fmt.Sprintf("#%s", revision.Commit)
-		} else {
-			// If no branch/tag, just add the commit
-			gitUrl += fmt.Sprintf("#%s", revision.Commit)
-		}
+		gitUrl += fmt.Sprintf("#%s", revision.Commit)
 	}
 
 	return gitUrl
@@ -329,7 +305,7 @@ func (b *BuildParams) generateImageBuildJobYAML() (string, error) {
 }
 
 func (b *BuildParams) ImageUrl() string {
-	return fmt.Sprintf("%s/%s:%s", b.RegistryURL, b.ImageName, b.Tag)
+	return b.Destination
 }
 
 // GenerateImageBuildJob creates a Kubernetes Job to build an image using Kaniko
@@ -400,34 +376,5 @@ func configureAuth(job *batchv1.Job, params BuildParams) {
 				},
 			},
 		})
-	}
-}
-
-// Helper function to create BuildParams
-func CreateBuildParams(
-	jobName string,
-	namespace string,
-	registryURL string,
-	imageName string,
-	tag string,
-	insecure bool,
-	dockerfilePath string,
-	context string,
-	source *Source,
-	dockerSecret *corev1.Secret,
-	dockerSecretKey string,
-) BuildParams {
-	return BuildParams{
-		JobName:               jobName,
-		Namespace:             namespace,
-		DockerfilePath:        dockerfilePath,
-		Context:               context,
-		RegistryURL:           registryURL,
-		ImageName:             imageName,
-		Tag:                   tag,
-		Insecure:              insecure,
-		Source:                source,
-		DockerConfigSecret:    dockerSecret,
-		DockerConfigSecretKey: dockerSecretKey,
 	}
 }

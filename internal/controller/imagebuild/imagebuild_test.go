@@ -77,7 +77,7 @@ var _ = Describe("reconcileCancellation", func() {
 					ResourceName: "test-resource",
 					SourceRevision: corev1alpha1.SourceRevisionSpec{
 						Volume: &corev1alpha1.VolumeRevision{
-							CurrentVolumeHash: "test-rev",
+							RevisionString: "test-rev",
 						},
 					},
 				},
@@ -134,5 +134,49 @@ var _ = Describe("reconcileCancellation", func() {
 			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
 			Expect(cond.Reason).To(Equal("BuildCancelled"))
 		})
+	})
+})
+
+var _ = Describe("validateGitRevision", func() {
+	It("accepts branch + commit", func() {
+		rev := &corev1alpha1.GitRepoRevision{
+			Branch: "main",
+			Commit: "abc123",
+		}
+		Expect(validateGitRevision(rev)).To(Succeed())
+	})
+
+	It("accepts tag + commit", func() {
+		rev := &corev1alpha1.GitRepoRevision{
+			Tag:    "v1.0.0",
+			Commit: "abc123",
+		}
+		Expect(validateGitRevision(rev)).To(Succeed())
+	})
+
+	It("rejects nil revision", func() {
+		Expect(validateGitRevision(nil)).To(HaveOccurred())
+	})
+
+	It("rejects empty commit", func() {
+		rev := &corev1alpha1.GitRepoRevision{
+			Branch: "main",
+		}
+		Expect(validateGitRevision(rev)).To(HaveOccurred())
+	})
+
+	It("rejects HEAD placeholder", func() {
+		rev := &corev1alpha1.GitRepoRevision{
+			Branch: "main",
+			Commit: "HEAD",
+		}
+		Expect(validateGitRevision(rev)).To(HaveOccurred())
+	})
+
+	It("rejects commit without fetchable ref", func() {
+		rev := &corev1alpha1.GitRepoRevision{
+			Commit: "abc123",
+		}
+		Expect(validateGitRevision(rev)).To(HaveOccurred())
 	})
 })

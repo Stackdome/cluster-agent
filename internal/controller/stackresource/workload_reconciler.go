@@ -464,26 +464,36 @@ func (r *workloadReconciler) setImagePullSecret(ctx context.Context, resource *v
 }
 
 func (r *workloadReconciler) resolveImagePullSecretName(ctx context.Context, resource *v1alpha1.StackResource) (string, error) {
-	authType := resource.RegistryAuthType()
-	switch authType {
-	case v1alpha1.RegistryAuthTypeDockerHub, v1alpha1.RegistryAuthTypeInClusterZotRegistry:
-		var secretRef string
-		if resource.HasBuildSpec() {
-			secretRef = resource.Spec.BuildSpec.Registry.Auth.DockerConfigAuth.SecretRef.Name
-		} else {
-			secretRef = resource.Spec.ImageSpec.PullAuth.DockerConfigAuth.SecretRef.Name
+	var secretRef string
+
+	if resource.HasBuildSpec() {
+		if resource.Spec.BuildSpec.Repository.Auth == nil {
+			return "", fmt.Errorf("build spec has no repository auth")
 		}
-		secret := &corev1.Secret{}
-		if err := r.Client.Get(ctx, types.NamespacedName{Name: secretRef, Namespace: resource.Namespace}, secret); err != nil {
-			if apierrors.IsNotFound(err) {
-				return "", fmt.Errorf("docker config secret not found: %w", err)
-			}
-			return "", fmt.Errorf("failed to get docker config secret: %w", err)
+		auth := resource.Spec.BuildSpec.Repository.Auth
+		switch {
+		case auth.DockerConfig != nil:
+			secretRef = auth.DockerConfig.SecretRef.Name
+		case auth.Basic != nil:
+			secretRef = resource.SynthesizedDockerConfigSecretName()
+		default:
+			return "", fmt.Errorf("build spec has no valid auth credentials")
 		}
-		return secret.Name, nil
-	default:
-		return "", fmt.Errorf("unsupported registry auth type: %s", authType)
+	} else {
+		if resource.Spec.ImageSpec.PullAuth == nil || resource.Spec.ImageSpec.PullAuth.DockerConfigAuth == nil {
+			return "", fmt.Errorf("image spec has no pull auth")
+		}
+		secretRef = resource.Spec.ImageSpec.PullAuth.DockerConfigAuth.SecretRef.Name
 	}
+
+	secret := &corev1.Secret{}
+	if err := r.Client.Get(ctx, types.NamespacedName{Name: secretRef, Namespace: resource.Namespace}, secret); err != nil {
+		if apierrors.IsNotFound(err) {
+			return "", fmt.Errorf("docker config secret not found: %w", err)
+		}
+		return "", fmt.Errorf("failed to get docker config secret: %w", err)
+	}
+	return secret.Name, nil
 }
 
 // ---------------------------------------------------------------------------
