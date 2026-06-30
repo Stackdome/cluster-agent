@@ -174,15 +174,9 @@ func (r *imageBuildReconciler) createImageBuild(ctx context.Context, resource *v
 				ContextPath:    buildSpec.BuildContext,
 				ContextSource:  buildSpec.SourceContext.DeepCopy(),
 			},
-			RegistryURL:      buildSpec.Registry.RepositoryURL,
-			InsecureRegistry: buildSpec.Registry.Insecure,
-			BuildArgs:        buildSpec.BuildArgs,
+			Repository: *buildSpec.Repository.DeepCopy(),
+			BuildArgs:  buildSpec.BuildArgs,
 		},
-	}
-
-	// Configure authentication if specified
-	if err := r.configureRegistryAuth(resource, imageBuild); err != nil {
-		return resultNil, err
 	}
 
 	// Set owner reference to the WorkspaceResource
@@ -197,26 +191,6 @@ func (r *imageBuildReconciler) createImageBuild(ctx context.Context, resource *v
 
 	// Stop further reconciliation until the build completes
 	return resultStop, nil
-}
-
-// configureRegistryAuth sets up authentication for the registry
-func (r *imageBuildReconciler) configureRegistryAuth(resource *v1alpha1.StackResource, imageBuild *buildsv1alpha1.ImageBuild) error {
-	buildSpec := resource.Spec.BuildSpec
-	if buildSpec.Registry.Auth == nil {
-		return nil
-	}
-
-	// Configure auth based on registry type
-	switch buildSpec.Registry.Auth.Type {
-	case v1alpha1.RegistryAuthTypeDockerHub, v1alpha1.RegistryAuthTypeInClusterZotRegistry:
-		if imageBuild.Spec.Auth == nil {
-			imageBuild.Spec.Auth = &buildsv1alpha1.RegistryAuth{}
-		}
-		imageBuild.Spec.Auth.Type = buildSpec.Registry.Auth.Type
-		imageBuild.Spec.Auth.DockerConfigAuthSecret = buildSpec.Registry.Auth.DockerConfigAuth.DeepCopy()
-	}
-
-	return nil
 }
 
 // generateImageBuildName creates a unique name for the ImageBuild resource
