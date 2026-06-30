@@ -341,7 +341,7 @@ func StackWithBuildArgs(name, registryURL, gitSecretName, buildArgSecretName str
 								Commit: BuildSourceCommit,
 							},
 						},
-						Repository: repositorySpecWithAuth(registryURL),
+						Repository: RepositorySpecWithAuth(registryURL),
 						BuildArgs: []corev1alpha1.BuildArg{
 							{
 								Name:  "APP_ENV",
@@ -766,7 +766,7 @@ func SimpleBuildStack(name, registryURL string) *StackWithResources {
 								Commit: BuildSourceCommit,
 							},
 						},
-						Repository: repositorySpecWithAuth(registryURL),
+						Repository: RepositorySpecWithAuth(registryURL),
 					},
 					Ports: []corev1alpha1.Port{
 						{Name: "http", Number: 3000, Protocol: "http", FQDN: name + ".local"},
@@ -814,7 +814,7 @@ func BuildStackCustomPaths(name, registryURL string) *StackWithResources {
 								Commit: BuildSourceCommit,
 							},
 						},
-						Repository: repositorySpecWithAuth(registryURL),
+						Repository: RepositorySpecWithAuth(registryURL),
 					},
 					Ports: []corev1alpha1.Port{
 						{Name: "http", Number: 3000, Protocol: "http", FQDN: name + ".local"},
@@ -862,7 +862,7 @@ func BuildStackBrokenDockerfile(name, registryURL string) *StackWithResources {
 								Commit: BuildSourceCommit,
 							},
 						},
-						Repository: repositorySpecWithAuth(registryURL),
+						Repository: RepositorySpecWithAuth(registryURL),
 					},
 					Ports: []corev1alpha1.Port{
 						{Name: "http", Number: 3000, Protocol: "http", FQDN: name + ".local"},
@@ -873,7 +873,7 @@ func BuildStackBrokenDockerfile(name, registryURL string) *StackWithResources {
 	}
 }
 
-func repositorySpecWithAuth(registryURL string) corev1alpha1.ImageRepositorySpec {
+func RepositorySpecWithAuth(registryURL string) corev1alpha1.ImageRepositorySpec {
 	return corev1alpha1.ImageRepositorySpec{
 		External: &corev1alpha1.ExternalRegistrySpec{
 			Host: registryURL,
