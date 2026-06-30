@@ -13,6 +13,7 @@ import (
 const (
 	BuildSourceRepoURL         = "https://github.com/ashishmax31/test-private-repo.git"
 	BuildSourceBranch          = "main"
+	BuildSourceCommit          = "0e7a32d8abb53958e725529595209ffb6841a333"
 	BuildSourceResourceName    = "todo-app"
 	RegistryDockerConfigSecret = "registry-docker-config"
 	// Requires: main branch, root Dockerfile, docker/Dockerfile.prod, docker/Dockerfile.broken
@@ -336,26 +337,11 @@ func StackWithBuildArgs(name, registryURL, gitSecretName, buildArgSecretName str
 						DockerFilePath: "Dockerfile",
 						SourceRevision: corev1alpha1.SourceRevisionSpec{
 							GitRepo: &corev1alpha1.GitRepoRevision{
-								Branch: &corev1alpha1.GitBranch{
-									Name:    BuildSourceBranch,
-									HeadSha: "HEAD",
-								},
+								Branch: BuildSourceBranch,
+								Commit: BuildSourceCommit,
 							},
 						},
-						Registry: corev1alpha1.RegistrySpec{
-							RepositoryURL: registryURL,
-							Insecure:      true,
-							Auth: &corev1alpha1.RegistryAuth{
-								Type: corev1alpha1.RegistryAuthTypeInClusterZotRegistry,
-								DockerConfigAuth: &corev1alpha1.DockerConfigAuth{
-									SecretKey: ".dockerconfigjson",
-									SecretRef: &corev1.SecretReference{
-										Name:      RegistryDockerConfigSecret,
-										Namespace: defaultNamespace,
-									},
-								},
-							},
-						},
+						Repository: repositorySpecWithAuth(registryURL),
 						BuildArgs: []corev1alpha1.BuildArg{
 							{
 								Name:  "APP_ENV",
@@ -776,13 +762,11 @@ func SimpleBuildStack(name, registryURL string) *StackWithResources {
 						DockerFilePath: "Dockerfile",
 						SourceRevision: corev1alpha1.SourceRevisionSpec{
 							GitRepo: &corev1alpha1.GitRepoRevision{
-								Branch: &corev1alpha1.GitBranch{
-									Name:    "main",
-									HeadSha: "HEAD",
-								},
+								Branch: "main",
+								Commit: BuildSourceCommit,
 							},
 						},
-						Registry: registrySpecWithAuth(registryURL),
+						Repository: repositorySpecWithAuth(registryURL),
 					},
 					Ports: []corev1alpha1.Port{
 						{Name: "http", Number: 3000, Protocol: "http", FQDN: name + ".local"},
@@ -826,13 +810,11 @@ func BuildStackCustomPaths(name, registryURL string) *StackWithResources {
 						DockerFilePath: "docker/Dockerfile.prod",
 						SourceRevision: corev1alpha1.SourceRevisionSpec{
 							GitRepo: &corev1alpha1.GitRepoRevision{
-								Branch: &corev1alpha1.GitBranch{
-									Name:    "main",
-									HeadSha: "HEAD",
-								},
+								Branch: "main",
+								Commit: BuildSourceCommit,
 							},
 						},
-						Registry: registrySpecWithAuth(registryURL),
+						Repository: repositorySpecWithAuth(registryURL),
 					},
 					Ports: []corev1alpha1.Port{
 						{Name: "http", Number: 3000, Protocol: "http", FQDN: name + ".local"},
@@ -876,13 +858,11 @@ func BuildStackBrokenDockerfile(name, registryURL string) *StackWithResources {
 						DockerFilePath: "docker/Dockerfile.broken",
 						SourceRevision: corev1alpha1.SourceRevisionSpec{
 							GitRepo: &corev1alpha1.GitRepoRevision{
-								Branch: &corev1alpha1.GitBranch{
-									Name:    "main",
-									HeadSha: "HEAD",
-								},
+								Branch: "main",
+								Commit: BuildSourceCommit,
 							},
 						},
-						Registry: registrySpecWithAuth(registryURL),
+						Repository: repositorySpecWithAuth(registryURL),
 					},
 					Ports: []corev1alpha1.Port{
 						{Name: "http", Number: 3000, Protocol: "http", FQDN: name + ".local"},
@@ -893,13 +873,15 @@ func BuildStackBrokenDockerfile(name, registryURL string) *StackWithResources {
 	}
 }
 
-func registrySpecWithAuth(registryURL string) corev1alpha1.RegistrySpec {
-	return corev1alpha1.RegistrySpec{
-		RepositoryURL: registryURL,
-		Insecure:      true,
-		Auth: &corev1alpha1.RegistryAuth{
-			Type: corev1alpha1.RegistryAuthTypeInClusterZotRegistry,
-			DockerConfigAuth: &corev1alpha1.DockerConfigAuth{
+func repositorySpecWithAuth(registryURL string) corev1alpha1.ImageRepositorySpec {
+	return corev1alpha1.ImageRepositorySpec{
+		External: &corev1alpha1.ExternalRegistrySpec{
+			Host: registryURL,
+			TLS:  &corev1alpha1.RegistryTLSSpec{Insecure: true},
+		},
+		Repository: "integration-test/app",
+		Auth: &corev1alpha1.RegistryCredentialsSpec{
+			DockerConfig: &corev1alpha1.DockerConfigAuth{
 				SecretKey: ".dockerconfigjson",
 				SecretRef: &corev1.SecretReference{
 					Name:      RegistryDockerConfigSecret,
@@ -1144,6 +1126,123 @@ func StackWithAllOptionalFields(name string) *StackWithResources {
 					Init: &corev1alpha1.InitSpec{
 						Command: []string{"sh"},
 						Args:    []string{"-c", "echo init"},
+					},
+				},
+			},
+		},
+	}
+}
+
+// BuildStackWithClusterRegistry creates a Stack with a single resource that
+// builds from a public git repo and pushes to a ClusterRegistry using BasicAuth
+// credentials instead of a DockerConfig secret.
+func BuildStackWithClusterRegistry(name, registryName, credsSecretName, testNamespace string) *StackWithResources {
+	resourceName := name + "-build"
+	return &StackWithResources{
+		Stack: &corev1alpha1.Stack{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name,
+				Namespace: testNamespace,
+				Labels:    stackLabels(name),
+			},
+			Spec: corev1alpha1.StackSpec{
+				ResourceNames: []string{resourceName},
+			},
+		},
+		Resources: []*corev1alpha1.StackResource{
+			{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: testNamespace,
+					Labels:    resourceLabels(name, resourceName),
+				},
+				Spec: corev1alpha1.StackResourceSpec{
+					BuildSpec: &corev1alpha1.StackResourceBuildSpec{
+						SourceContext: corev1alpha1.BuildContextSource{
+							Git: &corev1alpha1.GitRepoSource{
+								RepoUrl: PublicTestRepoURL,
+							},
+						},
+						BuildContext:   ".",
+						DockerFilePath: "Dockerfile",
+						SourceRevision: corev1alpha1.SourceRevisionSpec{
+							GitRepo: &corev1alpha1.GitRepoRevision{
+								Branch: BuildSourceBranch,
+								Commit: BuildSourceCommit,
+							},
+						},
+						Repository: corev1alpha1.ImageRepositorySpec{
+							ClusterRegistryRef: &corev1.LocalObjectReference{Name: registryName},
+							Repository:         "integration-test/cluster-reg-app",
+							Auth: &corev1alpha1.RegistryCredentialsSpec{
+								Basic: &corev1alpha1.BasicAuthCredentials{
+									SecretRef:   corev1.SecretReference{Name: credsSecretName, Namespace: testNamespace},
+									UsernameKey: "username",
+									PasswordKey: "password",
+								},
+							},
+						},
+					},
+					Ports: []corev1alpha1.Port{
+						{Name: "http", Number: 3000, Protocol: "http"},
+					},
+				},
+			},
+		},
+	}
+}
+
+func BuildStackWithDockerHub(name, repository, credsSecretName, testNamespace string) *StackWithResources {
+	resourceName := name + "-build"
+	return &StackWithResources{
+		Stack: &corev1alpha1.Stack{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name,
+				Namespace: testNamespace,
+				Labels:    stackLabels(name),
+			},
+			Spec: corev1alpha1.StackSpec{
+				ResourceNames: []string{resourceName},
+			},
+		},
+		Resources: []*corev1alpha1.StackResource{
+			{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: testNamespace,
+					Labels:    resourceLabels(name, resourceName),
+				},
+				Spec: corev1alpha1.StackResourceSpec{
+					BuildSpec: &corev1alpha1.StackResourceBuildSpec{
+						SourceContext: corev1alpha1.BuildContextSource{
+							Git: &corev1alpha1.GitRepoSource{
+								RepoUrl: PublicTestRepoURL,
+							},
+						},
+						BuildContext:   ".",
+						DockerFilePath: "Dockerfile",
+						SourceRevision: corev1alpha1.SourceRevisionSpec{
+							GitRepo: &corev1alpha1.GitRepoRevision{
+								Branch: BuildSourceBranch,
+								Commit: BuildSourceCommit,
+							},
+						},
+						Repository: corev1alpha1.ImageRepositorySpec{
+							External: &corev1alpha1.ExternalRegistrySpec{
+								Host: "docker.io",
+							},
+							Repository: repository,
+							Auth: &corev1alpha1.RegistryCredentialsSpec{
+								Basic: &corev1alpha1.BasicAuthCredentials{
+									SecretRef:   corev1.SecretReference{Name: credsSecretName, Namespace: testNamespace},
+									UsernameKey: "username",
+									PasswordKey: "password",
+								},
+							},
+						},
+					},
+					Ports: []corev1alpha1.Port{
+						{Name: "http", Number: 3000, Protocol: "http"},
 					},
 				},
 			},

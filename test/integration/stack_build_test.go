@@ -15,6 +15,8 @@ import (
 
 	buildsv1alpha1 "stackdome.io/cluster-agent/api/builds/v1alpha1"
 	corev1alpha1 "stackdome.io/cluster-agent/api/core/v1alpha1"
+	registryv1alpha1 "stackdome.io/cluster-agent/api/registry/v1alpha1"
+	"stackdome.io/cluster-agent/test/integration/bootstrap"
 	"stackdome.io/cluster-agent/test/integration/fixtures"
 	"stackdome.io/cluster-agent/test/integration/helpers"
 )
@@ -348,7 +350,7 @@ var _ = Describe("Stack build from source", func() {
 			By("Updating the source revision on the StackResource to trigger a new build")
 			sr := &corev1alpha1.StackResource{}
 			Expect(c.Get(ctx, client.ObjectKey{Name: srName, Namespace: stack.Namespace}, sr)).To(Succeed())
-			sr.Spec.BuildSpec.SourceRevision.GitRepo.Branch.HeadSha = "new-sha"
+			sr.Spec.BuildSpec.SourceRevision.GitRepo.Commit = "aabbccddee1122334455"
 			Expect(c.Update(ctx, sr)).To(Succeed())
 
 			By("Waiting for a new ImageBuild to be created with a different name")
@@ -463,7 +465,7 @@ var _ = Describe("Stack build from source", func() {
 			By("Updating the source revision immediately while the build is still in progress")
 			liveSR := &corev1alpha1.StackResource{}
 			Expect(c.Get(ctx, client.ObjectKey{Name: srName, Namespace: stack.Namespace}, liveSR)).To(Succeed())
-			liveSR.Spec.BuildSpec.SourceRevision.GitRepo.Branch.HeadSha = "cancel-test-sha"
+			liveSR.Spec.BuildSpec.SourceRevision.GitRepo.Commit = "ff00ff00ff00ff00ff00"
 			Expect(c.Update(ctx, liveSR)).To(Succeed())
 
 			By("Waiting for the old ImageBuild to have Spec.Cancelled=true")
@@ -494,5 +496,220 @@ var _ = Describe("Stack build from source", func() {
 		})
 
 		AfterAll(func() { helpers.CleanupStack(ctx, c, stack) })
+	})
+
+	Context("BuildSpec - ClusterRegistryRef with BasicAuth", Ordered, func() {
+		const (
+			testRegistryName       = "build-test-registry"
+			testRegistryCredSecret = "build-test-registry-creds"
+			testRegistryPort       = int32(5001)
+			testRegistryUsername   = "testuser"
+			testRegistryPassword   = "testpass"
+		)
+
+		var stack *corev1alpha1.Stack
+
+		BeforeAll(func() {
+			By("Creating registry credentials secret in the registry namespace")
+			credSecret := fixtures.ClusterRegistryCredentialsSecret(
+				testRegistryCredSecret,
+				bootstrap.RegistryNamespace,
+				testRegistryUsername,
+				testRegistryPassword,
+			)
+			Expect(c.Create(ctx, credSecret)).To(Succeed())
+
+			By("Creating a new ClusterRegistry")
+			registry := fixtures.SimpleClusterRegistry(testRegistryName, testRegistryCredSecret, testRegistryPort)
+			Expect(c.Create(ctx, registry)).To(Succeed())
+
+			By("Waiting for the ClusterRegistry to become ready")
+			_, err := helpers.WaitForClusterRegistryReady(ctx, c,
+				client.ObjectKeyFromObject(registry), 5*time.Minute)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Creating basic-auth credentials secret in the test namespace")
+			testCredsSecret := fixtures.ClusterRegistryCredentialsSecret(
+				testRegistryCredSecret,
+				env.TestNamespace,
+				testRegistryUsername,
+				testRegistryPassword,
+			)
+			Expect(c.Create(ctx, testCredsSecret)).To(Succeed())
+
+			By("Creating a Stack with ClusterRegistryRef build spec")
+			swr := fixtures.BuildStackWithClusterRegistry(
+				"cluster-reg-build",
+				testRegistryName,
+				testRegistryCredSecret,
+				env.TestNamespace,
+			)
+			Expect(fixtures.CreateStackWithResources(ctx, c, swr)).To(Succeed())
+			stack = swr.Stack
+		})
+
+		It("should create an ImageBuild with ClusterRegistryRef", func() {
+			srName := stack.Spec.ResourceNames[0]
+
+			By("Waiting for ImageBuild to be created")
+			imageBuild, err := helpers.WaitForImageBuildCreated(ctx, c, env.TestNamespace, srName, imageBuildTimeout)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Verifying ClusterRegistryRef is set")
+			Expect(imageBuild.Spec.Repository.ClusterRegistryRef).NotTo(BeNil())
+			Expect(imageBuild.Spec.Repository.ClusterRegistryRef.Name).To(Equal(testRegistryName))
+		})
+
+		It("should synthesize a dockercfg secret from BasicAuth credentials", func() {
+			srName := stack.Spec.ResourceNames[0]
+
+			By("Checking synthesized docker config secret exists")
+			secretName := corev1alpha1.SynthesizedDockerConfigSecretName(srName)
+			var secret corev1.Secret
+			Eventually(func() error {
+				return c.Get(ctx, client.ObjectKey{Name: secretName, Namespace: env.TestNamespace}, &secret)
+			}, 30*time.Second, "2s").Should(Succeed())
+
+			Expect(secret.Type).To(Equal(corev1.SecretTypeDockerConfigJson))
+			Expect(secret.Data).To(HaveKey(corev1.DockerConfigJsonKey))
+		})
+
+		It("should complete the build and push to the cluster registry", func() {
+			srName := stack.Spec.ResourceNames[0]
+			imageBuild, err := helpers.WaitForImageBuildCreated(ctx, c, env.TestNamespace, srName, imageBuildTimeout)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Waiting for ImageBuild to complete")
+			completedBuild, err := helpers.WaitForImageBuildComplete(ctx, c, client.ObjectKeyFromObject(imageBuild), buildReadyTimeout)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Verifying image URL references the cluster registry")
+			Expect(completedBuild.Status.ImageUrl).To(ContainSubstring(testRegistryName))
+		})
+
+		It("should deploy with imagePullSecrets from the synthesized secret", func() {
+			srName := stack.Spec.ResourceNames[0]
+
+			By("Waiting for StackResource to become Available")
+			_, err := helpers.WaitForStackResourceAvailable(ctx, c, client.ObjectKey{
+				Name:      srName,
+				Namespace: env.TestNamespace,
+			}, readyTimeout)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Verifying Deployment has imagePullSecrets")
+			dep, err := helpers.GetDeploymentForResource(ctx, c, env.TestNamespace, srName)
+			Expect(err).NotTo(HaveOccurred())
+
+			expectedSecret := corev1alpha1.SynthesizedDockerConfigSecretName(srName)
+			Expect(dep.Spec.Template.Spec.ImagePullSecrets).To(ContainElement(
+				corev1.LocalObjectReference{Name: expectedSecret},
+			))
+
+			By("Verifying container image references the cluster registry")
+			Expect(dep.Spec.Template.Spec.Containers[0].Image).To(ContainSubstring(testRegistryName))
+		})
+
+		AfterAll(func() {
+			helpers.CleanupStack(ctx, c, stack)
+
+			registry := &registryv1alpha1.ClusterRegistry{}
+			registry.Name = testRegistryName
+			_ = c.Delete(ctx, registry)
+
+			credSecret := &corev1.Secret{}
+			credSecret.Name = testRegistryCredSecret
+			credSecret.Namespace = bootstrap.RegistryNamespace
+			_ = c.Delete(ctx, credSecret)
+
+			testCredsSecret := &corev1.Secret{}
+			testCredsSecret.Name = testRegistryCredSecret
+			testCredsSecret.Namespace = env.TestNamespace
+			_ = c.Delete(ctx, testCredsSecret)
+		})
+	})
+
+	Context("BuildSpec - Docker Hub with BasicAuth", Ordered, func() {
+		const (
+			dockerHubCredsSecret = "dockerhub-creds"
+			dockerHubRepository  = "stackdome/stackdome-testing"
+		)
+
+		var stack *corev1alpha1.Stack
+
+		BeforeAll(func() {
+			dockerHubPAT := os.Getenv("DOCKERHUB_PAT")
+			if dockerHubPAT == "" {
+				Skip("DOCKERHUB_PAT not set -- skipping Docker Hub build test")
+			}
+
+			By("Creating Docker Hub credentials secret")
+			credSecret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      dockerHubCredsSecret,
+					Namespace: env.TestNamespace,
+				},
+				StringData: map[string]string{
+					"username": "stackdome",
+					"password": dockerHubPAT,
+				},
+			}
+			Expect(c.Create(ctx, credSecret)).To(Succeed())
+
+			By("Creating a Stack that builds and pushes to Docker Hub")
+			swr := fixtures.BuildStackWithDockerHub(
+				"dockerhub-build",
+				dockerHubRepository,
+				dockerHubCredsSecret,
+				env.TestNamespace,
+			)
+			Expect(fixtures.CreateStackWithResources(ctx, c, swr)).To(Succeed())
+			stack = swr.Stack
+		})
+
+		It("should create an ImageBuild targeting Docker Hub", func() {
+			srName := stack.Spec.ResourceNames[0]
+
+			imageBuild, err := helpers.WaitForImageBuildCreated(ctx, c, env.TestNamespace, srName, imageBuildTimeout)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(imageBuild.Spec.Repository.External).NotTo(BeNil())
+			Expect(imageBuild.Spec.Repository.External.Host).To(Equal("docker.io"))
+			Expect(imageBuild.Spec.Repository.Repository).To(Equal(dockerHubRepository))
+		})
+
+		It("should synthesize a dockercfg secret with Docker Hub auth URL", func() {
+			srName := stack.Spec.ResourceNames[0]
+
+			secretName := corev1alpha1.SynthesizedDockerConfigSecretName(srName)
+			var secret corev1.Secret
+			Eventually(func() error {
+				return c.Get(ctx, client.ObjectKey{Name: secretName, Namespace: env.TestNamespace}, &secret)
+			}, 30*time.Second, "2s").Should(Succeed())
+
+			Expect(secret.Type).To(Equal(corev1.SecretTypeDockerConfigJson))
+			Expect(string(secret.Data[corev1.DockerConfigJsonKey])).To(ContainSubstring("index.docker.io"))
+		})
+
+		It("should complete the build and push to Docker Hub", func() {
+			srName := stack.Spec.ResourceNames[0]
+			imageBuild, err := helpers.WaitForImageBuildCreated(ctx, c, env.TestNamespace, srName, imageBuildTimeout)
+			Expect(err).NotTo(HaveOccurred())
+
+			completedBuild, err := helpers.WaitForImageBuildComplete(ctx, c, client.ObjectKeyFromObject(imageBuild), buildReadyTimeout)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(completedBuild.Status.ImageUrl).To(ContainSubstring("docker.io/" + dockerHubRepository))
+		})
+
+		AfterAll(func() {
+			if stack != nil {
+				helpers.CleanupStack(ctx, c, stack)
+			}
+			credSecret := &corev1.Secret{}
+			credSecret.Name = dockerHubCredsSecret
+			credSecret.Namespace = env.TestNamespace
+			_ = c.Delete(ctx, credSecret)
+		})
 	})
 })
