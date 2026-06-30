@@ -77,11 +77,6 @@ type GitAuth struct {
 	PersonalAccessTokenRef  *corev1alpha1.CredentialSecretKeyPair `json:"personalAccessTokenRef,omitempty"`
 }
 
-type GitBranch struct {
-	// +required
-	Name string `json:"name"`
-}
-
 type RemoteDirSource struct {
 	// Path within the client where the directory to be synced is located.
 	// +required

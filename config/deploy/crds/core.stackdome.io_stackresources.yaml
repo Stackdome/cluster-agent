@@ -101,12 +101,38 @@ spec:
                   dockerFilePath:
                     description: Path to the docker file within the source volume.
                     type: string
-                  registry:
-                    description: Registry specification for pushing the built image.
+                  repository:
+                    description: Repository is the structured push target.
                     properties:
                       auth:
                         properties:
-                          dockerConfigAuth:
+                          basic:
+                            properties:
+                              passwordKey:
+                                type: string
+                              secretRef:
+                                description: |-
+                                  SecretReference represents a Secret Reference. It has enough information to retrieve secret
+                                  in any namespace
+                                properties:
+                                  name:
+                                    description: name is unique within a namespace
+                                      to reference a secret resource.
+                                    type: string
+                                  namespace:
+                                    description: namespace defines the space within
+                                      which the secret name must be unique.
+                                    type: string
+                                type: object
+                                x-kubernetes-map-type: atomic
+                              usernameKey:
+                                type: string
+                            required:
+                            - passwordKey
+                            - secretRef
+                            - usernameKey
+                            type: object
+                          dockerConfig:
                             properties:
                               secretKey:
                                 description: Key inside the secret that contains the
@@ -130,24 +156,61 @@ spec:
                             - secretKey
                             - secretRef
                             type: object
-                          type:
-                            type: string
-                        required:
-                        - dockerConfigAuth
-                        - type
                         type: object
-                      insecure:
-                        default: false
-                        description: Is the registry insecure
-                        type: boolean
-                      repositoryUrl:
-                        description: Repository URL for constructing the image tag
-                          (e.g., docker.io/myorg)
-                        minLength: 3
+                      clusterRegistryRef:
+                        description: Cluster registry is cluster scoped.
+                        properties:
+                          name:
+                            default: ""
+                            description: |-
+                              Name of the referent.
+                              This field is effectively required, but due to backwards compatibility is
+                              allowed to be empty. Instances of this type with an empty value here are
+                              almost certainly wrong.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                        type: object
+                        x-kubernetes-map-type: atomic
+                      external:
+                        properties:
+                          host:
+                            type: string
+                          tls:
+                            properties:
+                              insecure:
+                                default: false
+                                type: boolean
+                            type: object
+                        required:
+                        - host
+                        type: object
+                      repository:
+                        minLength: 1
+                        pattern: ^[a-z0-9][a-z0-9._/-]*[a-z0-9]$|^[a-z0-9]$
                         type: string
+                      tagPolicy:
+                        properties:
+                          fixed:
+                            properties:
+                              tag:
+                                type: string
+                            required:
+                            - tag
+                            type: object
+                          sourceRevision:
+                            properties:
+                              sanitize:
+                                default: true
+                                type: boolean
+                            type: object
+                        type: object
                     required:
-                    - repositoryUrl
+                    - repository
                     type: object
+                    x-kubernetes-validations:
+                    - message: exactly one of clusterRegistryRef or external must
+                        be set
+                      rule: has(self.clusterRegistryRef) != has(self.external)
                   sourceContext:
                     description: Source context where the build context is present.
                     properties:
@@ -238,44 +301,44 @@ spec:
                     properties:
                       gitRepo:
                         description: |-
-                          Can be one of the following:
-                          - git commit hash
-                          - git branch name
-                          - git tag name
+                          GitRepoRevision identifies a point-in-time in a git repository.
+                          Commit is the authoritative immutable identity (a full or abbreviated SHA).
+                          Branch or Tag is the fetchable ref used to clone; at least one must be set.
                         properties:
                           branch:
-                            properties:
-                              HeadSha:
-                                default: HEAD
-                                description: |-
-                                  Current commit hash of the branch head.
-                                  default is head
-                                type: string
-                              name:
-                                description: Name of the branch
-                                type: string
-                            required:
-                            - HeadSha
-                            - name
-                            type: object
+                            type: string
                           commit:
+                            maxLength: 40
+                            minLength: 7
+                            pattern: ^[0-9a-f]+$
                             type: string
                           tag:
                             type: string
+                        required:
+                        - commit
                         type: object
+                        x-kubernetes-validations:
+                        - message: at least one of branch or tag must be set as a
+                            fetchable ref
+                          rule: has(self.branch) || has(self.tag)
                       volume:
                         properties:
-                          currentVolumeHash:
-                            description: Hash of the contents of the volume.
+                          revisionString:
+                            description: |-
+                              VolumeRevisionString is the string representation of the volume revision.
+                              Can be:
+                              - sha of the source directory (if using a synced volume)
+                              - git branch name + sha of the branch head
+                              - git tag name + sha of the tag
                             type: string
                         required:
-                        - currentVolumeHash
+                        - revisionString
                         type: object
                     type: object
                 required:
                 - buildContext
                 - dockerFilePath
-                - registry
+                - repository
                 - sourceContext
                 - sourceRevision
                 type: object
