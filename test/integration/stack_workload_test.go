@@ -5,9 +5,9 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -155,44 +155,117 @@ var _ = Describe("StackResource workload spec", func() {
 		})
 	})
 
-	Context("Unsupported workload type", Ordered, func() {
+	Context("StatefulService workload type", Ordered, func() {
 		var stack *corev1alpha1.Stack
 
-		It("should set StackResource to Failed (not Pending)", func() {
-			swr := fixtures.UnsupportedTypeStack("unsupported-stack")
+		It("should create a StatefulSet and a headless Service", func() {
+			swr := fixtures.NewStack("sts-test",
+				fixtures.NewResource("sts-test", "sts-test-app",
+					fixtures.WithWorkloadType(corev1alpha1.WorkloadTypeStatefulService),
+					fixtures.WithPorts(corev1alpha1.Port{Name: "http", Number: 80, Protocol: "http", FQDN: "sts-test-app.local"})))
+			Expect(fixtures.CreateStackWithResources(ctx, c, swr)).To(Succeed())
+			stack = swr.Stack
+
+			_, err := helpers.WaitForStackReady(ctx, c, client.ObjectKeyFromObject(stack), readyTimeout)
+			Expect(err).NotTo(HaveOccurred())
+
+			srName := stack.Spec.ResourceNames[0]
+
+			By("Verifying StatefulSet was created with replicas=1")
+			sts, err := helpers.GetStatefulSetForResource(ctx, c, stack.Namespace, srName)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(*sts.Spec.Replicas).To(Equal(int32(1)))
+			Expect(sts.Spec.ServiceName).To(Equal(srName))
+			Expect(sts.Spec.VolumeClaimTemplates).To(BeEmpty())
+
+			By("Verifying headless Service was created")
+			svc, err := helpers.GetServiceForResource(ctx, c, stack.Namespace, srName)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(svc.Spec.ClusterIP).To(Equal("None"))
+			Expect(svc.Spec.Ports).To(HaveLen(1))
+
+			By("Verifying no Deployment was created")
+			Expect(helpers.DeploymentExists(ctx, c, stack.Namespace, srName)).To(BeFalse())
+		})
+
+		AfterAll(func() {
+			helpers.CleanupStack(ctx, c, stack)
+		})
+	})
+
+	Context("Job workload type", Ordered, func() {
+		var stack *corev1alpha1.Stack
+
+		It("should create a Job and report success", func() {
+			swr := fixtures.NewStack("job-test",
+				fixtures.NewResource("job-test", "job-test-runner",
+					fixtures.WithWorkloadType(corev1alpha1.WorkloadTypeJob),
+					fixtures.WithoutPorts(),
+					fixtures.WithImage("busybox:latest"),
+					fixtures.WithCommand([]string{"sh", "-c", "echo done"}, nil)))
 			Expect(fixtures.CreateStackWithResources(ctx, c, swr)).To(Succeed())
 			stack = swr.Stack
 
 			srName := stack.Spec.ResourceNames[0]
 
-			Eventually(func() corev1alpha1.StackResourcePhase {
-				sr := &corev1alpha1.StackResource{}
-				if err := c.Get(ctx, client.ObjectKey{Name: srName, Namespace: stack.Namespace}, sr); err != nil {
-					return ""
-				}
-				return sr.Status.Phase
-			}, readyTimeout, "5s").Should(Equal(corev1alpha1.StackResourcePhaseFailed))
+			By("Waiting for StackResource to become available")
+			_, err := helpers.WaitForStackResourceAvailable(ctx, c, client.ObjectKey{Name: srName, Namespace: stack.Namespace}, readyTimeout)
+			Expect(err).NotTo(HaveOccurred())
 
-			By("Verifying failure reason is WorkloadTypeNotSupported")
-			sr := &corev1alpha1.StackResource{}
-			Expect(c.Get(ctx, client.ObjectKey{Name: srName, Namespace: stack.Namespace}, sr)).To(Succeed())
-			cond := meta.FindStatusCondition(sr.Status.Conditions, string(corev1alpha1.StackResourceStatusAvailable))
-			Expect(cond).NotTo(BeNil())
-			Expect(cond.Reason).To(Equal("WorkloadTypeNotSupported"))
+			By("Verifying Job was created with completions=1")
+			job, err := helpers.GetJobForResource(ctx, c, stack.Namespace, srName)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(*job.Spec.Completions).To(Equal(int32(1)))
 
-			By("Verifying Stalled condition is set")
-			stalledCond := meta.FindStatusCondition(sr.Status.Conditions, string(corev1alpha1.StackResourceStalled))
-			Expect(stalledCond).NotTo(BeNil())
-			Expect(stalledCond.Status).To(Equal(metav1.ConditionTrue))
-			Expect(stalledCond.Reason).To(Equal("WorkloadTypeNotSupported"))
+			By("Waiting for Job completion")
+			_, err = helpers.WaitForJobComplete(ctx, c, stack.Namespace, srName, readyTimeout)
+			Expect(err).NotTo(HaveOccurred())
 
-			Eventually(func() corev1alpha1.StackPhase {
-				s := &corev1alpha1.Stack{}
-				if err := c.Get(ctx, client.ObjectKeyFromObject(stack), s); err != nil {
-					return ""
-				}
-				return s.Status.Phase
-			}, readyTimeout, "5s").Should(Equal(corev1alpha1.StackFailed))
+			By("Verifying StackResource reports success")
+			sr, err := helpers.GetStackResource(ctx, c, client.ObjectKey{Name: srName, Namespace: stack.Namespace})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(sr.Status.LastRunSucceeded).NotTo(BeNil())
+			Expect(*sr.Status.LastRunSucceeded).To(BeTrue())
+
+			By("Verifying no Service was created")
+			_, svcErr := helpers.GetServiceForResource(ctx, c, stack.Namespace, srName)
+			Expect(errors.IsNotFound(svcErr)).To(BeTrue())
+		})
+
+		AfterAll(func() {
+			helpers.CleanupStack(ctx, c, stack)
+		})
+	})
+
+	Context("CronJob workload type", Ordered, func() {
+		var stack *corev1alpha1.Stack
+
+		It("should create a CronJob and report available", func() {
+			swr := fixtures.NewStack("cronjob-test",
+				fixtures.NewResource("cronjob-test", "cj-test-tick",
+					fixtures.WithWorkloadType(corev1alpha1.WorkloadTypeCronJob),
+					fixtures.WithoutPorts(),
+					fixtures.WithImage("busybox:latest"),
+					fixtures.WithSchedule("*/1 * * * *"),
+					fixtures.WithCommand([]string{"sh", "-c", "echo tick"}, nil)))
+			Expect(fixtures.CreateStackWithResources(ctx, c, swr)).To(Succeed())
+			stack = swr.Stack
+
+			srName := stack.Spec.ResourceNames[0]
+
+			By("Waiting for StackResource to become available")
+			_, err := helpers.WaitForStackResourceAvailable(ctx, c, client.ObjectKey{Name: srName, Namespace: stack.Namespace}, readyTimeout)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Verifying CronJob was created with correct schedule")
+			cj, err := helpers.GetCronJobForResource(ctx, c, stack.Namespace, srName)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cj.Spec.Schedule).To(Equal("*/1 * * * *"))
+			Expect(cj.Spec.ConcurrencyPolicy).To(Equal(batchv1.ForbidConcurrent))
+
+			By("Verifying no Service was created")
+			_, svcErr := helpers.GetServiceForResource(ctx, c, stack.Namespace, srName)
+			Expect(errors.IsNotFound(svcErr)).To(BeTrue())
 		})
 
 		AfterAll(func() {

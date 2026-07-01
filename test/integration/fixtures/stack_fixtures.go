@@ -1059,35 +1059,6 @@ func WorkerStack(name string) *StackWithResources {
 	}
 }
 
-// UnsupportedTypeStack creates a Stack with a single resource using the
-// StatefulService workload type, which is not yet implemented and should
-// cause a terminal Failed phase.
-func UnsupportedTypeStack(name string) *StackWithResources {
-	resourceName := name + "-unsupported"
-	return &StackWithResources{
-		Stack: &corev1alpha1.Stack{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      name,
-				Namespace: defaultNamespace,
-				Labels:    stackLabels(name),
-			},
-			Spec: corev1alpha1.StackSpec{ResourceNames: []string{resourceName}},
-		},
-		Resources: []*corev1alpha1.StackResource{{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      resourceName,
-				Namespace: defaultNamespace,
-				Labels:    resourceLabels(name, resourceName),
-			},
-			Spec: corev1alpha1.StackResourceSpec{
-				WorkloadType: corev1alpha1.WorkloadTypeStatefulService,
-				ImageSpec:    &corev1alpha1.ImageSpec{Image: "nginx:1.25-alpine"},
-				Ports:        []corev1alpha1.Port{{Name: "http", Number: 80, Protocol: "http", FQDN: resourceName + ".local"}},
-			},
-		}},
-	}
-}
-
 // StackWithAllOptionalFields populates env, ports, command, args, and init —
 // used by field-removal specs as the fully-populated starting point.
 func StackWithAllOptionalFields(name string) *StackWithResources {

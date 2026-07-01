@@ -6,6 +6,7 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -168,5 +169,33 @@ func ServiceIsHeadless(svc *corev1.Service) bool {
 func WaitForLastFailureDetails(ctx context.Context, c client.Client, key client.ObjectKey, timeout time.Duration) (*corev1alpha1.StackResource, error) {
 	return WaitFor(ctx, c, key, &corev1alpha1.StackResource{}, func(sr *corev1alpha1.StackResource) bool {
 		return len(sr.Status.LastFailureDetails) > 0
+	}, timeout)
+}
+
+// GetStatefulSetForResource retrieves the StatefulSet created for a StackResource.
+func GetStatefulSetForResource(ctx context.Context, c client.Client, namespace, resourceName string) (*appsv1.StatefulSet, error) {
+	sts := &appsv1.StatefulSet{}
+	err := c.Get(ctx, client.ObjectKey{Name: resourceName, Namespace: namespace}, sts)
+	return sts, err
+}
+
+// GetJobForResource retrieves the Job created for a StackResource.
+func GetJobForResource(ctx context.Context, c client.Client, namespace, resourceName string) (*batchv1.Job, error) {
+	job := &batchv1.Job{}
+	err := c.Get(ctx, client.ObjectKey{Name: resourceName, Namespace: namespace}, job)
+	return job, err
+}
+
+// GetCronJobForResource retrieves the CronJob created for a StackResource.
+func GetCronJobForResource(ctx context.Context, c client.Client, namespace, resourceName string) (*batchv1.CronJob, error) {
+	cj := &batchv1.CronJob{}
+	err := c.Get(ctx, client.ObjectKey{Name: resourceName, Namespace: namespace}, cj)
+	return cj, err
+}
+
+// WaitForJobComplete polls until the Job has at least one succeeded pod or the timeout expires.
+func WaitForJobComplete(ctx context.Context, c client.Client, namespace, name string, timeout time.Duration) (*batchv1.Job, error) {
+	return WaitFor(ctx, c, client.ObjectKey{Namespace: namespace, Name: name}, &batchv1.Job{}, func(j *batchv1.Job) bool {
+		return j.Status.Succeeded >= 1
 	}, timeout)
 }
