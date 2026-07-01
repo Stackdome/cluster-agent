@@ -40,9 +40,9 @@ var _ = Describe("ResolveTag", func() {
 		Expect(ResolveTag(policy, "abc")).To(Equal("latest"))
 	})
 
-	It("returns the raw source revision when sanitize is disabled", func() {
-		policy := &corev1alpha1.ImageTagPolicy{SourceRevision: &corev1alpha1.SourceRevisionTagPolicy{Sanitize: false}}
-		Expect(ResolveTag(policy, "ABC/123")).To(Equal("ABC/123"))
+	It("always sanitizes even with an empty policy", func() {
+		policy := &corev1alpha1.ImageTagPolicy{}
+		Expect(ResolveTag(policy, "ABC/123")).To(Equal("abc-123"))
 	})
 })
 

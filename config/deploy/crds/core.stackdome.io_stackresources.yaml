@@ -197,12 +197,6 @@ spec:
                             required:
                             - tag
                             type: object
-                          sourceRevision:
-                            properties:
-                              sanitize:
-                                default: true
-                                type: boolean
-                            type: object
                         type: object
                     required:
                     - repository
