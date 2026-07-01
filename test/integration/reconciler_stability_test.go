@@ -306,19 +306,19 @@ var _ = Describe("Reconciler stability", func() {
 
 	Context("ClusterRegistry no-op reconciles cause no updates", Ordered, func() {
 
-		It("should not update registry Deployment when nothing changed", func() {
+		It("should not update registry StatefulSet when nothing changed", func() {
 			By("Verifying registry is running (set up by bootstrap)")
 			reg, err := helpers.WaitForClusterRegistryReady(ctx, c, client.ObjectKey{Name: bootstrap.RegistryName}, readyTimeout)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(reg.Status.Phase).To(Equal(registryv1alpha1.RegistryPhaseRunning))
 
-			By("Recording registry Deployment ResourceVersion")
-			dep := &appsv1.Deployment{}
+			By("Recording registry StatefulSet ResourceVersion")
+			sts := &appsv1.StatefulSet{}
 			Expect(c.Get(ctx, client.ObjectKey{
 				Name:      bootstrap.RegistryName,
 				Namespace: bootstrap.RegistryNamespace,
-			}, dep)).To(Succeed())
-			stableRV := dep.ResourceVersion
+			}, sts)).To(Succeed())
+			stableRV := sts.ResourceVersion
 
 			By("Triggering a no-op reconcile by annotating the ClusterRegistry")
 			Expect(c.Get(ctx, client.ObjectKey{Name: bootstrap.RegistryName}, reg)).To(Succeed())
@@ -328,10 +328,10 @@ var _ = Describe("Reconciler stability", func() {
 			reg.Annotations["ssa-test/noop"] = fmt.Sprintf("%d", time.Now().UnixNano())
 			Expect(c.Update(ctx, reg)).To(Succeed())
 
-			By("Verifying registry Deployment ResourceVersion remains stable")
-			depKey := client.ObjectKey{Name: bootstrap.RegistryName, Namespace: bootstrap.RegistryNamespace}
-			err = helpers.VerifyRVStable(ctx, c, depKey, &appsv1.Deployment{}, stableRV, stabilityWindow)
-			Expect(err).NotTo(HaveOccurred(), "Registry Deployment should not be updated on no-op reconcile")
+			By("Verifying registry StatefulSet ResourceVersion remains stable")
+			stsKey := client.ObjectKey{Name: bootstrap.RegistryName, Namespace: bootstrap.RegistryNamespace}
+			err = helpers.VerifyRVStable(ctx, c, stsKey, &appsv1.StatefulSet{}, stableRV, stabilityWindow)
+			Expect(err).NotTo(HaveOccurred(), "Registry StatefulSet should not be updated on no-op reconcile")
 		})
 
 		It("should not update registry ConfigMap when nothing changed", func() {

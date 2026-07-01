@@ -29,14 +29,7 @@ func ResolveTag(policy *corev1alpha1.ImageTagPolicy, sourceRevision string) stri
 	if policy != nil && policy.Fixed != nil && policy.Fixed.Tag != "" {
 		return policy.Fixed.Tag
 	}
-	sanitize := true
-	if policy != nil && policy.SourceRevision != nil {
-		sanitize = policy.SourceRevision.Sanitize
-	}
-	if sanitize {
-		return SanitizeTag(sourceRevision)
-	}
-	return sourceRevision
+	return SanitizeTag(sourceRevision)
 }
 
 var tagInvalid = regexp.MustCompile(`[^a-zA-Z0-9_.-]+`)

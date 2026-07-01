@@ -387,21 +387,14 @@ type RegistryTLSSpec struct {
 
 type ImageTagPolicy struct {
 	// +optional
-	SourceRevision *SourceRevisionTagPolicy `json:"sourceRevision,omitempty"`
-	// +optional
 	Fixed *FixedTagPolicy `json:"fixed,omitempty"`
-}
-
-type SourceRevisionTagPolicy struct {
-	// +optional
-	// +kubebuilder:default=true
-	Sanitize bool `json:"sanitize,omitempty"`
 }
 
 type FixedTagPolicy struct {
 	// +required
 	Tag string `json:"tag"`
 }
+
 
 type RegistryCredentialsSpec struct {
 	// +optional

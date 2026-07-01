@@ -2,6 +2,7 @@ package registry
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -12,7 +13,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
-	k8sresource "k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -92,9 +92,9 @@ func NewRegistryReconciler(client client.Client, scheme *runtime.Scheme, registr
 		{"ValidationReconciler", r.reconcileValidation},
 		{"NamespaceReconciler", r.reconcileRegistryNamespace},
 		{"RegistryAuthReconciler", r.reconcileRegistryAuth},
-		{"RegistryStorageReconciler", r.reconcileRegistryStorage},
 		{"RegistryConfigReconciler", r.reconcileRegistryConfig},
-		{"RegistryDeploymentReconciler", r.reconcileRegistryDeployment},
+		{"RegistryHeadlessServiceReconciler", r.reconcileRegistryHeadlessService},
+		{"RegistryStatefulSetReconciler", r.reconcileRegistryStatefulSet},
 		{"RegistryServiceReconciler", r.reconcileRegistryService},
 		{"NodeRegistryAccessConfigMapReconciler", r.reconcileNodeRegistryAccessConfigMap},
 		{"SharedRegistryConfigDaemonSetReconciler", r.reconcileSharedRegistryConfigDaemonSet},
@@ -238,7 +238,17 @@ func (r *RegistryReconciler) reconcileSharedRegistryConfigDaemonSet(ctx context.
 	}
 	logger.Info("detected container runtime", "runtime", runtime)
 
-	desiredDaemonSet := r.registryBuilder.BuildRegistryConfigReconcilerDaemonset(ctx, registry, nodeRegistryAccessConfigMapName, "registries.json", runtime)
+	configCM := &corev1.ConfigMap{}
+	if err := r.Client.Get(ctx, types.NamespacedName{
+		Name:      nodeRegistryAccessConfigMapName,
+		Namespace: registryNamespace,
+	}, configCM); err != nil {
+		return resultNil, fmt.Errorf("failed to get shared registry ConfigMap: %w", err)
+	}
+	registryConfigHash := fmt.Sprintf("%x", sha256.Sum256([]byte(configCM.Data["registries.json"])))
+
+	desiredDaemonSet := r.registryBuilder.BuildRegistryConfigReconcilerDaemonset(
+		ctx, registry, nodeRegistryAccessConfigMapName, "registries.json", registryConfigHash, runtime)
 	existingDaemonSet := &appsv1.DaemonSet{}
 	if err := r.Client.Get(ctx, client.ObjectKeyFromObject(desiredDaemonSet), existingDaemonSet); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -247,10 +257,19 @@ func (r *RegistryReconciler) reconcileSharedRegistryConfigDaemonSet(ctx context.
 		return resultNil, err
 	}
 
-	if existingDaemonSet.Spec.Template.Spec.Containers[0].Image != desiredDaemonSet.Spec.Template.Spec.Containers[0].Image {
-		updatedObj := existingDaemonSet.DeepCopy()
-		updatedObj.Spec.Template.Spec.Containers[0].Image = desiredDaemonSet.Spec.Template.Spec.Containers[0].Image
-		return resultRequeue, r.Client.Update(ctx, updatedObj)
+	existingImage := existingDaemonSet.Spec.Template.Spec.Containers[0].Image
+	existingHash := existingDaemonSet.Spec.Template.Annotations[reg.RegistryConfigHashAnnotation]
+	desiredImage := desiredDaemonSet.Spec.Template.Spec.Containers[0].Image
+	if existingImage != desiredImage || existingHash != registryConfigHash {
+		existingDaemonSet.Spec.Template.Spec.Containers[0].Image = desiredImage
+		if existingDaemonSet.Spec.Template.Annotations == nil {
+			existingDaemonSet.Spec.Template.Annotations = make(map[string]string)
+		}
+		existingDaemonSet.Spec.Template.Annotations[reg.RegistryConfigHashAnnotation] = registryConfigHash
+		if err := r.Client.Update(ctx, existingDaemonSet); err != nil {
+			return resultNil, err
+		}
+		return resultRequeue, nil
 	}
 
 	if existingDaemonSet.Status.DesiredNumberScheduled == existingDaemonSet.Status.NumberAvailable &&
@@ -258,8 +277,8 @@ func (r *RegistryReconciler) reconcileSharedRegistryConfigDaemonSet(ctx context.
 		meta.SetStatusCondition(&registry.Status.Conditions, metav1.Condition{
 			Type:               string(registryv1alpha1.RegistryReady),
 			Status:             metav1.ConditionTrue,
-			Reason:             "RegistryDeploymentAndServiceAvailable",
-			Message:            "Registry Deployment and Service are Available",
+			Reason:             "RegistryStatefulSetAndServiceAvailable",
+			Message:            "Registry StatefulSet and Service are Available",
 			ObservedGeneration: registry.Generation,
 		})
 		registry.Status.Phase = registryv1alpha1.RegistryPhaseRunning
@@ -398,49 +417,75 @@ func (r *RegistryReconciler) reconcileRegistryNamespace(ctx context.Context, reg
 	return resultNil, nil
 }
 
-func (r *RegistryReconciler) reconcileRegistryDeployment(ctx context.Context, registry *registryv1alpha1.ClusterRegistry) (subReconcilerResult, error) {
+func (r *RegistryReconciler) reconcileRegistryStatefulSet(ctx context.Context, registry *registryv1alpha1.ClusterRegistry) (subReconcilerResult, error) {
 	logger := log.FromContext(ctx)
-	desiredDeployment, err := r.registryBuilder.BuildDeployment(ctx, registry)
+	desiredSts, err := r.registryBuilder.BuildStatefulSet(ctx, registry)
 	if err != nil {
-		logger.Error(err, "failed to build registry deployment")
+		logger.Error(err, "failed to build registry statefulset")
 		return resultNil, err
 	}
-	if err := controllerutil.SetControllerReference(registry, desiredDeployment, r.Scheme); err != nil {
+	if err := controllerutil.SetControllerReference(registry, desiredSts, r.Scheme); err != nil {
 		return resultNil, err
 	}
 
-	existingDeployment := &appsv1.Deployment{}
-	if err := r.Client.Get(ctx, client.ObjectKeyFromObject(desiredDeployment), existingDeployment); err != nil {
+	existingSts := &appsv1.StatefulSet{}
+	if err := r.Client.Get(ctx, client.ObjectKeyFromObject(desiredSts), existingSts); err != nil {
 		if apierrors.IsNotFound(err) {
-			return resultRequeue, r.Client.Create(ctx, desiredDeployment)
+			return resultRequeue, r.Client.Create(ctx, desiredSts)
 		}
 		return resultNil, err
 	}
-	if err := r.Client.Patch(ctx, desiredDeployment, client.Apply, &client.PatchOptions{
+	if err := r.Client.Patch(ctx, desiredSts, client.Apply, &client.PatchOptions{
 		Force:        ptr.To(true),
 		FieldManager: registryController,
 	}); err != nil {
 		return resultNil, err
 	}
 
-	// Check if the deployment is ready
-	if controller.DeploymentAvailable(existingDeployment) {
+	if existingSts.Status.ReadyReplicas >= 1 && existingSts.Status.UpdatedReplicas >= 1 &&
+		existingSts.Status.CurrentRevision == existingSts.Status.UpdateRevision {
 		return resultNil, nil
 	}
 
 	meta.SetStatusCondition(&registry.Status.Conditions, metav1.Condition{
 		Type:               string(registryv1alpha1.RegistryReady),
 		Status:             metav1.ConditionFalse,
-		Reason:             "RegistryDeploymentNotReady",
-		Message:            "RegistryDeployment is not Available",
+		Reason:             "RegistryStatefulSetNotReady",
+		Message:            "Registry StatefulSet is not Available",
 		ObservedGeneration: registry.Generation,
 	})
 	registry.Status.InternalURL = ""
 	registry.Status.Phase = registryv1alpha1.RegistryPhasePending
 	registry.Status.ObservedGeneration = registry.Generation
 
-	// We will get requeued when deployment is ready.
 	return resultStop, nil
+}
+
+func (r *RegistryReconciler) reconcileRegistryHeadlessService(ctx context.Context, registry *registryv1alpha1.ClusterRegistry) (subReconcilerResult, error) {
+	desiredService, err := r.registryBuilder.BuildHeadlessService(ctx, registry)
+	if err != nil {
+		return resultNil, err
+	}
+
+	if err := controllerutil.SetControllerReference(registry, desiredService, r.Scheme); err != nil {
+		return resultNil, err
+	}
+
+	existingService := &corev1.Service{}
+	if err := r.Client.Get(ctx, client.ObjectKeyFromObject(desiredService), existingService); err != nil {
+		if apierrors.IsNotFound(err) {
+			return resultRequeue, r.Client.Create(ctx, desiredService)
+		}
+		return resultNil, err
+	}
+
+	if err := r.Client.Patch(ctx, desiredService, client.Apply, &client.PatchOptions{
+		Force:        ptr.To(true),
+		FieldManager: registryController,
+	}); err != nil {
+		return resultNil, err
+	}
+	return resultNil, nil
 }
 
 // reconcile svc for the registry
@@ -470,53 +515,6 @@ func (r *RegistryReconciler) reconcileRegistryService(ctx context.Context, regis
 	}
 	registry.Status.InternalURL = registryURL
 	registry.Status.ServiceIP = existingService.Spec.ClusterIP
-	return resultNil, nil
-}
-
-func (r *RegistryReconciler) reconcileRegistryStorage(ctx context.Context, registry *registryv1alpha1.ClusterRegistry) (subReconcilerResult, error) {
-	resourceSize, err := k8sresource.ParseQuantity(registry.Spec.Storage.Size)
-	if err != nil {
-		meta.SetStatusCondition(&registry.Status.Conditions, metav1.Condition{
-			Type:               string(registryv1alpha1.RegistryReady),
-			Status:             metav1.ConditionFalse,
-			Reason:             "RegistryStorageSizeParseError",
-			Message:            fmt.Sprintf("Failed to parse resource size in the resource: %v", err),
-			ObservedGeneration: registry.Generation,
-		})
-		registry.Status.InternalURL = ""
-		registry.Status.Phase = registryv1alpha1.RegistryPhasePending
-		registry.Status.ObservedGeneration = registry.Generation
-		return resultStop, nil
-	}
-
-	desiredPVC := corev1.PersistentVolumeClaim{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      registry.RegistryPVCName(),
-			Namespace: registryNamespace,
-		},
-		Spec: corev1.PersistentVolumeClaimSpec{
-			AccessModes: []corev1.PersistentVolumeAccessMode{
-				corev1.ReadWriteOnce,
-			},
-			Resources: corev1.VolumeResourceRequirements{
-				Requests: corev1.ResourceList{corev1.ResourceStorage: resourceSize},
-			},
-			StorageClassName: registry.Spec.Storage.StorageClass,
-		},
-	}
-	if err := controllerutil.SetOwnerReference(registry, &desiredPVC, r.Scheme); err != nil {
-		return resultNil, err
-	}
-
-	existingPVC := &corev1.PersistentVolumeClaim{}
-	if err := r.Client.Get(ctx, client.ObjectKeyFromObject(&desiredPVC), existingPVC); err != nil {
-		if apierrors.IsNotFound(err) {
-			return resultRequeue, r.Client.Create(ctx, &desiredPVC)
-		}
-		return resultNil, err
-	}
-
-	// TODO: Support volume expansion.
 	return resultNil, nil
 }
 
@@ -672,8 +670,7 @@ func (r *RegistryReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&registryv1alpha1.ClusterRegistry{}).
 		Owns(&corev1.ConfigMap{}).
 		Owns(&corev1.Service{}).
-		Owns(&corev1.PersistentVolumeClaim{}).
-		Owns(&appsv1.Deployment{}).
+		Owns(&appsv1.StatefulSet{}).
 		Watches(&appsv1.DaemonSet{}, handler.EnqueueRequestsFromMapFunc(
 			r.mapDaemonSetToRegistries,
 		)).

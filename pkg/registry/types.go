@@ -11,6 +11,7 @@ import (
 
 const (
 	RegistryConfigReconcilerDaemonSetName = "registry-config-reconciler"
+	RegistryConfigHashAnnotation         = "RegistryConfigHash"
 )
 
 type RuntimeType string
@@ -23,9 +24,10 @@ const (
 type RegistryBuilder interface {
 	Initialize(opts RegistryBuilderOpts) error
 	BuildConfigurationConfigMap(ctx context.Context, registry *registryv1alpha1.ClusterRegistry) (*corev1.ConfigMap, error)
-	BuildDeployment(ctx context.Context, registry *registryv1alpha1.ClusterRegistry) (*appsv1.Deployment, error)
+	BuildStatefulSet(ctx context.Context, registry *registryv1alpha1.ClusterRegistry) (*appsv1.StatefulSet, error)
 	BuildService(ctx context.Context, registry *registryv1alpha1.ClusterRegistry) (*corev1.Service, string, error)
-	BuildRegistryConfigReconcilerDaemonset(ctx context.Context, registry *registryv1alpha1.ClusterRegistry, registryConfigCMName string, registryConfigKey string, runtime RuntimeType) *appsv1.DaemonSet
+	BuildHeadlessService(ctx context.Context, registry *registryv1alpha1.ClusterRegistry) (*corev1.Service, error)
+	BuildRegistryConfigReconcilerDaemonset(ctx context.Context, registry *registryv1alpha1.ClusterRegistry, registryConfigCMName string, registryConfigKey string, registryConfigHash string, runtime RuntimeType) *appsv1.DaemonSet
 	BuildHTPasswordSecret(ctx context.Context, registry *registryv1alpha1.ClusterRegistry, username, password string) (*corev1.Secret, string, error)
 	ValidateConfiguration(ctx context.Context, registry *registryv1alpha1.ClusterRegistry) error
 }
