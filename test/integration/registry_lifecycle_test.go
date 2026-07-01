@@ -35,14 +35,14 @@ var _ = Describe("Registry Lifecycle", Ordered, func() {
 			Expect(helpers.ClusterRegistryHasCondition(bootstrapReg, string(registryv1alpha1.RegistryReady), metav1.ConditionTrue)).To(BeTrue())
 		})
 
-		It("should have the registry Deployment available", func() {
-			dep := &appsv1.Deployment{}
+		It("should have the registry StatefulSet available", func() {
+			sts := &appsv1.StatefulSet{}
 			err := c.Get(ctx, client.ObjectKey{
 				Name:      bootstrap.RegistryName,
 				Namespace: bootstrap.RegistryNamespace,
-			}, dep)
+			}, sts)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(dep.Status.AvailableReplicas).To(BeNumerically(">=", 1))
+			Expect(sts.Status.ReadyReplicas).To(BeNumerically(">=", 1))
 		})
 
 		It("should have the registry Service with a ClusterIP", func() {
@@ -55,10 +55,10 @@ var _ = Describe("Registry Lifecycle", Ordered, func() {
 			Expect(svc.Spec.ClusterIP).NotTo(BeEmpty())
 		})
 
-		It("should have the registry PVC", func() {
+		It("should have the registry PVC created by the StatefulSet", func() {
 			pvc := &corev1.PersistentVolumeClaim{}
 			err := c.Get(ctx, client.ObjectKey{
-				Name:      bootstrapReg.RegistryPVCName(),
+				Name:      "storage-" + bootstrap.RegistryName + "-0",
 				Namespace: bootstrap.RegistryNamespace,
 			}, pvc)
 			Expect(err).NotTo(HaveOccurred())
@@ -120,14 +120,14 @@ var _ = Describe("Registry Lifecycle", Ordered, func() {
 	})
 
 	Context("Registry credential stability", Ordered, func() {
-		It("should not trigger spurious Deployment rollouts on reconcile", func() {
-			dep := &appsv1.Deployment{}
+		It("should not trigger spurious StatefulSet rollouts on reconcile", func() {
+			sts := &appsv1.StatefulSet{}
 			err := c.Get(ctx, client.ObjectKey{
 				Name:      bootstrap.RegistryName,
 				Namespace: bootstrap.RegistryNamespace,
-			}, dep)
+			}, sts)
 			Expect(err).NotTo(HaveOccurred())
-			initialVersion := dep.ResourceVersion
+			initialVersion := sts.ResourceVersion
 
 			By("Waiting 30 seconds for multiple reconcile loops")
 			time.Sleep(30 * time.Second)
@@ -135,10 +135,10 @@ var _ = Describe("Registry Lifecycle", Ordered, func() {
 			err = c.Get(ctx, client.ObjectKey{
 				Name:      bootstrap.RegistryName,
 				Namespace: bootstrap.RegistryNamespace,
-			}, dep)
+			}, sts)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(dep.ResourceVersion).To(Equal(initialVersion),
-				"Deployment ResourceVersion should not change across reconcile loops (bcrypt stability fix)")
+			Expect(sts.ResourceVersion).To(Equal(initialVersion),
+				"StatefulSet ResourceVersion should not change across reconcile loops (bcrypt stability fix)")
 		})
 	})
 
