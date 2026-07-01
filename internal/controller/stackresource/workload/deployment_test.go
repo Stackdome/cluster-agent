@@ -1,4 +1,4 @@
-package stackresource
+package workload
 
 import (
 	"context"
@@ -11,6 +11,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -20,12 +21,111 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	"stackdome.io/cluster-agent/api/core/v1alpha1"
+	"stackdome.io/cluster-agent/internal/controller"
 	"stackdome.io/cluster-agent/internal/controller/mocks"
 )
 
 func TestWorkloadReconciler(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "Workload Reconciler Suite")
+}
+
+// testStatusReporter implements StatusReporter for unit tests, reproducing
+// the same status mutations as the real helpers in stackresource_controller.go.
+type testStatusReporter struct{}
+
+func (testStatusReporter) ReportReady(r *v1alpha1.StackResource) {
+	r.Status.ObservedGeneration = r.Generation
+	if r.Spec.BuildSpec != nil {
+		r.Status.ImageSourceRevision = r.Spec.BuildSpec.SourceRevision.GetSourceRevisionString()
+	}
+	if rev, ok := r.Annotations[v1alpha1.RevisionAnnotation]; ok {
+		r.Status.ObservedRevision = rev
+	}
+	r.Status.Phase = v1alpha1.StackResourcePhaseReady
+	meta.SetStatusCondition(&r.Status.Conditions, metav1.Condition{
+		Type:               string(v1alpha1.StackResourceStatusAvailable),
+		Status:             metav1.ConditionTrue,
+		ObservedGeneration: r.Generation,
+		Reason:             "StackResourceAvailable",
+		Message:            "StackResource is available",
+	})
+	meta.SetStatusCondition(&r.Status.Conditions, metav1.Condition{
+		Type:               string(v1alpha1.StackResourceStalled),
+		Status:             metav1.ConditionFalse,
+		ObservedGeneration: r.Generation,
+		Reason:             "StackResourceAvailable",
+		Message:            "StackResource is available",
+	})
+	r.Status.StatusHash = r.StatusHash()
+}
+
+func (testStatusReporter) ReportNotReady(r *v1alpha1.StackResource, reason, msg string) {
+	objectRevision, ok := r.Annotations[v1alpha1.RevisionAnnotation]
+	if ok {
+		r.Status.ObservedRevision = objectRevision
+	}
+	r.Status.ObservedGeneration = r.Generation
+	r.Status.Phase = v1alpha1.StackResourcePhasePending
+	meta.SetStatusCondition(&r.Status.Conditions, metav1.Condition{
+		Type:               string(v1alpha1.StackResourceStatusAvailable),
+		Status:             metav1.ConditionFalse,
+		ObservedGeneration: r.Generation,
+		Reason:             reason,
+		Message:            msg,
+	})
+	meta.SetStatusCondition(&r.Status.Conditions, metav1.Condition{
+		Type:               string(v1alpha1.StackResourceConverged),
+		Status:             metav1.ConditionFalse,
+		ObservedGeneration: r.Generation,
+		Reason:             reason,
+		Message:            msg,
+	})
+	r.Status.StatusHash = r.StatusHash()
+}
+
+func (testStatusReporter) ReportFailed(r *v1alpha1.StackResource, reason, msg string) {
+	r.Status.ObservedGeneration = r.Generation
+	if rev, ok := r.Annotations[v1alpha1.RevisionAnnotation]; ok {
+		r.Status.ObservedRevision = rev
+	}
+	r.Status.Phase = v1alpha1.StackResourcePhaseFailed
+	meta.SetStatusCondition(&r.Status.Conditions, metav1.Condition{
+		Type:               string(v1alpha1.StackResourceStatusAvailable),
+		Status:             metav1.ConditionFalse,
+		ObservedGeneration: r.Generation,
+		Reason:             reason,
+		Message:            msg,
+	})
+	meta.SetStatusCondition(&r.Status.Conditions, metav1.Condition{
+		Type:               string(v1alpha1.StackResourceStalled),
+		Status:             metav1.ConditionTrue,
+		ObservedGeneration: r.Generation,
+		Reason:             reason,
+		Message:            msg,
+	})
+	meta.SetStatusCondition(&r.Status.Conditions, metav1.Condition{
+		Type:               string(v1alpha1.StackResourceConverged),
+		Status:             metav1.ConditionFalse,
+		ObservedGeneration: r.Generation,
+		Reason:             reason,
+		Message:            msg,
+	})
+	r.Status.StatusHash = r.StatusHash()
+}
+
+func (testStatusReporter) SetCondition(r *v1alpha1.StackResource, condType v1alpha1.StackResourceStatusCondition, ready bool, reason, msg string) {
+	condStatus := metav1.ConditionFalse
+	if ready {
+		condStatus = metav1.ConditionTrue
+	}
+	meta.SetStatusCondition(&r.Status.Conditions, metav1.Condition{
+		Type:               string(condType),
+		Status:             condStatus,
+		ObservedGeneration: r.Generation,
+		Reason:             reason,
+		Message:            msg,
+	})
 }
 
 func newTestResource() *v1alpha1.StackResource {
@@ -270,13 +370,22 @@ func setupCrashingPods(mockUncached *mocks.MockClient, revision string) {
 		})
 }
 
+func findCondition(conditions []metav1.Condition, condType string) *metav1.Condition {
+	for i := range conditions {
+		if conditions[i].Type == condType {
+			return &conditions[i]
+		}
+	}
+	return nil
+}
+
 var _ = Describe("workloadReconciler", func() {
 	var (
 		mockCtrl     *gomock.Controller
 		mockClient   *mocks.MockClient
 		mockUncached *mocks.MockClient
 		mockDepCheck *mocks.MockDependencyChecker
-		reconciler   *workloadReconciler
+		reconciler   *Reconciler
 		resource     *v1alpha1.StackResource
 		ctx          context.Context
 		scheme       *runtime.Scheme
@@ -296,11 +405,12 @@ var _ = Describe("workloadReconciler", func() {
 
 		resource = newTestResource()
 
-		reconciler = &workloadReconciler{
+		reconciler = &Reconciler{
 			Client:            mockClient,
 			Scheme:            scheme,
 			DependencyChecker: mockDepCheck,
-			uncachedClient:    mockUncached,
+			UncachedClient:    mockUncached,
+			Status:            testStatusReporter{},
 		}
 
 		mockDepCheck.EXPECT().DependenciesAvailable(gomock.Any(), gomock.Any()).
@@ -322,7 +432,7 @@ var _ = Describe("workloadReconciler", func() {
 			mockUncached = mocks.NewMockClient(mockCtrl)
 			mockDepCheck = mocks.NewMockDependencyChecker(mockCtrl)
 			reconciler.Client = mockClient
-			reconciler.uncachedClient = mockUncached
+			reconciler.UncachedClient = mockUncached
 			reconciler.DependencyChecker = mockDepCheck
 		})
 
@@ -330,11 +440,11 @@ var _ = Describe("workloadReconciler", func() {
 			mockDepCheck.EXPECT().DependenciesAvailable(gomock.Any(), gomock.Any()).
 				Return(false, "waiting for db", nil)
 
-			result, err := reconciler.reconcile(ctx, resource)
+			result, err := reconciler.Reconcile(ctx, resource)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.resultRequeueAfter).NotTo(BeNil())
-			Expect(*result.resultRequeueAfter).To(Equal(DefaultRequeueTime))
+			Expect(result.ResultRequeueAfter).NotTo(BeNil())
+			Expect(*result.ResultRequeueAfter).To(Equal(DefaultRequeueTime))
 			Expect(resource.Status.Phase).To(Equal(v1alpha1.StackResourcePhasePending))
 		})
 
@@ -344,11 +454,11 @@ var _ = Describe("workloadReconciler", func() {
 			mockDepCheck.EXPECT().VolumeMountsReadyForUse(gomock.Any(), gomock.Any()).
 				Return(false, "volume not synced", nil)
 
-			result, err := reconciler.reconcile(ctx, resource)
+			result, err := reconciler.Reconcile(ctx, resource)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.resultRequeueAfter).NotTo(BeNil())
-			Expect(*result.resultRequeueAfter).To(Equal(DefaultRequeueTime))
+			Expect(result.ResultRequeueAfter).NotTo(BeNil())
+			Expect(*result.ResultRequeueAfter).To(Equal(DefaultRequeueTime))
 			Expect(resource.Status.Phase).To(Equal(v1alpha1.StackResourcePhasePending))
 		})
 	})
@@ -368,7 +478,7 @@ var _ = Describe("workloadReconciler", func() {
 					Expect(d.Spec.Template.Spec.Containers[0].Image).To(Equal("busybox:latest"))
 					Expect(d.Spec.Template.Spec.Containers[0].Name).To(Equal("test-resource"))
 					Expect(*d.Spec.ProgressDeadlineSeconds).To(Equal(int32(300)))
-					Expect(d.Spec.MinReadySeconds).To(Equal(int32(deploymentMinReadySeconds)))
+					Expect(d.Spec.MinReadySeconds).To(Equal(int32(workloadMinReadySeconds)))
 					// Simulate k8s populating the deployment after creation
 					d.Generation = 1
 					d.Annotations = map[string]string{deploymentRevisionAnnotation: "1"}
@@ -383,10 +493,10 @@ var _ = Describe("workloadReconciler", func() {
 					return nil
 				})
 
-			result, err := reconciler.reconcile(ctx, resource)
+			result, err := reconciler.Reconcile(ctx, resource)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result).To(Equal(resultNil))
+			Expect(result).To(Equal(controller.ResultNil))
 		})
 
 		It("should not call update when deployment spec is unchanged", func() {
@@ -413,7 +523,7 @@ var _ = Describe("workloadReconciler", func() {
 						},
 					},
 					ProgressDeadlineSeconds: ptr.To(int32(300)),
-					MinReadySeconds:         deploymentMinReadySeconds,
+					MinReadySeconds:         workloadMinReadySeconds,
 					Template: corev1.PodTemplateSpec{
 						ObjectMeta: metav1.ObjectMeta{
 							Labels: map[string]string{"resource": "test-resource"},
@@ -455,10 +565,10 @@ var _ = Describe("workloadReconciler", func() {
 			// Update should NOT be called — the deployment is already up to date.
 			// gomock will fail if Update is called unexpectedly.
 
-			result, err := reconciler.reconcile(ctx, resource)
+			result, err := reconciler.Reconcile(ctx, resource)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result).To(Equal(resultNil))
+			Expect(result).To(Equal(controller.ResultNil))
 		})
 
 		It("should call update when image changes", func() {
@@ -484,7 +594,7 @@ var _ = Describe("workloadReconciler", func() {
 						},
 					},
 					ProgressDeadlineSeconds: ptr.To(int32(300)),
-					MinReadySeconds:         deploymentMinReadySeconds,
+					MinReadySeconds:         workloadMinReadySeconds,
 					Template: corev1.PodTemplateSpec{
 						ObjectMeta: metav1.ObjectMeta{
 							Labels: map[string]string{"resource": "test-resource"},
@@ -530,10 +640,10 @@ var _ = Describe("workloadReconciler", func() {
 					return nil
 				})
 
-			result, err := reconciler.reconcile(ctx, resource)
+			result, err := reconciler.Reconcile(ctx, resource)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result).To(Equal(resultNil))
+			Expect(result).To(Equal(controller.ResultNil))
 		})
 	})
 
@@ -545,10 +655,10 @@ var _ = Describe("workloadReconciler", func() {
 
 			setupCreateOrUpdate(mockClient, availableDeployment("1"))
 
-			result, err := reconciler.reconcile(ctx, resource)
+			result, err := reconciler.Reconcile(ctx, resource)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result).To(Equal(resultNil))
+			Expect(result).To(Equal(controller.ResultNil))
 			Expect(resource.Status.LastFailureDetails).To(BeNil())
 		})
 
@@ -564,7 +674,7 @@ var _ = Describe("workloadReconciler", func() {
 
 			setupCreateOrUpdate(mockClient, availableDeployment("1"))
 
-			_, err := reconciler.reconcile(ctx, resource)
+			_, err := reconciler.Reconcile(ctx, resource)
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(resource.Status.LastFailureDetails).To(BeNil())
@@ -577,11 +687,11 @@ var _ = Describe("workloadReconciler", func() {
 			setupCreateOrUpdate(mockClient, notReadyDeployment("1"))
 			setupEmptyUncachedList(mockUncached)
 
-			result, err := reconciler.reconcile(ctx, resource)
+			result, err := reconciler.Reconcile(ctx, resource)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.resultRequeueAfter).NotTo(BeNil())
-			Expect(*result.resultRequeueAfter).To(Equal(10 * time.Second))
+			Expect(result.ResultRequeueAfter).NotTo(BeNil())
+			Expect(*result.ResultRequeueAfter).To(Equal(10 * time.Second))
 			Expect(resource.Status.Phase).To(Equal(v1alpha1.StackResourcePhasePending))
 		})
 
@@ -589,10 +699,10 @@ var _ = Describe("workloadReconciler", func() {
 			setupCreateOrUpdate(mockClient, notReadyDeployment("1"))
 			setupCrashingPods(mockUncached, "1")
 
-			result, err := reconciler.reconcile(ctx, resource)
+			result, err := reconciler.Reconcile(ctx, resource)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.resultRequeueAfter).NotTo(BeNil())
+			Expect(result.ResultRequeueAfter).NotTo(BeNil())
 			Expect(resource.Status.LastFailureDetails).To(HaveLen(1))
 			Expect(resource.Status.LastFailureDetails[0].ContainerName).To(Equal("test-resource"))
 			Expect(resource.Status.LastFailureDetails[0].LastTerminationReason).To(Equal("Error"))
@@ -608,10 +718,10 @@ var _ = Describe("workloadReconciler", func() {
 			setupCreateOrUpdate(mockClient, notReadyDeployment("1"))
 			// No uncached client expectations — capture should be skipped
 
-			result, err := reconciler.reconcile(ctx, resource)
+			result, err := reconciler.Reconcile(ctx, resource)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.resultRequeueAfter).NotTo(BeNil())
+			Expect(result.ResultRequeueAfter).NotTo(BeNil())
 			Expect(resource.Status.LastFailureDetails).To(HaveLen(1))
 		})
 
@@ -624,10 +734,10 @@ var _ = Describe("workloadReconciler", func() {
 			setupCreateOrUpdate(mockClient, notReadyDeployment("2"))
 			setupCrashingPods(mockUncached, "2")
 
-			result, err := reconciler.reconcile(ctx, resource)
+			result, err := reconciler.Reconcile(ctx, resource)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.resultRequeueAfter).NotTo(BeNil())
+			Expect(result.ResultRequeueAfter).NotTo(BeNil())
 			Expect(resource.Status.LastFailureDetails).To(HaveLen(1))
 			Expect(resource.Status.LastFailureDetails[0].ContainerName).To(Equal("test-resource"))
 			Expect(resource.Status.LastFailureDeploymentRevision).To(Equal("2"))
@@ -639,20 +749,20 @@ var _ = Describe("workloadReconciler", func() {
 			setupCreateOrUpdate(mockClient, settledDeployment("1"))
 			setupEmptyUncachedList(mockUncached)
 
-			result, err := reconciler.reconcile(ctx, resource)
+			result, err := reconciler.Reconcile(ctx, resource)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result).To(Equal(resultStop))
+			Expect(result).To(Equal(controller.ResultStop))
 		})
 
 		It("should stop on ProgressDeadlineExceeded", func() {
 			setupCreateOrUpdate(mockClient, progressDeadlineExceededDeployment("1"))
 			setupEmptyUncachedList(mockUncached)
 
-			result, err := reconciler.reconcile(ctx, resource)
+			result, err := reconciler.Reconcile(ctx, resource)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result).To(Equal(resultStop))
+			Expect(result).To(Equal(controller.ResultStop))
 		})
 
 		It("should keep generic reason when no old replicas are serving", func() {
@@ -664,10 +774,10 @@ var _ = Describe("workloadReconciler", func() {
 			setupCreateOrUpdate(mockClient, deploy)
 			setupEmptyUncachedList(mockUncached)
 
-			result, err := reconciler.reconcile(ctx, resource)
+			result, err := reconciler.Reconcile(ctx, resource)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result).To(Equal(resultStop))
+			Expect(result).To(Equal(controller.ResultStop))
 
 			cond := findCondition(resource.Status.Conditions, string(v1alpha1.StackResourceStatusAvailable))
 			Expect(cond).NotTo(BeNil())
@@ -691,10 +801,10 @@ var _ = Describe("workloadReconciler", func() {
 			setupCreateOrUpdate(mockClient, deploy)
 			setupCrashingPods(mockUncached, "2")
 
-			result, err := reconciler.reconcile(ctx, resource)
+			result, err := reconciler.Reconcile(ctx, resource)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result).To(Equal(resultNil), "should pass through to svc reconciler")
+			Expect(result).To(Equal(controller.ResultNil), "should pass through to svc reconciler")
 
 			workloadCond := findCondition(resource.Status.Conditions, string(v1alpha1.StackResourceWorkloadAvailable))
 			Expect(workloadCond).NotTo(BeNil())
@@ -733,10 +843,10 @@ var _ = Describe("workloadReconciler", func() {
 			setupCreateOrUpdate(mockClient, deploy)
 			setupImagePullBackOffPods(mockUncached, "2")
 
-			result, err := reconciler.reconcile(ctx, resource)
+			result, err := reconciler.Reconcile(ctx, resource)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result).To(Equal(resultNil))
+			Expect(result).To(Equal(controller.ResultNil))
 
 			convergedCond := findCondition(resource.Status.Conditions, string(v1alpha1.StackResourceConverged))
 			Expect(convergedCond).NotTo(BeNil())
@@ -758,10 +868,10 @@ var _ = Describe("workloadReconciler", func() {
 
 			setupCreateOrUpdate(mockClient, notReadyDeployment("1"))
 
-			result, err := reconciler.reconcile(ctx, resource)
+			result, err := reconciler.Reconcile(ctx, resource)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result).To(Equal(resultStop))
+			Expect(result).To(Equal(controller.ResultStop))
 			Expect(resource.Status.LastRestartRequestProcessedAt).NotTo(BeNil())
 		})
 
@@ -774,10 +884,10 @@ var _ = Describe("workloadReconciler", func() {
 			deploy := availableDeployment("1")
 			setupCreateOrUpdate(mockClient, deploy)
 
-			result, err := reconciler.reconcile(ctx, resource)
+			result, err := reconciler.Reconcile(ctx, resource)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result).To(Equal(resultNil))
+			Expect(result).To(Equal(controller.ResultNil))
 		})
 	})
 
@@ -791,10 +901,10 @@ var _ = Describe("workloadReconciler", func() {
 			setupCreateOrUpdate(mockClient, notReadyDeployment("2"))
 			setupCrashingPods(mockUncached, "2")
 
-			result, err := reconciler.reconcile(ctx, resource)
+			result, err := reconciler.Reconcile(ctx, resource)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.resultRequeueAfter).NotTo(BeNil())
+			Expect(result.ResultRequeueAfter).NotTo(BeNil())
 			Expect(resource.Status.LastFailureDeploymentRevision).To(Equal("2"))
 			Expect(resource.Status.LastFailureDetails[0].ContainerName).To(Equal("test-resource"))
 		})
@@ -818,11 +928,11 @@ var _ = Describe("workloadReconciler", func() {
 			setupCreateOrUpdate(mockClient, deploy)
 			setupEmptyUncachedList(mockUncached)
 
-			result, err := reconciler.reconcile(ctx, resource)
+			result, err := reconciler.Reconcile(ctx, resource)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.resultRequeueAfter).NotTo(BeNil())
-			Expect(*result.resultRequeueAfter).To(Equal(10 * time.Second))
+			Expect(result.ResultRequeueAfter).NotTo(BeNil())
+			Expect(*result.ResultRequeueAfter).To(Equal(10 * time.Second))
 		})
 
 		It("should stop after grace period expires", func() {
@@ -842,10 +952,10 @@ var _ = Describe("workloadReconciler", func() {
 			setupCreateOrUpdate(mockClient, deploy)
 			setupEmptyUncachedList(mockUncached)
 
-			result, err := reconciler.reconcile(ctx, resource)
+			result, err := reconciler.Reconcile(ctx, resource)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result).To(Equal(resultStop))
+			Expect(result).To(Equal(controller.ResultStop))
 		})
 	})
 
@@ -948,10 +1058,10 @@ var _ = Describe("workloadReconciler", func() {
 
 			setupCreateOrUpdate(mockClient, notReadyDeployment("1"))
 
-			result, err := reconciler.reconcile(ctx, resource)
+			result, err := reconciler.Reconcile(ctx, resource)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.resultRequeueAfter).NotTo(BeNil())
+			Expect(result.ResultRequeueAfter).NotTo(BeNil())
 			Expect(resource.Status.LastFailureDetails).To(HaveLen(1))
 			Expect(resource.Status.LastFailureDetails[0].LastTerminationMessage).To(Equal("INFO error building imagefailed"))
 		})

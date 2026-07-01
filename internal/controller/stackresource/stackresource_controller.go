@@ -5,7 +5,9 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -22,27 +24,18 @@ import (
 	"stackdome.io/cluster-agent/api/core/v1alpha1"
 	storagev1alpha1 "stackdome.io/cluster-agent/api/storage/v1alpha1"
 	"stackdome.io/cluster-agent/internal/controller"
+	"stackdome.io/cluster-agent/internal/controller/stackresource/workload"
 )
 
-type subReconcilerResult struct {
-	resultNil            bool
-	resultStop           bool
-	resultRequeue        bool
-	resultRequeueAfter   *time.Duration
-	deferredRequeueAfter *time.Duration
-}
+type subReconcilerResult = controller.SubReconcilerResult
 
 var (
-	resultNil          = subReconcilerResult{resultNil: true}
-	resultStop         = subReconcilerResult{resultStop: true}
-	resultRequeue      = subReconcilerResult{resultRequeue: true}
-	resultRequeueAfter = func(t time.Duration) subReconcilerResult {
-		return subReconcilerResult{resultRequeueAfter: &t}
-	}
-	resultContinue        = resultNil // alias: continue to next sub-reconciler
-	resultDeferredRequeue = func(t time.Duration) subReconcilerResult {
-		return subReconcilerResult{deferredRequeueAfter: &t}
-	}
+	resultNil             = controller.ResultNil
+	resultStop            = controller.ResultStop
+	resultRequeue         = controller.ResultRequeue
+	resultContinue        = controller.ResultContinue
+	resultRequeueAfter    = controller.ResultRequeueAfter
+	resultDeferredRequeue = controller.ResultDeferredRequeue
 )
 
 type subReconciler interface {
@@ -104,11 +97,11 @@ func (r *StackResourceReconciler) reconcile(ctx context.Context, resource *v1alp
 			return ctrl.Result{}, nil
 		case subReconcilerRes == resultRequeue:
 			return ctrl.Result{Requeue: true}, nil
-		case subReconcilerRes.resultRequeueAfter != nil:
-			return ctrl.Result{RequeueAfter: *subReconcilerRes.resultRequeueAfter}, nil
+		case subReconcilerRes.ResultRequeueAfter != nil:
+			return ctrl.Result{RequeueAfter: *subReconcilerRes.ResultRequeueAfter}, nil
 		}
-		if subReconcilerRes.deferredRequeueAfter != nil {
-			deferredRequeue = subReconcilerRes.deferredRequeueAfter
+		if subReconcilerRes.DeferredRequeueAfter != nil {
+			deferredRequeue = subReconcilerRes.DeferredRequeueAfter
 		}
 	}
 	if deferredRequeue != nil {
@@ -277,6 +270,25 @@ func stackResourceAvailable(resource *v1alpha1.StackResource) bool {
 	return false
 }
 
+type workloadSubReconciler struct{ inner *workload.Reconciler }
+
+func (w workloadSubReconciler) reconcile(ctx context.Context, r *v1alpha1.StackResource) (subReconcilerResult, error) {
+	return w.inner.Reconcile(ctx, r)
+}
+
+type defaultStatusReporter struct{}
+
+func (defaultStatusReporter) ReportReady(r *v1alpha1.StackResource) { reportStackResourceReady(r) }
+func (defaultStatusReporter) ReportNotReady(r *v1alpha1.StackResource, reason, msg string) {
+	reportStackResourceNotReady(r, reason, msg)
+}
+func (defaultStatusReporter) ReportFailed(r *v1alpha1.StackResource, reason, msg string) {
+	reportStackResourceFailed(r, reason, msg)
+}
+func (defaultStatusReporter) SetCondition(r *v1alpha1.StackResource, t v1alpha1.StackResourceStatusCondition, ready bool, reason, msg string) {
+	setResourceCondition(r, t, ready, reason, msg)
+}
+
 func NewStackResourceReconciler(client client.Client, scheme *runtime.Scheme, uncachedClient client.Client, imageBuildHistoryLimit int) *StackResourceReconciler {
 	w := &StackResourceReconciler{
 		Client: client,
@@ -296,12 +308,7 @@ func NewStackResourceReconciler(client client.Client, scheme *runtime.Scheme, un
 			scheme:       scheme,
 			historyLimit: imageBuildHistoryLimit,
 		},
-		&workloadReconciler{
-			Client:            client,
-			Scheme:            scheme,
-			DependencyChecker: depChecker,
-			uncachedClient:    uncachedClient,
-		},
+		workloadSubReconciler{inner: workload.NewReconciler(client, scheme, depChecker, uncachedClient, defaultStatusReporter{})},
 		&svcReconciler{
 			Client: client,
 			Scheme: scheme,
@@ -329,7 +336,11 @@ func (r *StackResourceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&v1alpha1.StackResource{}).
 		Watches(&buildsv1alpha1.ImageBuild{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &v1alpha1.StackResource{})).
 		Watches(&corev1.Service{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &v1alpha1.StackResource{})).
+		Watches(&networkingv1.Ingress{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &v1alpha1.StackResource{})).
 		Watches(&appsv1.Deployment{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &v1alpha1.StackResource{})).
+		Watches(&appsv1.StatefulSet{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &v1alpha1.StackResource{})).
+		Watches(&batchv1.Job{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &v1alpha1.StackResource{})).
+		Watches(&batchv1.CronJob{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &v1alpha1.StackResource{})).
 		Watches(&storagev1alpha1.Volume{}, handler.EnqueueRequestsFromMapFunc(
 			func(ctx context.Context, o client.Object) []reconcile.Request {
 				volume := o.(*storagev1alpha1.Volume)

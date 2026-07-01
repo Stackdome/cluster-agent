@@ -1,4 +1,4 @@
-package stackresource
+package workload
 
 import (
 	"context"
@@ -15,7 +15,7 @@ import (
 )
 
 func captureLastFailureDetails(ctx context.Context, uncachedClient client.Client, resource *v1alpha1.StackResource, deploymentRevision string) ([]v1alpha1.LastFailureDetail, error) {
-	labels := GetDeploymentLabelForResource(resource)
+	labels := GetWorkloadLabelForResource(resource)
 	replicaSetList := &appsv1.ReplicaSetList{}
 	err := uncachedClient.List(ctx, replicaSetList, client.InNamespace(resource.Namespace), client.MatchingLabels(map[string]string{
 		"resource": labels["resource"],
@@ -82,4 +82,42 @@ func hasAnyCrashingContainer(pod *corev1.Pod) bool {
 
 	return slices.ContainsFunc(pod.Status.ContainerStatuses, isCrashing) ||
 		slices.ContainsFunc(pod.Status.InitContainerStatuses, isCrashing)
+}
+
+// capturePodFailureDetailsOnce records the newest crashing pod's failure details,
+// deduped on failureKey to avoid repeated uncached list calls across reconciles.
+// Shared by StatefulSet, Job, and CronJob.
+func (r *Reconciler) capturePodFailureDetailsOnce(ctx context.Context, resource *v1alpha1.StackResource, failureKey string) {
+	if failureKey == "" || resource.Status.LastFailureDeploymentRevision == failureKey {
+		return
+	}
+	details, err := capturePodFailureDetails(ctx, r.UncachedClient, resource)
+	if err != nil {
+		controller.LoggerFromContext(ctx).Error(err, "failed to capture pod failure details")
+	}
+	resource.Status.LastFailureDetails = details
+	if len(details) > 0 {
+		resource.Status.LastFailureDeploymentRevision = failureKey
+	}
+}
+
+func capturePodFailureDetails(ctx context.Context, uncached client.Client, resource *v1alpha1.StackResource) ([]v1alpha1.LastFailureDetail, error) {
+	podList := &corev1.PodList{}
+	if err := uncached.List(ctx, podList, client.InNamespace(resource.Namespace),
+		client.MatchingLabels(GetWorkloadLabelForResource(resource))); err != nil {
+		return nil, fmt.Errorf("failed to list pods: %w", err)
+	}
+	slices.SortFunc(podList.Items, func(a, b corev1.Pod) int { return b.CreationTimestamp.Compare(a.CreationTimestamp.Time) })
+	crashing, found := lo.Find(podList.Items, func(p corev1.Pod) bool { return hasAnyCrashingContainer(&p) })
+	if !found {
+		return nil, nil
+	}
+	var details []v1alpha1.LastFailureDetail
+	all := append(append([]corev1.ContainerStatus{}, crashing.Status.InitContainerStatuses...), crashing.Status.ContainerStatuses...)
+	for _, cs := range all {
+		if controller.IsCrashState(cs) {
+			details = append(details, controller.BuildLastFailureDetail(cs))
+		}
+	}
+	return details, nil
 }

@@ -1,4 +1,4 @@
-package stackresource
+package workload
 
 import (
 	"testing"
