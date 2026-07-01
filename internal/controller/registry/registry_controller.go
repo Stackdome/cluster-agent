@@ -442,7 +442,8 @@ func (r *RegistryReconciler) reconcileRegistryStatefulSet(ctx context.Context, r
 		return resultNil, err
 	}
 
-	if existingSts.Status.ReadyReplicas >= 1 {
+	if existingSts.Status.ReadyReplicas >= 1 && existingSts.Status.UpdatedReplicas >= 1 &&
+		existingSts.Status.CurrentRevision == existingSts.Status.UpdateRevision {
 		return resultNil, nil
 	}
 
