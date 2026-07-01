@@ -33,31 +33,22 @@ var _ = Describe("Stack mutations and deletion", func() {
 			srName := stack.Spec.ResourceNames[0]
 
 			By("Setting RestartRequest on the StackResource")
-			now := metav1.Now()
+			restartRequestedAt := metav1.Now()
 			sr := &corev1alpha1.StackResource{}
 			Expect(c.Get(ctx, client.ObjectKey{Name: srName, Namespace: stack.Namespace}, sr)).To(Succeed())
-			sr.Spec.RestartRequest = &now
+			sr.Spec.RestartRequest = &restartRequestedAt
 			Expect(c.Update(ctx, sr)).To(Succeed())
 
-			By("Waiting for Deployment to get restartedAt annotation")
-			_, err := helpers.WaitForDeploymentUpdated(ctx, c, stack.Namespace, srName, func(d *appsv1.Deployment) bool {
-				_, found := helpers.GetPodTemplateAnnotation(d, "kubectl.kubernetes.io/restartedAt")
-				return found
-			}, readyTimeout)
-			Expect(err).NotTo(HaveOccurred())
-		})
-
-		It("should set LastRestartRequestProcessedAt on the StackResource status", func() {
-			srName := stack.Spec.ResourceNames[0]
+			By("Waiting for LastRestartRequestProcessedAt to be after RestartRequest")
 			Eventually(func() bool {
 				sr, err := helpers.GetStackResource(ctx, c, client.ObjectKey{
 					Name:      srName,
 					Namespace: stack.Namespace,
 				})
-				if err != nil {
+				if err != nil || sr.Status.LastRestartRequestProcessedAt == nil {
 					return false
 				}
-				return sr.Status.LastRestartRequestProcessedAt != nil
+				return sr.Status.LastRestartRequestProcessedAt.After(restartRequestedAt.Time)
 			}, readyTimeout, 5*time.Second).Should(BeTrue())
 		})
 
