@@ -68,7 +68,7 @@ func newTestRegistry(name string, port int32) *registryv1alpha1.ClusterRegistry 
 func TestBuildRegistryConfigReconcilerDaemonset_Security(t *testing.T) {
 	builder := newTestBuilder(t)
 	reg := newTestRegistry("test-reg", 5000)
-	ds := builder.BuildRegistryConfigReconcilerDaemonset(context.Background(), reg, "test-cm", "registries.json", registry.RuntimeContainerd)
+	ds := builder.BuildRegistryConfigReconcilerDaemonset(context.Background(), reg, "test-cm", "registries.json", "testhash", registry.RuntimeContainerd)
 
 	podSpec := ds.Spec.Template.Spec
 	if !podSpec.HostPID {
@@ -102,7 +102,7 @@ func TestBuildRegistryConfigReconcilerDaemonset_Security(t *testing.T) {
 func TestBuildRegistryConfigReconcilerDaemonset_Labels(t *testing.T) {
 	builder := newTestBuilder(t)
 	reg := newTestRegistry("test-reg", 5000)
-	ds := builder.BuildRegistryConfigReconcilerDaemonset(context.Background(), reg, "test-cm", "registries.json", registry.RuntimeContainerd)
+	ds := builder.BuildRegistryConfigReconcilerDaemonset(context.Background(), reg, "test-cm", "registries.json", "testhash", registry.RuntimeContainerd)
 
 	selectorLabels := ds.Spec.Selector.MatchLabels
 	if _, ok := selectorLabels["demonset-for"]; ok {
@@ -121,7 +121,7 @@ func TestBuildRegistryConfigReconcilerDaemonset_Labels(t *testing.T) {
 func TestBuildRegistryConfigReconcilerDaemonset_Name(t *testing.T) {
 	builder := newTestBuilder(t)
 	reg := newTestRegistry("test-reg", 5000)
-	ds := builder.BuildRegistryConfigReconcilerDaemonset(context.Background(), reg, "test-cm", "registries.json", registry.RuntimeContainerd)
+	ds := builder.BuildRegistryConfigReconcilerDaemonset(context.Background(), reg, "test-cm", "registries.json", "testhash", registry.RuntimeContainerd)
 
 	if ds.Name != registry.RegistryConfigReconcilerDaemonSetName {
 		t.Errorf("DaemonSet name should be %q, got %q", registry.RegistryConfigReconcilerDaemonSetName, ds.Name)
@@ -193,7 +193,7 @@ func TestBuildService(t *testing.T) {
 func TestBuildRegistryConfigReconcilerDaemonset_ContainerdRuntime(t *testing.T) {
 	builder := newTestBuilder(t)
 	reg := newTestRegistry("test-reg", 5000)
-	ds := builder.BuildRegistryConfigReconcilerDaemonset(context.Background(), reg, "test-cm", "registries.json", registry.RuntimeContainerd)
+	ds := builder.BuildRegistryConfigReconcilerDaemonset(context.Background(), reg, "test-cm", "registries.json", "testhash", registry.RuntimeContainerd)
 
 	podSpec := ds.Spec.Template.Spec
 
@@ -244,7 +244,7 @@ func TestBuildRegistryConfigReconcilerDaemonset_ContainerdRuntime(t *testing.T) 
 func TestBuildRegistryConfigReconcilerDaemonset_K3sRuntime(t *testing.T) {
 	builder := newTestBuilder(t)
 	reg := newTestRegistry("test-reg", 5000)
-	ds := builder.BuildRegistryConfigReconcilerDaemonset(context.Background(), reg, "test-cm", "registries.json", registry.RuntimeK3s)
+	ds := builder.BuildRegistryConfigReconcilerDaemonset(context.Background(), reg, "test-cm", "registries.json", "testhash", registry.RuntimeK3s)
 
 	podSpec := ds.Spec.Template.Spec
 

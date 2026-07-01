@@ -147,7 +147,12 @@ func (z *zotRegistry) BuildConfigurationConfigMap(ctx context.Context, registry 
 	return configCM, nil
 }
 
-func (z *zotRegistry) BuildDeployment(ctx context.Context, registry *registryv1alpha1.ClusterRegistry) (*appsv1.Deployment, error) {
+func (z *zotRegistry) BuildStatefulSet(ctx context.Context, registry *registryv1alpha1.ClusterRegistry) (*appsv1.StatefulSet, error) {
+	storageSize, err := resource.ParseQuantity(registry.Spec.Storage.Size)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse storage size %q: %w", registry.Spec.Storage.Size, err)
+	}
+
 	configCM := &corev1.ConfigMap{}
 	if err := z.opts.Client.Get(
 		ctx, client.ObjectKey{Name: registry.RegistryConfigMapName(), Namespace: z.opts.Namespace}, configCM); err != nil {
@@ -161,13 +166,26 @@ func (z *zotRegistry) BuildDeployment(ctx context.Context, registry *registryv1a
 
 	configHash := fmt.Sprintf("%x", sha256.Sum256([]byte(config)))
 
-	deployment := &appsv1.Deployment{
+	pvcSpec := corev1.PersistentVolumeClaimSpec{
+		AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+		Resources: corev1.VolumeResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceStorage: storageSize,
+			},
+		},
+	}
+	if registry.Spec.Storage.StorageClass != nil {
+		pvcSpec.StorageClassName = registry.Spec.Storage.StorageClass
+	}
+
+	sts := &appsv1.StatefulSet{
 		ObjectMeta: v1.ObjectMeta{
 			Name:      registry.Name,
 			Namespace: z.opts.Namespace,
 		},
-		Spec: appsv1.DeploymentSpec{
-			Replicas: ptr.To(int32(1)),
+		Spec: appsv1.StatefulSetSpec{
+			Replicas:    ptr.To(int32(1)),
+			ServiceName: registry.RegistryHeadlessServiceName(),
 			Selector: &v1.LabelSelector{
 				MatchLabels: map[string]string{
 					"app": registry.Name,
@@ -178,7 +196,7 @@ func (z *zotRegistry) BuildDeployment(ctx context.Context, registry *registryv1a
 					Labels: map[string]string{
 						"app": registry.Name,
 					},
-					// Allow the deployment to be updated if the config changes.
+					// Allow the statefulset to be updated if the config changes.
 					Annotations: map[string]string{
 						"ZotConfigHash": configHash,
 					},
@@ -236,20 +254,20 @@ func (z *zotRegistry) BuildDeployment(ctx context.Context, registry *registryv1a
 								},
 							},
 						},
-						{
-							Name: "storage",
-							VolumeSource: corev1.VolumeSource{
-								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-									ClaimName: registry.RegistryPVCName(),
-								},
-							},
-						},
 					},
+				},
+			},
+			VolumeClaimTemplates: []corev1.PersistentVolumeClaim{
+				{
+					ObjectMeta: v1.ObjectMeta{
+						Name: "storage",
+					},
+					Spec: pvcSpec,
 				},
 			},
 		},
 	}
-	deployment.SetGroupVersionKind(appsv1.SchemeGroupVersion.WithKind("Deployment"))
+	sts.SetGroupVersionKind(appsv1.SchemeGroupVersion.WithKind("StatefulSet"))
 	if registry.Spec.Auth != nil && registry.Spec.Auth.HtPasswordCredentials != nil {
 		htpasswdSecret := &corev1.Secret{}
 		if err := z.opts.Client.Get(
@@ -257,17 +275,17 @@ func (z *zotRegistry) BuildDeployment(ctx context.Context, registry *registryv1a
 		); err != nil {
 			return nil, fmt.Errorf("failed to get registry auth secret %s: %w", registry.RegistryAuthSecretName(), err)
 		}
-		// Allow new deployment rollout when htpasswd secret changes.
+		// Allow new rollout when htpasswd secret changes.
 		htpasswdSecretVersion := htpasswdSecret.ResourceVersion
-		deployment.Spec.Template.ObjectMeta.Annotations["HtpasswdSecretVersion"] = htpasswdSecretVersion
+		sts.Spec.Template.ObjectMeta.Annotations["HtpasswdSecretVersion"] = htpasswdSecretVersion
 
 		// Mount the htpasswd secret.
-		deployment.Spec.Template.Spec.Containers[0].VolumeMounts = append(deployment.Spec.Template.Spec.Containers[0].VolumeMounts, corev1.VolumeMount{
+		sts.Spec.Template.Spec.Containers[0].VolumeMounts = append(sts.Spec.Template.Spec.Containers[0].VolumeMounts, corev1.VolumeMount{
 			Name:      "htpasswd",
 			MountPath: z.opts.Auth.Htpasswd.Path,
 			SubPath:   HtpasswordKey,
 		})
-		deployment.Spec.Template.Spec.Volumes = append(deployment.Spec.Template.Spec.Volumes, corev1.Volume{
+		sts.Spec.Template.Spec.Volumes = append(sts.Spec.Template.Spec.Volumes, corev1.Volume{
 			Name: "htpasswd",
 			VolumeSource: corev1.VolumeSource{
 				Secret: &corev1.SecretVolumeSource{
@@ -291,8 +309,8 @@ func (z *zotRegistry) BuildDeployment(ctx context.Context, registry *registryv1a
 	if z.opts.Resources != nil {
 		resources = *z.opts.Resources
 	}
-	deployment.Spec.Template.Spec.Containers[0].Resources = resources
-	return deployment, nil
+	sts.Spec.Template.Spec.Containers[0].Resources = resources
+	return sts, nil
 }
 
 func (z *zotRegistry) BuildService(ctx context.Context, registry *registryv1alpha1.ClusterRegistry) (*corev1.Service, string, error) {
@@ -321,7 +339,35 @@ func (z *zotRegistry) BuildService(ctx context.Context, registry *registryv1alph
 	return service, registryURL, nil
 }
 
-func (z *zotRegistry) BuildRegistryConfigReconcilerDaemonset(ctx context.Context, reg *registryv1alpha1.ClusterRegistry, registryConfigCMName string, registryConfigKey string, rt registry.RuntimeType) *appsv1.DaemonSet {
+func (z *zotRegistry) BuildHeadlessService(ctx context.Context, registry *registryv1alpha1.ClusterRegistry) (*corev1.Service, error) {
+	service := &corev1.Service{
+		ObjectMeta: v1.ObjectMeta{
+			Name:      registry.RegistryHeadlessServiceName(),
+			Namespace: z.opts.Namespace,
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP: corev1.ClusterIPNone,
+			Selector: map[string]string{
+				"app": registry.Name,
+			},
+			Ports: []corev1.ServicePort{
+				{
+					Name:       "http",
+					Port:       int32(80),
+					TargetPort: intstr.FromInt32(registry.Spec.Port),
+				},
+			},
+		},
+	}
+	service.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("Service"))
+	return service, nil
+}
+
+func (z *zotRegistry) BuildRegistryConfigReconcilerDaemonset(
+	ctx context.Context, reg *registryv1alpha1.ClusterRegistry,
+	registryConfigCMName string, registryConfigKey string, registryConfigHash string,
+	rt registry.RuntimeType,
+) *appsv1.DaemonSet {
 	hostPath := "/etc/containerd"
 	hostPathType := corev1.HostPathDirectory
 	args := []string{
@@ -357,6 +403,9 @@ func (z *zotRegistry) BuildRegistryConfigReconcilerDaemonset(ctx context.Context
 				ObjectMeta: v1.ObjectMeta{
 					Labels: map[string]string{
 						"daemonset-for": "registry-config-reconciler",
+					},
+					Annotations: map[string]string{
+						"RegistryConfigHash": registryConfigHash,
 					},
 				},
 				Spec: corev1.PodSpec{

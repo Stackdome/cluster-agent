@@ -158,8 +158,12 @@ func (c *ClusterRegistry) RegistryPVCName() string {
 	return truncateK8sName(c.Name + "-storage")
 }
 
-func (c *ClusterRegistry) RegistryDeploymentName() string {
-	return truncateK8sName(c.Name + "-deployment")
+func (c *ClusterRegistry) RegistryStatefulSetName() string {
+	return c.Name
+}
+
+func (c *ClusterRegistry) RegistryHeadlessServiceName() string {
+	return truncateK8sName(c.Name + "-headless")
 }
 
 func (c *ClusterRegistry) RegistryAuthSecretName() string {
