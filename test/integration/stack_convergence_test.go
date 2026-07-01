@@ -419,6 +419,16 @@ var _ = Describe("Stack convergence", func() {
 				return c.Update(ctx, stack)
 			}, "30s", "1s").Should(Succeed())
 
+			By("Stamping release2 on the child (in practice the hub does this)")
+			Eventually(func() error {
+				sr := &corev1alpha1.StackResource{}
+				if err := c.Get(ctx, client.ObjectKey{Name: resName, Namespace: stack.Namespace}, sr); err != nil {
+					return err
+				}
+				stampAnnotation(sr, corev1alpha1.ReleaseIDAnnotation, release2)
+				return c.Update(ctx, sr)
+			}, "30s", "1s").Should(Succeed())
+
 			By("Waiting for lastConverged.releaseId to update to uuid-2")
 			Eventually(func() string {
 				s := &corev1alpha1.Stack{}
