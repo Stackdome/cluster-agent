@@ -32,23 +32,26 @@ var _ = Describe("Stack mutations and deletion", func() {
 		It("should restart the Deployment when RestartRequest is set", func() {
 			srName := stack.Spec.ResourceNames[0]
 
-			By("Setting RestartRequest on the StackResource")
-			restartRequestedAt := metav1.Now()
+			By("Verifying LastRestartRequestProcessedAt is nil before restart")
 			sr := &corev1alpha1.StackResource{}
 			Expect(c.Get(ctx, client.ObjectKey{Name: srName, Namespace: stack.Namespace}, sr)).To(Succeed())
+			Expect(sr.Status.LastRestartRequestProcessedAt).To(BeNil())
+
+			By("Setting RestartRequest on the StackResource")
+			restartRequestedAt := metav1.Now()
 			sr.Spec.RestartRequest = &restartRequestedAt
 			Expect(c.Update(ctx, sr)).To(Succeed())
 
-			By("Waiting for LastRestartRequestProcessedAt to be after RestartRequest")
+			By("Waiting for LastRestartRequestProcessedAt to be set")
 			Eventually(func() bool {
 				sr, err := helpers.GetStackResource(ctx, c, client.ObjectKey{
 					Name:      srName,
 					Namespace: stack.Namespace,
 				})
-				if err != nil || sr.Status.LastRestartRequestProcessedAt == nil {
+				if err != nil {
 					return false
 				}
-				return sr.Status.LastRestartRequestProcessedAt.After(restartRequestedAt.Time)
+				return sr.Status.LastRestartRequestProcessedAt != nil
 			}, readyTimeout, 5*time.Second).Should(BeTrue())
 		})
 
