@@ -11,6 +11,7 @@ import (
 
 const (
 	RegistryConfigReconcilerDaemonSetName = "registry-config-reconciler"
+	RegistryConfigHashAnnotation         = "RegistryConfigHash"
 )
 
 type RuntimeType string

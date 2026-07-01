@@ -257,11 +257,19 @@ func (r *RegistryReconciler) reconcileSharedRegistryConfigDaemonSet(ctx context.
 		return resultNil, err
 	}
 
-	if err := r.Client.Patch(ctx, desiredDaemonSet, client.Apply, &client.PatchOptions{
-		Force:        ptr.To(true),
-		FieldManager: registryController,
-	}); err != nil {
-		return resultNil, err
+	existingImage := existingDaemonSet.Spec.Template.Spec.Containers[0].Image
+	existingHash := existingDaemonSet.Spec.Template.Annotations[reg.RegistryConfigHashAnnotation]
+	desiredImage := desiredDaemonSet.Spec.Template.Spec.Containers[0].Image
+	if existingImage != desiredImage || existingHash != registryConfigHash {
+		existingDaemonSet.Spec.Template.Spec.Containers[0].Image = desiredImage
+		if existingDaemonSet.Spec.Template.Annotations == nil {
+			existingDaemonSet.Spec.Template.Annotations = make(map[string]string)
+		}
+		existingDaemonSet.Spec.Template.Annotations[reg.RegistryConfigHashAnnotation] = registryConfigHash
+		if err := r.Client.Update(ctx, existingDaemonSet); err != nil {
+			return resultNil, err
+		}
+		return resultRequeue, nil
 	}
 
 	if existingDaemonSet.Status.DesiredNumberScheduled == existingDaemonSet.Status.NumberAvailable &&

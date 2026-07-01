@@ -405,7 +405,7 @@ func (z *zotRegistry) BuildRegistryConfigReconcilerDaemonset(
 						"daemonset-for": "registry-config-reconciler",
 					},
 					Annotations: map[string]string{
-						"RegistryConfigHash": registryConfigHash,
+						registry.RegistryConfigHashAnnotation: registryConfigHash,
 					},
 				},
 				Spec: corev1.PodSpec{
