@@ -116,6 +116,11 @@ func WithHealthChecks(hc *corev1alpha1.HealthChecks) ResourceOption {
 	return func(sr *corev1alpha1.StackResource) { sr.Spec.HealthChecks = hc }
 }
 
+// WithSchedule sets the cron schedule for CronJob workloads.
+func WithSchedule(schedule string) ResourceOption {
+	return func(sr *corev1alpha1.StackResource) { sr.Spec.Schedule = schedule }
+}
+
 // WithHardenedSecurity enables hardened security defaults on the resource.
 func WithHardenedSecurity() ResourceOption {
 	return func(sr *corev1alpha1.StackResource) { sr.Spec.HardenedSecurityDefaults = ptr.To(true) }

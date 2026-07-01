@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"stackdome.io/cluster-agent/api/core/v1alpha1"
 	"stackdome.io/cluster-agent/internal/controller/mocks"
@@ -159,7 +160,8 @@ var _ = Describe("svcReconciler Ingress TLS", func() {
 
 			portMap, err := reconciler.reconcileIngress(ctx, resource, svc)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(portMap).To(BeNil())
+			// reconcileIngress returns the port→FQDN map on create too (no requeue).
+			Expect(portMap).To(HaveKeyWithValue(8080, "app.example.com"))
 			cond := findCondition(resource.Status.Conditions, string(v1alpha1.StackResourceTLSConfigured))
 			Expect(cond).NotTo(BeNil())
 			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
@@ -497,6 +499,126 @@ var _ = Describe("address persistence", func() {
 
 func strPtr(s string) *string { return &s }
 
+var _ = Describe("svcReconciler.reconcile (orchestration)", func() {
+	var (
+		reconciler *svcReconciler
+		fakeClient client.Client
+		scheme     *runtime.Scheme
+		ctx        context.Context
+	)
+
+	BeforeEach(func() {
+		ctx = context.Background()
+		scheme = runtime.NewScheme()
+		Expect(v1alpha1.AddToScheme(scheme)).To(Succeed())
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
+		Expect(networkingv1.AddToScheme(scheme)).To(Succeed())
+
+		fakeClient = fake.NewClientBuilder().WithScheme(scheme).Build()
+		reconciler = &svcReconciler{Client: fakeClient, Scheme: scheme}
+	})
+
+	// availableStatus returns the status of the resource's Available condition, or "" if absent.
+	availableStatus := func(resource *v1alpha1.StackResource) metav1.ConditionStatus {
+		cond := findCondition(resource.Status.Conditions, string(v1alpha1.StackResourceStatusAvailable))
+		if cond == nil {
+			return ""
+		}
+		return cond.Status
+	}
+
+	orchestrationResource := func(workloadType v1alpha1.WorkloadType, ports ...v1alpha1.Port) *v1alpha1.StackResource {
+		return &v1alpha1.StackResource{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "my-app",
+				Namespace: "test-ns",
+				UID:       "test-uid",
+				Labels:    map[string]string{v1alpha1.LabelManagedBy: "stackdome"},
+			},
+			Spec: v1alpha1.StackResourceSpec{WorkloadType: workloadType, Ports: ports},
+		}
+	}
+
+	serviceExists := func() bool {
+		err := fakeClient.Get(ctx, client.ObjectKey{Name: "my-app", Namespace: "test-ns"}, &corev1.Service{})
+		return err == nil
+	}
+
+	It("skips Service/Ingress for a Worker and reports available", func() {
+		resource := orchestrationResource(v1alpha1.WorkloadTypeWorker)
+
+		res, err := reconciler.reconcile(ctx, resource)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(res).To(Equal(resultNil))
+		Expect(availableStatus(resource)).To(Equal(metav1.ConditionTrue))
+		Expect(serviceExists()).To(BeFalse(), "Worker should not get a Service")
+	})
+
+	It("creates the Service and reports available in one pass (no exposed ports)", func() {
+		// Internal-only port: a Service is created, but no Ingress is needed. ensureService
+		// returns the just-created Service, so reconcile reaches "available" in one pass.
+		resource := orchestrationResource(v1alpha1.WorkloadTypeService,
+			v1alpha1.Port{Name: "http", Number: 8080, Protocol: "http", ExposeToPublic: false})
+
+		res, err := reconciler.reconcile(ctx, resource)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(res).To(Equal(resultNil))
+		Expect(availableStatus(resource)).To(Equal(metav1.ConditionTrue))
+		Expect(serviceExists()).To(BeTrue())
+		Expect(resource.Status.InternalAddress).NotTo(BeNil())
+		Expect(*resource.Status.InternalAddress).To(Equal("my-app"))
+
+		By("second reconcile is idempotent (Service already up to date)")
+		res, err = reconciler.reconcile(ctx, resource)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(res).To(Equal(resultNil))
+		Expect(availableStatus(resource)).To(Equal(metav1.ConditionTrue))
+	})
+
+	It("creates Service+Ingress and reports available in one pass (exposed port, no TLS)", func() {
+		resource := orchestrationResource(v1alpha1.WorkloadTypeService,
+			v1alpha1.Port{Name: "http", Number: 8080, Protocol: "http", ExposeToPublic: true, FQDN: "app.local.dev"})
+
+		res, err := reconciler.reconcile(ctx, resource)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(res).To(Equal(resultNil))
+		Expect(availableStatus(resource)).To(Equal(metav1.ConditionTrue))
+
+		By("Service and Ingress both created in the same pass")
+		Expect(serviceExists()).To(BeTrue())
+		ing := &networkingv1.Ingress{}
+		Expect(fakeClient.Get(ctx, client.ObjectKey{Name: "my-app-http-proxy", Namespace: "test-ns"}, ing)).To(Succeed())
+		Expect(ing.Spec.Rules).To(HaveLen(1))
+		Expect(ing.Spec.Rules[0].Host).To(Equal("app.local.dev"))
+
+		By("external address published and IngressReady set without a requeue")
+		ingressCond := findCondition(resource.Status.Conditions, string(v1alpha1.StackResourceIngressReady))
+		Expect(ingressCond).NotTo(BeNil())
+		Expect(ingressCond.Status).To(Equal(metav1.ConditionTrue))
+		Expect(resource.Status.ExternalAddress).To(HaveLen(1))
+		Expect(resource.Status.ExternalAddress[0].Address).To(Equal("http://app.local.dev"))
+		Expect(resource.Status.ExternalAddress[0].TargetPort).To(Equal(int32(8080)))
+
+		By("second reconcile is idempotent")
+		res, err = reconciler.reconcile(ctx, resource)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(res).To(Equal(resultNil))
+		Expect(availableStatus(resource)).To(Equal(metav1.ConditionTrue))
+	})
+
+	It("creates a headless Service for a StatefulService", func() {
+		resource := orchestrationResource(v1alpha1.WorkloadTypeStatefulService)
+
+		_, err := reconciler.reconcile(ctx, resource)
+		Expect(err).NotTo(HaveOccurred())
+
+		svc := &corev1.Service{}
+		Expect(fakeClient.Get(ctx, client.ObjectKey{Name: "my-app", Namespace: "test-ns"}, svc)).To(Succeed())
+		Expect(svc.Spec.ClusterIP).To(Equal("None"))
+	})
+})
+
 func findCondition(conditions []metav1.Condition, condType string) *metav1.Condition {
 	for i := range conditions {
 		if conditions[i].Type == condType {
@@ -505,3 +627,119 @@ func findCondition(conditions []metav1.Condition, condType string) *metav1.Condi
 	}
 	return nil
 }
+
+func svcShapeResource(ports ...v1alpha1.Port) *v1alpha1.StackResource {
+	return &v1alpha1.StackResource{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "shape-test", Namespace: "test-ns",
+			Labels: map[string]string{v1alpha1.LabelManagedBy: "stackdome"},
+		},
+		Spec: v1alpha1.StackResourceSpec{WorkloadType: v1alpha1.WorkloadTypeService, Ports: ports},
+	}
+}
+
+var _ = Describe("buildDesiredService shape (regression guard)", func() {
+	It("is headless (ClusterIP=None) when the resource has no ports", func() {
+		svc := (&svcReconciler{}).buildDesiredService(svcShapeResource())
+		Expect(svc.Spec.ClusterIP).To(Equal("None"))
+		Expect(svc.Spec.Ports).To(BeEmpty())
+	})
+	It("is ClusterIP with ports when the resource declares ports", func() {
+		svc := (&svcReconciler{}).buildDesiredService(svcShapeResource(v1alpha1.Port{Name: "http", Number: 8080, Protocol: "http"}))
+		Expect(svc.Spec.Type).To(Equal(corev1.ServiceTypeClusterIP))
+		Expect(svc.Spec.Ports).To(HaveLen(1))
+		Expect(svc.Spec.Selector).To(Equal(map[string]string{"resource": "shape-test"}))
+	})
+})
+
+var _ = Describe("buildServicePorts", func() {
+	It("maps each spec port to a ServicePort with the name as target port", func() {
+		resource := &v1alpha1.StackResource{
+			Spec: v1alpha1.StackResourceSpec{
+				Ports: []v1alpha1.Port{
+					{Name: "http", Number: 8080, Protocol: "http"},
+					{Name: "grpc", Number: 9090, Protocol: "grpc"},
+				},
+			},
+		}
+		ports := buildServicePorts(resource)
+		Expect(ports).To(HaveLen(2))
+		Expect(ports[0].Name).To(Equal("http"))
+		Expect(ports[0].Port).To(Equal(int32(8080)))
+		Expect(ports[0].TargetPort.StrVal).To(Equal("http"))
+		Expect(ports[1].Name).To(Equal("grpc"))
+		Expect(ports[1].Port).To(Equal(int32(9090)))
+	})
+
+	It("returns an empty slice when there are no ports", func() {
+		Expect(buildServicePorts(&v1alpha1.StackResource{})).To(BeEmpty())
+	})
+})
+
+var _ = Describe("buildDesiredIngress", func() {
+	It("constructs the Ingress from the supplied rules, annotations, and TLS", func() {
+		resource := &v1alpha1.StackResource{
+			ObjectMeta: metav1.ObjectMeta{Name: "my-app", Namespace: "test-ns"},
+		}
+		rules := buildIngressRules(map[int]string{8080: "app.example.com"}, "my-app")
+		annotations := map[string]string{"cert-manager.io/cluster-issuer": "letsencrypt-prod"}
+		tls := []networkingv1.IngressTLS{{Hosts: []string{"app.example.com"}, SecretName: "my-app-tls"}}
+
+		ing := buildDesiredIngress(resource, rules, annotations, tls)
+
+		Expect(ing.Name).To(Equal("my-app-http-proxy"))
+		Expect(ing.Namespace).To(Equal("test-ns"))
+		Expect(ing.Annotations).To(HaveKeyWithValue("cert-manager.io/cluster-issuer", "letsencrypt-prod"))
+		Expect(ing.Spec.TLS).To(Equal(tls))
+		Expect(ing.Spec.Rules).To(HaveLen(1))
+		Expect(ing.Spec.Rules[0].Host).To(Equal("app.example.com"))
+	})
+})
+
+var _ = Describe("isHeadlessService", func() {
+	It("is headless for a StatefulService even with ports", func() {
+		res := &v1alpha1.StackResource{Spec: v1alpha1.StackResourceSpec{WorkloadType: v1alpha1.WorkloadTypeStatefulService}}
+		Expect(isHeadlessService(res, []corev1.ServicePort{{Name: "http"}})).To(BeTrue())
+	})
+	It("is headless for any workload with no ports", func() {
+		res := &v1alpha1.StackResource{Spec: v1alpha1.StackResourceSpec{WorkloadType: v1alpha1.WorkloadTypeService}}
+		Expect(isHeadlessService(res, nil)).To(BeTrue())
+	})
+	It("is not headless for a Service with ports", func() {
+		res := &v1alpha1.StackResource{Spec: v1alpha1.StackResourceSpec{WorkloadType: v1alpha1.WorkloadTypeService}}
+		Expect(isHeadlessService(res, []corev1.ServicePort{{Name: "http"}})).To(BeFalse())
+	})
+})
+
+var _ = Describe("svcReconciler workload type handling", func() {
+	It("StatefulService with ports gets headless service with ports", func() {
+		res := &v1alpha1.StackResource{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "sts-app", Namespace: "test-ns",
+				Labels: map[string]string{v1alpha1.LabelManagedBy: "stackdome"},
+			},
+			Spec: v1alpha1.StackResourceSpec{
+				WorkloadType: v1alpha1.WorkloadTypeStatefulService,
+				Ports:        []v1alpha1.Port{{Name: "http", Number: 8080, Protocol: "http"}},
+			},
+		}
+		svc := (&svcReconciler{}).buildDesiredService(res)
+		Expect(svc.Spec.ClusterIP).To(Equal("None"))
+		Expect(svc.Spec.Ports).To(HaveLen(1))
+	})
+
+	It("StatefulService without ports gets headless service without ports", func() {
+		res := &v1alpha1.StackResource{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "sts-worker", Namespace: "test-ns",
+				Labels: map[string]string{v1alpha1.LabelManagedBy: "stackdome"},
+			},
+			Spec: v1alpha1.StackResourceSpec{
+				WorkloadType: v1alpha1.WorkloadTypeStatefulService,
+			},
+		}
+		svc := (&svcReconciler{}).buildDesiredService(res)
+		Expect(svc.Spec.ClusterIP).To(Equal("None"))
+		Expect(svc.Spec.Ports).To(BeEmpty())
+	})
+})

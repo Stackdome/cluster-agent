@@ -1,4 +1,4 @@
-package stackresource
+package workload
 
 import (
 	appsv1 "k8s.io/api/apps/v1"

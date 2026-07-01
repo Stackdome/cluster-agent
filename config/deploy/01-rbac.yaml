@@ -130,6 +130,7 @@ rules:
   - batch
   resources:
   - jobs
+  - cronjobs
   verbs:
   - get
   - watch
@@ -137,6 +138,7 @@ rules:
   - list
   - patch
   - create
+  - delete
 - apiGroups:
   - addons.stackdome.io
   resources:
@@ -188,6 +190,7 @@ rules:
   - list
   - patch
   - create
+  - delete
 - apiGroups:
   - storage.k8s.io
   resources:
