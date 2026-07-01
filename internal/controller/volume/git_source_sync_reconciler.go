@@ -2,6 +2,7 @@ package volume
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -20,6 +21,16 @@ const (
 	DestDirWithinVolume = "repo"
 )
 
+func gitSyncJobName(volumeName, revision string) string {
+	hash := sha256.Sum256([]byte(revision))
+	shortHash := fmt.Sprintf("%x", hash)[:8]
+	name := fmt.Sprintf("volume-%s-git-sync-%s", volumeName, shortHash)
+	if len(name) > 63 {
+		name = name[:63]
+	}
+	return name
+}
+
 func (r *VolumeReconciler) reconcileGitSource(ctx context.Context, volume *storagev1alpha1.Volume) (subReconcilerResult, error) {
 	if volume.Spec.Source.GitRepo == nil {
 		return resultNil, nil
@@ -35,7 +46,7 @@ func (r *VolumeReconciler) reconcileGitSource(ctx context.Context, volume *stora
 		return resultNil, fmt.Errorf("failed to build git sync job params: %v", err)
 	}
 
-	jobName := fmt.Sprintf("volume-%s-git-sync-%s", volume.Name, gitSource.Revision.GetGitRevisionString())
+	jobName := gitSyncJobName(volume.Name, gitSource.Revision.GetGitRevisionString())
 
 	desiredJob, err := gitsync.GenerateGitSyncJob(jobName, params)
 	if err != nil {

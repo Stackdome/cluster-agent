@@ -118,6 +118,7 @@ func (rm *RegistryManager) PreloadImages(ctx context.Context) error {
 		config.KanikoExecutorImage,
 		config.ZotImage,
 		config.RegistryConfigReconcilerImage,
+		config.GitSyncImage,
 	}
 	for _, img := range images {
 		rm.logger.Info("Pulling image", "image", img)
