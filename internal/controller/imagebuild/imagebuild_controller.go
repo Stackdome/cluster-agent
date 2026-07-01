@@ -56,6 +56,10 @@ func (r *ImageBuildReconciler) reconcile(ctx context.Context, buildConfig *build
 	logger := controller.LoggerFromContext(ctx)
 	logger.Info("reconciling image build")
 
+	if imageBuildInTerminalState(buildConfig) {
+		return ctrl.Result{}, nil
+	}
+
 	if buildConfig.Spec.Cancelled {
 		return r.reconcileCancellation(ctx, buildConfig)
 	}
@@ -500,6 +504,24 @@ func validateGitRevision(rev *stackv1alpha1.GitRepoRevision) error {
 		return fmt.Errorf("git source revision must include a branch or tag as a fetchable ref")
 	}
 	return nil
+}
+
+func imageBuildInTerminalState(buildConfig *buildsv1alpha1.ImageBuild) bool {
+	availableCond := meta.FindStatusCondition(buildConfig.Status.Conditions, string(buildsv1alpha1.BuildAvailable))
+	if availableCond != nil && availableCond.Status == metav1.ConditionTrue {
+		return true
+	}
+
+	failedCond := meta.FindStatusCondition(buildConfig.Status.Conditions, string(buildsv1alpha1.BuildFailed))
+	if failedCond != nil && failedCond.Status == metav1.ConditionTrue {
+		return true
+	}
+
+	cancelledCond := meta.FindStatusCondition(buildConfig.Status.Conditions, string(buildsv1alpha1.BuildCancelled))
+	if cancelledCond != nil && cancelledCond.Status == metav1.ConditionTrue {
+		return true
+	}
+	return false
 }
 
 // SetupWithManager sets up the controller with the Manager.
