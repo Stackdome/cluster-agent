@@ -53,7 +53,8 @@ func aggregateStackStatus(stack *v1alpha1.Stack, children []v1alpha1.StackResour
 	// previous one (cache skew between the Stack and StackResource informers
 	// can deliver updates out of order).
 	isConverged := func(child *v1alpha1.StackResource) bool {
-		convergedCondition := findStatusCondition(child.Status.Conditions, child.Generation, string(v1alpha1.StackResourceConverged))
+		convergedCondition := findStatusCondition(
+			child.Status.Conditions, child.Generation, string(v1alpha1.StackResourceConverged))
 		converged := convergedCondition != nil && convergedCondition.Status == metav1.ConditionTrue
 		if !managed {
 			return converged
