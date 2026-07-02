@@ -20,12 +20,20 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	buildsv1alpha1 "stackdome.io/cluster-agent/api/builds/v1alpha1"
 	stackv1alpha1 "stackdome.io/cluster-agent/api/core/v1alpha1"
+	registryv1alpha1 "stackdome.io/cluster-agent/api/registry/v1alpha1"
 	storagev1alpha1 "stackdome.io/cluster-agent/api/storage/v1alpha1"
 
 	"stackdome.io/cluster-agent/internal/controller"
 	"stackdome.io/cluster-agent/pkg/imagebuilder"
 	"stackdome.io/cluster-agent/pkg/registry"
 )
+
+// ImageBuildCleanupFinalizer ensures that when an ImageBuild is deleted (e.g. by
+// history-limit pruning) its pushed image is removed from the internal registry.
+// Without it, images accumulate: nothing else deletes them (image retention is
+// deleteUntagged-only precisely so a still-referenced image is never pruned), so
+// the ImageBuild CR is the owner of its image's lifecycle.
+const ImageBuildCleanupFinalizer = "builds.stackdome.io/registry-image-cleanup"
 
 // ImageBuildReconciler reconciles a ImageBuild object
 type ImageBuildReconciler struct {
@@ -45,11 +53,109 @@ func (r *ImageBuildReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 		return ctrl.Result{}, err
 	}
+
+	// Being deleted: clean up the pushed image, then drop the finalizer.
+	if !imageBuild.DeletionTimestamp.IsZero() {
+		return r.finalize(ctx, imageBuild)
+	}
+
+	// Ensure the cleanup finalizer is present before we (potentially) push an
+	// image, so a later deletion always triggers cleanup.
+	if controllerutil.AddFinalizer(imageBuild, ImageBuildCleanupFinalizer) {
+		return ctrl.Result{}, r.Client.Update(ctx, imageBuild)
+	}
+
 	res, err := r.reconcile(ctx, imageBuild)
 	if err != nil {
 		return res, err
 	}
 	return res, r.Client.Status().Update(ctx, imageBuild)
+}
+
+// finalize removes the image this ImageBuild pushed to the internal registry,
+// then clears the finalizer. It is best-effort about "already gone" states so a
+// registry (or its ClusterRegistry) being torn down never blocks CR deletion.
+func (r *ImageBuildReconciler) finalize(ctx context.Context, imageBuild *buildsv1alpha1.ImageBuild) (ctrl.Result, error) {
+	logger := controller.LoggerFromContext(ctx)
+	if !controllerutil.ContainsFinalizer(imageBuild, ImageBuildCleanupFinalizer) {
+		return ctrl.Result{}, nil
+	}
+
+	if err := r.cleanupImage(ctx, imageBuild); err != nil {
+		// Transient failure (registry unreachable, unexpected status): retry so we
+		// don't leak a tagged image. "Not found" states are handled inside
+		// cleanupImage and never reach here.
+		logger.Error(err, "failed to clean up registry image for deleted ImageBuild; will retry")
+		return ctrl.Result{}, err
+	}
+
+	controllerutil.RemoveFinalizer(imageBuild, ImageBuildCleanupFinalizer)
+	return ctrl.Result{}, r.Client.Update(ctx, imageBuild)
+}
+
+// cleanupImage deletes the image this build pushed, but only for the internal
+// managed registry — external registries (Quay, Docker Hub) are the customer's
+// and must never be touched. "Not found" states (build never pushed, registry
+// or its auth secret already torn down) are treated as success so deletion is
+// never blocked.
+func (r *ImageBuildReconciler) cleanupImage(ctx context.Context, imageBuild *buildsv1alpha1.ImageBuild) error {
+	// Only internal registries are ours to garbage collect.
+	if imageBuild.Spec.Repository.ClusterRegistryRef == nil {
+		return nil
+	}
+	// Build never successfully pushed → nothing to clean.
+	if imageBuild.Status.ImageUrl == "" {
+		return nil
+	}
+
+	// Load the backing ClusterRegistry (cluster-scoped; name alone identifies it).
+	// If it is gone the registry — and its storage — is being torn down, so there
+	// is nothing to clean and deletion must not block.
+	reg := &registryv1alpha1.ClusterRegistry{}
+	if err := r.Client.Get(ctx, types.NamespacedName{Name: imageBuild.Spec.Repository.ClusterRegistryRef.Name}, reg); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+
+	username, password, err := r.registryCredentials(ctx, reg)
+	if err != nil {
+		return err
+	}
+
+	// Delete the exact image the build pushed (status.imageUrl is the source of
+	// truth). In-cluster registries are served over plain HTTP.
+	return registry.DeleteImage(ctx, imageBuild.Status.ImageUrl, true, username, password)
+}
+
+// registryCredentials returns the basic-auth credentials for a ClusterRegistry.
+//
+// It reads them from the registry's own HtPasswordCredentials — which live in
+// the registry namespace and outlive the StackResource — NOT from the
+// SR-synthesized docker-config secret. The synthesized secret is owned by the
+// StackResource and deleted during stack teardown; sourcing creds from it would
+// race the finalizer (secret gone → can't authenticate → image leaks). A
+// registry with no auth, or a missing credentials secret, yields anonymous
+// access so teardown never blocks.
+func (r *ImageBuildReconciler) registryCredentials(ctx context.Context, reg *registryv1alpha1.ClusterRegistry) (username, password string, err error) {
+	if reg.Spec.Auth == nil ||
+		reg.Spec.Auth.HtPasswordCredentials == nil ||
+		reg.Spec.Auth.HtPasswordCredentials.CredentialsRef == nil {
+		return "", "", nil // registry accepts anonymous access
+	}
+	credRef := reg.Spec.Auth.HtPasswordCredentials.CredentialsRef
+	sec := &v1.Secret{}
+	if err := r.Client.Get(ctx, types.NamespacedName{
+		Name:      credRef.SecretRef.Name,
+		Namespace: credRef.SecretRef.Namespace,
+	}, sec); err != nil {
+		if apierrors.IsNotFound(err) {
+			return "", "", nil
+		}
+		return "", "", err
+	}
+	return string(sec.Data[credRef.UsernameKey]), string(sec.Data[credRef.PasswordKey]), nil
 }
 
 func (r *ImageBuildReconciler) reconcile(ctx context.Context, buildConfig *buildsv1alpha1.ImageBuild) (ctrl.Result, error) {

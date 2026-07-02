@@ -15,10 +15,6 @@ spec:
         secretNamespace: stackdome-registry
         usernameKey: username
         passwordKey: password
-  retentionPolicy:
-    maxRepositoryCount: 100
-    tagsPerRepo: 10
-    deleteUntagged: true
   port: 5000
 ---
  kubectl create secret generic registry-creds \

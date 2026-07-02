@@ -119,12 +119,22 @@ func main() {
 		RegistryImage:                 config.ZotImage,
 		RegistryConfigReconcilerImage: config.RegistryConfigReconcilerImage,
 		GCDelay:                       "1h",
-		GCInterval:                    "24h",
-		EnableGC:                      true,
-		RegistryLogLevel:              "info",
+		// Run GC every 6h rather than 24h so the Kaniko build cache cannot
+		// accumulate a full day of large per-commit layers between sweeps.
+		GCInterval:       "6h",
+		EnableGC:         true,
+		RegistryLogLevel: "info",
 		LayerCachingOpts: zotregistry.LayerCachingOpts{
-			Enabled:          true,
-			RepoGlobPatterns: []string{"*-cache", "*/cache", "*/cache/*"},
+			Enabled: true,
+			// Kaniko cache repos are nested (e.g. <ns>/<app>/<app>/cache), so the
+			// glob must use the globstar "**" (matches across "/"). Plain "*/cache"
+			// matches only a single segment and never matches the real path, causing
+			// the cache repo to fall through to the catch-all "**" policy.
+			RepoGlobPatterns: []string{"**/cache", "**/cache/**"},
+			TagsToKeep:       10,
+			// Keep cache layers reused within a week hot so repeated builds stay
+			// fast; idle caches age out and free their storage.
+			PulledWithin: "168h",
 		},
 	})
 

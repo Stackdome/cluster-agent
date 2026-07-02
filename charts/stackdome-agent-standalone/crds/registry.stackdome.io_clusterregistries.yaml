@@ -119,23 +119,6 @@ spec:
                 maximum: 65535
                 minimum: 1000
                 type: integer
-              retentionPolicy:
-                description: Retention policies for the registry
-                properties:
-                  deleteUntagged:
-                    default: true
-                    description: Whether to delete untagged manifests
-                    type: boolean
-                  maxRepositoryCount:
-                    description: MaxRepositoryCount is the maximum number of repositories
-                      to keep
-                    format: int32
-                    type: integer
-                  tagsPerRepo:
-                    description: Number of tags to keep per repository
-                    format: int32
-                    type: integer
-                type: object
               storage:
                 description: Storage configuration for the registry
                 properties:

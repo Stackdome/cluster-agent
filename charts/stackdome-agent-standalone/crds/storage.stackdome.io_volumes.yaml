@@ -164,31 +164,26 @@ spec:
                         type: string
                       revision:
                         description: |-
-                          Can be one of the following:
-                          - git commit hash
-                          - git branch name
-                          - git tag name
+                          GitRepoRevision identifies a point-in-time in a git repository.
+                          Commit is the authoritative immutable identity (a full or abbreviated SHA).
+                          Branch or Tag is the fetchable ref used to clone; at least one must be set.
                         properties:
                           branch:
-                            properties:
-                              HeadSha:
-                                default: HEAD
-                                description: |-
-                                  Current commit hash of the branch head.
-                                  default is head
-                                type: string
-                              name:
-                                description: Name of the branch
-                                type: string
-                            required:
-                            - HeadSha
-                            - name
-                            type: object
+                            type: string
                           commit:
+                            maxLength: 40
+                            minLength: 7
+                            pattern: ^[0-9a-f]+$
                             type: string
                           tag:
                             type: string
+                        required:
+                        - commit
                         type: object
+                        x-kubernetes-validations:
+                        - message: at least one of branch or tag must be set as a
+                            fetchable ref
+                          rule: has(self.branch) || has(self.tag)
                     required:
                     - destinationWithinVolume
                     - repoUrl

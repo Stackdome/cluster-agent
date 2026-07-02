@@ -37,19 +37,6 @@ func (h *HtPasswordCredentialsSpec) HTPasswordFileName() string {
 	return "htpasswd"
 }
 
-type RetentionPolicySpec struct {
-	// MaxRepositoryCount is the maximum number of repositories to keep
-	// +optional
-	MaxRepositoryCount *int32 `json:"maxRepositoryCount,omitempty"`
-	// Number of tags to keep per repository
-	// +optional
-	TagsPerRepo *int32 `json:"tagsPerRepo,omitempty"`
-	// Whether to delete untagged manifests
-	// +optional
-	// +kubebuilder:default=true
-	DeleteUntagged bool `json:"deleteUntagged,omitempty"`
-}
-
 type RegistryStatus struct {
 	// The most recent generation observed by the controller
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
@@ -90,10 +77,6 @@ type ClusterRegistrySpec struct {
 	// Authentication configuration
 	// +optional
 	Auth *RegistryAuthSpec `json:"auth"`
-
-	// Retention policies for the registry
-	// +optional
-	RetentionPolicy *RetentionPolicySpec `json:"retentionPolicy,omitempty"`
 
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Minimum=1000
@@ -153,7 +136,6 @@ func truncateK8sName(name string) string {
 func (c *ClusterRegistry) RegistryConfigMapName() string {
 	return truncateK8sName(c.Name + "-config")
 }
-
 
 func (c *ClusterRegistry) RegistryStatefulSetName() string {
 	return c.Name

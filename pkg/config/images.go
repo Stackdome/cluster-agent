@@ -1,7 +1,14 @@
 package config
 
 const (
-	ZotImage                      = "ghcr.io/project-zot/zot-linux-amd64:v2.1.2"
+	// ZotImage must be >= v2.1.8. Earlier versions (e.g. v2.1.2) have a GC bug:
+	// removeUntaggedManifests() only handles OCI media types and skips Docker
+	// schema-2 (docker2s2) manifests. Kaniko pushes build-cache layers as Docker
+	// schema-2, so untagged cache manifests are never garbage collected and their
+	// blobs are never reclaimed, growing the registry PVC without bound until the
+	// node hits disk-pressure eviction. v2.1.8 added compat.IsCompatibleManifestMediaType
+	// to that path.
+	ZotImage                      = "ghcr.io/project-zot/zot-linux-amd64:v2.1.18"
 	RegistryConfigReconcilerImage = "quay.io/stackdome/registry-config-reconciler:v0.0.9"
 	NfsServerImage                = "adnanhodzic/nfs-server-k8s:0.1"
 	// v1.28.0

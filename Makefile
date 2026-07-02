@@ -25,9 +25,15 @@ help: ## Display this help.
 
 ##@ Development
 
+# CHART_CRD_DIR is the Helm chart's copy of the CRDs. It is kept in sync with the
+# generated CRDs (config/deploy/crds) so a chart install matches the operator's
+# expected schema and never drifts.
+CHART_CRD_DIR ?= charts/stackdome-agent-standalone/crds
+
 .PHONY: manifests
-manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
+manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects, and sync them into the Helm chart.
 	$(CONTROLLER_GEN) rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/deploy/crds
+	cp config/deploy/crds/*.yaml $(CHART_CRD_DIR)/
 
 .PHONY: generate
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
