@@ -55,12 +55,3 @@ func SimpleClusterRegistry(name, credSecretName string, port int32) *registryv1a
 	}
 }
 
-func ClusterRegistryWithRetention(name, credSecretName string, port int32) *registryv1alpha1.ClusterRegistry {
-	reg := SimpleClusterRegistry(name, credSecretName, port)
-	tagsPerRepo := int32(5)
-	reg.Spec.RetentionPolicy = &registryv1alpha1.RetentionPolicySpec{
-		TagsPerRepo:    &tagsPerRepo,
-		DeleteUntagged: true,
-	}
-	return reg
-}
