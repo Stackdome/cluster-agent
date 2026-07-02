@@ -22,6 +22,16 @@ import (
 const (
 	HtpasswordKey = "htpasswd"
 	ZotConfigKey  = "config.json"
+
+	// defaultCacheTagsToKeep is used when LayerCachingOpts.TagsToKeep is unset.
+	// Kaniko pushes ~6 tags per build; keeping 10 retains roughly the latest
+	// build plus margin, so cache hit rates stay high while bounding growth.
+	defaultCacheTagsToKeep = 10
+
+	// defaultCachePulledWithin is used when LayerCachingOpts.PulledWithin is
+	// unset. Cache layers reused within a week stay hot; a cache idle longer than
+	// this ages out and frees its storage.
+	defaultCachePulledWithin = "168h"
 )
 
 type zotRegistry struct {
@@ -48,6 +58,17 @@ type ZotRegistryOpts struct {
 type LayerCachingOpts struct {
 	Enabled          bool
 	RepoGlobPatterns []string
+	// TagsToKeep bounds how many of the most recently pushed cache tags are
+	// retained per cache repository. Kaniko pushes ~one tag per Dockerfile
+	// instruction on every build, so an unbounded cache fills the disk. If <= 0
+	// a sane default is used.
+	TagsToKeep int32
+	// PulledWithin (a zot duration, e.g. "168h") additionally retains any cache
+	// tag pulled within the window, OR'd with TagsToKeep. This keeps the reused
+	// working set hot — expensive stable layers (dependency downloads) are pulled
+	// on every build but pushed only once, so a push-count bound alone would
+	// evict them. If empty a sane default is used.
+	PulledWithin string
 }
 
 func NewZotRegistry(opts ZotRegistryOpts) registry.RegistryBuilder {
@@ -125,9 +146,9 @@ func (z *zotRegistry) BuildConfigurationConfigMap(ctx context.Context, registry 
 		}
 	}
 
-	if registry.Spec.RetentionPolicy != nil {
-		config.Storage.Retention = z.buildRetentionConfig(registry)
-	}
+	// Always emit a retention config: image repos reclaim finalizer-untagged
+	// manifests, and when layer caching is enabled the build cache is bounded too.
+	config.Storage.Retention = z.buildRetentionConfig()
 
 	jsonBytes, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
@@ -540,28 +561,69 @@ func (z *zotRegistry) BuildHTPasswordSecret(ctx context.Context, registry *regis
 	return secret, HtpasswordKey, nil
 }
 
-func (z *zotRegistry) buildRetentionConfig(registry *registryv1alpha1.ClusterRegistry) RetentionConfig {
-	retention := RetentionConfig{
-		Policies: []RetentionPolicy{
-			{
-				Repositories:   []string{"**"},
-				DeleteUntagged: registry.Spec.RetentionPolicy.DeleteUntagged,
-				KeepTags: []KeepTagRule{
-					{
-						MostRecentlyPushedCount: registry.Spec.RetentionPolicy.TagsPerRepo,
-					},
+func (z *zotRegistry) buildRetentionConfig() RetentionConfig {
+	policies := []RetentionPolicy{}
+
+	// Cache repositories MUST be listed before the "**" catch-all: zot applies
+	// the first matching policy per repository, so a cache policy placed after
+	// "**" would never match (every repo matches "**" first). Kaniko pushes
+	// ~one content-addressed tag per Dockerfile instruction on every build, so
+	// without a bound the cache grows without limit and fills the disk (observed
+	// on a staging VPS: a single preview stack's cache reached 110GB and
+	// triggered node disk-pressure evictions). Keeping only the most recently
+	// pushed cache tags, OR anything still being pulled, lets GC reclaim blobs
+	// referenced solely by cold entries while the reused working set stays hot.
+	// This applies whenever layer caching is enabled, independent of the user's
+	// retention spec, because the cache is internal build infrastructure that
+	// must never grow unbounded.
+	if z.layerCachingOpts.Enabled {
+		tagsToKeep := z.layerCachingOpts.TagsToKeep
+		if tagsToKeep <= 0 {
+			tagsToKeep = defaultCacheTagsToKeep
+		}
+		pulledWithin := z.layerCachingOpts.PulledWithin
+		if pulledWithin == "" {
+			pulledWithin = defaultCachePulledWithin
+		}
+		policies = append(policies, RetentionPolicy{
+			Repositories:    z.layerCachingOpts.RepoGlobPatterns,
+			DeleteUntagged:  true,
+			DeleteReferrers: true,
+			// OR'd: keep the most recent pushes AND anything still being pulled,
+			// so reused stable layers stay hot while cold layers age out.
+			KeepTags: []KeepTagRule{
+				{
+					MostRecentlyPushedCount: ptr.To(tagsToKeep),
+					PulledWithin:            pulledWithin,
 				},
 			},
-		},
-	}
-
-	if z.layerCachingOpts.Enabled {
-		// Add policy for cache artifacts. We dont want to delete untagged layers for cache artifacts.
-		retention.Policies = append(retention.Policies, RetentionPolicy{
-			Repositories:   z.layerCachingOpts.RepoGlobPatterns,
-			DeleteUntagged: false,
 		})
 	}
 
-	return retention
+	// Catch-all policy for regular (non-cache) image repositories.
+	//
+	// Image lifecycle is owned by ImageBuild CRs, NOT by a Zot tag count. An
+	// image must exist for exactly as long as some live ImageBuild references it
+	// — including rolled-back builds, which stay referenced by a StackResource but
+	// are no longer the most recently pushed tag. So we NEVER apply a tag count
+	// here (it could delete a rolled-back-but-in-use image); which images survive
+	// is decided by ImageBuild history, which is CR- and rollback-aware.
+	//
+	// deleteUntagged is required and non-negotiable: the ImageBuild finalizer
+	// removes the tag when a build's CR is pruned, and this is what actually
+	// reclaims the manifest + blobs. Without it the finalizer would untag but the
+	// bytes would never be freed. Placed after the cache policy so cache repos
+	// never fall through to it.
+	policies = append(policies, RetentionPolicy{
+		Repositories:    []string{"**"},
+		DeleteUntagged:  true,
+		DeleteReferrers: true,
+	})
+
+	return RetentionConfig{
+		// Age gate for untagged/referrer removal. Track gcDelay so the two
+		// grace periods stay consistent.
+		Delay:    z.gcDelay,
+		Policies: policies,
+	}
 }
