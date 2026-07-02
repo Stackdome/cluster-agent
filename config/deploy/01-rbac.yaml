@@ -69,7 +69,7 @@ rules:
   resources:
   - imagebuilds
   - imagebuilds/status
-  # TODO Add finalizers
+  - imagebuilds/finalizers
   verbs:
   - get
   - list
