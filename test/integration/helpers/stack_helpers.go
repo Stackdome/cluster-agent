@@ -17,17 +17,20 @@ import (
 )
 
 // WaitForStackReady polls until the Stack reaches phase=Ready or the timeout expires.
-// For display-phase coverage; prefer WaitForStackAvailable for convergence assertions.
+// For display-phase coverage; prefer WaitForStackConverged for convergence assertions.
 func WaitForStackReady(ctx context.Context, c client.Client, key client.ObjectKey, timeout time.Duration) (*corev1alpha1.Stack, error) {
 	return WaitFor(ctx, c, key, &corev1alpha1.Stack{}, func(s *corev1alpha1.Stack) bool {
 		return s.Status.Phase == corev1alpha1.StackReady
 	}, timeout)
 }
 
-// WaitForStackAvailable polls until the Stack has a fresh Available=True condition.
-func WaitForStackAvailable(ctx context.Context, c client.Client, key client.ObjectKey, timeout time.Duration) (*corev1alpha1.Stack, error) {
+// WaitForStackConverged polls until the Stack has a fresh Converged=True condition
+// (all desired resources rolled out on the target revision, no orphans). Use this
+// for convergence assertions — the Available condition only reports serving traffic
+// and can be True before a rollout has fully converged.
+func WaitForStackConverged(ctx context.Context, c client.Client, key client.ObjectKey, timeout time.Duration) (*corev1alpha1.Stack, error) {
 	return WaitFor(ctx, c, key, &corev1alpha1.Stack{}, func(s *corev1alpha1.Stack) bool {
-		cond := meta.FindStatusCondition(s.Status.Conditions, string(corev1alpha1.StackConditionAvailable))
+		cond := meta.FindStatusCondition(s.Status.Conditions, string(corev1alpha1.StackConditionConverged))
 		return cond != nil && cond.Status == metav1.ConditionTrue && cond.ObservedGeneration == s.Generation
 	}, timeout)
 }

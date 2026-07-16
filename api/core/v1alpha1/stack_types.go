@@ -22,7 +22,16 @@ const (
 type StackCondition string
 
 const (
-	StackConditionAvailable      StackCondition = "Available"
+	// StackConditionAvailable reports whether every desired child is serving
+	// traffic (child Available=True). It is a pure serving rollup and matches
+	// the StackResource "Available" condition — orthogonal to convergence, so
+	// it stays True during a rollout while pods on the previous revision keep
+	// serving. Use StackConditionConverged for "spec fully settled".
+	StackConditionAvailable StackCondition = "Available"
+	// StackConditionConverged reports whether every desired child has fully
+	// rolled out on the target revision and no orphaned children remain. This
+	// is the verdict that drives the Ready phase and the LastConverged stamp.
+	StackConditionConverged      StackCondition = "Converged"
 	StackConditionResourcesReady StackCondition = "ResourcesReady"
 	StackConditionStalled        StackCondition = "Stalled"
 	StackConditionDegraded       StackCondition = "Degraded"
