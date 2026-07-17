@@ -2,6 +2,7 @@ package stack
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -184,6 +185,7 @@ func TestManagedAllConverged(t *testing.T) {
 		t.Fatalf("expected lastConverged.revision=%q, got %+v", testRev, status.LastConverged)
 	}
 	assertCondition(t, status, string(v1alpha1.StackConditionAvailable), metav1.ConditionTrue)
+	assertCondition(t, status, string(v1alpha1.StackConditionConverged), metav1.ConditionTrue)
 	assertCondition(t, status, string(v1alpha1.StackConditionResourcesReady), metav1.ConditionTrue)
 	assertCondition(t, status, string(v1alpha1.StackConditionDegraded), metav1.ConditionFalse)
 	assertCondition(t, status, string(v1alpha1.StackConditionProgressing), metav1.ConditionFalse)
@@ -198,12 +200,60 @@ func TestStandaloneConvergesOnReadyAlone(t *testing.T) {
 		t.Fatal("lastConverged must not be set in standalone mode")
 	}
 	assertCondition(t, status, string(v1alpha1.StackConditionAvailable), metav1.ConditionTrue)
+	assertCondition(t, status, string(v1alpha1.StackConditionConverged), metav1.ConditionTrue)
 	assertCondition(t, status, string(v1alpha1.StackConditionResourcesReady), metav1.ConditionTrue)
 }
 
 func TestEmptyResourceNames(t *testing.T) {
 	status := aggregateStackStatus(managedStack(), nil)
 	assertPhase(t, status, v1alpha1.StackReady)
+	// An empty stack is vacuously both serving and converged.
+	assertCondition(t, status, string(v1alpha1.StackConditionAvailable), metav1.ConditionTrue)
+	assertCondition(t, status, string(v1alpha1.StackConditionConverged), metav1.ConditionTrue)
+}
+
+// ---------------------------------------------------------------------------
+// Available (serving) vs Converged (settled) — the two are orthogonal.
+// ---------------------------------------------------------------------------
+
+// A child serving traffic on the previous revision keeps the Stack Available
+// even though it has not converged onto the target revision.
+func TestServingOnOldRevisionIsAvailableNotConverged(t *testing.T) {
+	stack := managedStack("web")
+	stack.Status.LastConverged = &v1alpha1.ConvergenceRecord{Revision: "old-rev"}
+	status := aggregateStackStatus(stack, []v1alpha1.StackResource{
+		servingNotConvergedChild("web", testRev, "old-rev", 1),
+	})
+	assertCondition(t, status, string(v1alpha1.StackConditionAvailable), metav1.ConditionTrue)
+	assertCondition(t, status, string(v1alpha1.StackConditionConverged), metav1.ConditionFalse)
+}
+
+// A child that is not serving (Available=False) drops the Stack's Available
+// condition and names the offending child.
+func TestNotServingChildClearsAvailable(t *testing.T) {
+	status := aggregateStackStatus(managedStack("web", "worker"), []v1alpha1.StackResource{
+		readyChild("web", testRev, testRev, 1),
+		pendingChild("worker", testRev, 1),
+	})
+	avail := findCond(t, status.Conditions, string(v1alpha1.StackConditionAvailable))
+	if avail.Status != metav1.ConditionFalse || avail.Reason != "ResourcesNotServing" {
+		t.Fatalf("expected Available False/ResourcesNotServing, got %s/%s", avail.Status, avail.Reason)
+	}
+	if !strings.Contains(avail.Message, "worker") {
+		t.Fatalf("expected non-serving child in message, got %q", avail.Message)
+	}
+}
+
+// A missing child leaves the Stack not-serving with the MissingResources
+// reason (a resource that does not exist cannot serve).
+func TestMissingChildClearsAvailableWithMissingReason(t *testing.T) {
+	status := aggregateStackStatus(managedStack("web", "worker"), []v1alpha1.StackResource{
+		readyChild("web", testRev, testRev, 1),
+	})
+	avail := findCond(t, status.Conditions, string(v1alpha1.StackConditionAvailable))
+	if avail.Status != metav1.ConditionFalse || avail.Reason != "MissingResources" {
+		t.Fatalf("expected Available False/MissingResources, got %s/%s", avail.Status, avail.Reason)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -600,11 +650,14 @@ func TestOrphanBlocksAvailableNotResourcesReady(t *testing.T) {
 		readyChild("web", testRev, testRev, 1),
 		readyChild("old-worker", testRev, testRev, 1),
 	})
-	assertPhase(t, status, v1alpha1.StackPending)
+	assertPhase(t, status, v1alpha1.StackProgressing)
 	assertCondition(t, status, string(v1alpha1.StackConditionResourcesReady), metav1.ConditionTrue)
-	avail := findCond(t, status.Conditions, string(v1alpha1.StackConditionAvailable))
-	if avail.Reason != "OrphanedResources" {
-		t.Fatalf("expected OrphanedResources, got %q", avail.Reason)
+	// Children all serve traffic, so Available stays True; the orphan only
+	// blocks Converged.
+	assertCondition(t, status, string(v1alpha1.StackConditionAvailable), metav1.ConditionTrue)
+	conv := findCond(t, status.Conditions, string(v1alpha1.StackConditionConverged))
+	if conv.Status != metav1.ConditionFalse || conv.Reason != "OrphanedResources" {
+		t.Fatalf("expected Converged False/OrphanedResources, got %s/%s", conv.Status, conv.Reason)
 	}
 }
 
@@ -656,9 +709,12 @@ func TestUnhealthyOrphanDoesNotBlockResourcesReady(t *testing.T) {
 		pendingChild("old-worker", testRev, 1),
 	})
 	assertCondition(t, status, string(v1alpha1.StackConditionResourcesReady), metav1.ConditionTrue)
-	avail := findCond(t, status.Conditions, string(v1alpha1.StackConditionAvailable))
-	if avail.Reason != "OrphanedResources" {
-		t.Fatalf("expected OrphanedResources, got %q", avail.Reason)
+	// web (the only desired child) serves traffic, so Available is True even
+	// though a non-serving orphan lingers; the orphan blocks Converged.
+	assertCondition(t, status, string(v1alpha1.StackConditionAvailable), metav1.ConditionTrue)
+	conv := findCond(t, status.Conditions, string(v1alpha1.StackConditionConverged))
+	if conv.Reason != "OrphanedResources" {
+		t.Fatalf("expected OrphanedResources, got %q", conv.Reason)
 	}
 }
 
@@ -671,9 +727,9 @@ func TestMultipleOrphansSorted(t *testing.T) {
 	if !slices.Equal(status.OrphanedResources, []string{"alpha", "zeta"}) {
 		t.Fatalf("orphans should be sorted, got %v", status.OrphanedResources)
 	}
-	avail := findCond(t, status.Conditions, string(v1alpha1.StackConditionAvailable))
-	if avail.Reason != "OrphanedResources" {
-		t.Fatalf("expected OrphanedResources reason, got %q", avail.Reason)
+	conv := findCond(t, status.Conditions, string(v1alpha1.StackConditionConverged))
+	if conv.Reason != "OrphanedResources" {
+		t.Fatalf("expected OrphanedResources reason, got %q", conv.Reason)
 	}
 }
 
@@ -681,8 +737,25 @@ func TestEmptyDesiredWithOrphan(t *testing.T) {
 	status := aggregateStackStatus(managedStack(), []v1alpha1.StackResource{
 		readyChild("leftover", testRev, testRev, 1),
 	})
-	assertPhase(t, status, v1alpha1.StackPending)
+	assertPhase(t, status, v1alpha1.StackProgressing)
 	assertCondition(t, status, string(v1alpha1.StackConditionResourcesReady), metav1.ConditionTrue)
+}
+
+// Converged-but-orphaned is an in-flight rollout (orphan deletion pending),
+// not Pending: the controller is actively deleting the orphans.
+func TestConvergedWithOrphanIsProgressing(t *testing.T) {
+	status := aggregateStackStatus(managedStack("web"), []v1alpha1.StackResource{
+		readyChild("web", testRev, testRev, 1),
+		readyChild("old-worker", testRev, testRev, 1),
+	})
+	assertPhase(t, status, v1alpha1.StackProgressing)
+	prog := findCond(t, status.Conditions, string(v1alpha1.StackConditionProgressing))
+	if prog.Status != metav1.ConditionTrue || prog.Reason != "OrphanCleanup" {
+		t.Fatalf("expected Progressing True/OrphanCleanup, got %s/%s", prog.Status, prog.Reason)
+	}
+	if !strings.Contains(prog.Message, "old-worker") {
+		t.Fatalf("expected orphan name in message, got %q", prog.Message)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -900,11 +973,12 @@ func TestStandaloneOrphanBlocksAvailable(t *testing.T) {
 		readyChild("web", "", "", 1),
 		readyChild("leftover", "", "", 1),
 	})
-	assertPhase(t, status, v1alpha1.StackPending)
+	assertPhase(t, status, v1alpha1.StackProgressing)
 	assertCondition(t, status, string(v1alpha1.StackConditionResourcesReady), metav1.ConditionTrue)
-	avail := findCond(t, status.Conditions, string(v1alpha1.StackConditionAvailable))
-	if avail.Reason != "OrphanedResources" {
-		t.Fatalf("expected OrphanedResources, got %q", avail.Reason)
+	assertCondition(t, status, string(v1alpha1.StackConditionAvailable), metav1.ConditionTrue)
+	conv := findCond(t, status.Conditions, string(v1alpha1.StackConditionConverged))
+	if conv.Reason != "OrphanedResources" {
+		t.Fatalf("expected OrphanedResources, got %q", conv.Reason)
 	}
 }
 

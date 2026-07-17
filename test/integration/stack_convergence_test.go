@@ -88,19 +88,27 @@ var _ = Describe("Stack convergence", func() {
 				return s.Status.OrphanedResources
 			}, readyTimeout, "5s").Should(ContainElement("orphan-extra"))
 
-			By("Verifying Stack is Pending with ResourcesReady=True but Available=False")
+			By("Verifying Stack is Progressing (orphan cleanup) with ResourcesReady=True, Available=True, Converged=False")
 			s := &corev1alpha1.Stack{}
 			Expect(c.Get(ctx, client.ObjectKeyFromObject(stack), s)).To(Succeed())
-			Expect(s.Status.Phase).To(Equal(corev1alpha1.StackPending))
+			// The orphan is being deleted, so the Stack is Progressing (orphan
+			// cleanup), not Pending.
+			Expect(s.Status.Phase).To(Equal(corev1alpha1.StackProgressing))
 
 			resourcesReady := meta.FindStatusCondition(s.Status.Conditions, string(corev1alpha1.StackConditionResourcesReady))
 			Expect(resourcesReady).NotTo(BeNil())
 			Expect(resourcesReady.Status).To(Equal(metav1.ConditionTrue), "named children are healthy")
 
+			// Named children all serve traffic, so Available stays True — only
+			// Converged is blocked by the lingering orphan.
 			available := meta.FindStatusCondition(s.Status.Conditions, string(corev1alpha1.StackConditionAvailable))
 			Expect(available).NotTo(BeNil())
-			Expect(available.Status).To(Equal(metav1.ConditionFalse))
-			Expect(available.Reason).To(Equal("OrphanedResources"))
+			Expect(available.Status).To(Equal(metav1.ConditionTrue))
+
+			converged := meta.FindStatusCondition(s.Status.Conditions, string(corev1alpha1.StackConditionConverged))
+			Expect(converged).NotTo(BeNil())
+			Expect(converged.Status).To(Equal(metav1.ConditionFalse))
+			Expect(converged.Reason).To(Equal("OrphanedResources"))
 
 			By("Deleting the orphan")
 			Expect(c.Delete(ctx, orphan)).To(Succeed())
@@ -663,10 +671,17 @@ var _ = Describe("Stack convergence", func() {
 				}
 			}
 
-			By("Verifying conditions: Available=False, ResourcesReady=False, Progressing=True, Degraded=True")
+			By("Verifying conditions: Available=True, Converged=False, ResourcesReady=False, Progressing=True, Degraded=True")
+			// Both children serve traffic (SR-A on its old ReplicaSet), so the
+			// serving-based Available condition stays True even though the new
+			// revision has not converged.
 			available := meta.FindStatusCondition(s.Status.Conditions, string(corev1alpha1.StackConditionAvailable))
 			Expect(available).NotTo(BeNil())
-			Expect(available.Status).To(Equal(metav1.ConditionFalse))
+			Expect(available.Status).To(Equal(metav1.ConditionTrue))
+
+			converged := meta.FindStatusCondition(s.Status.Conditions, string(corev1alpha1.StackConditionConverged))
+			Expect(converged).NotTo(BeNil())
+			Expect(converged.Status).To(Equal(metav1.ConditionFalse))
 
 			resourcesReady := meta.FindStatusCondition(s.Status.Conditions, string(corev1alpha1.StackConditionResourcesReady))
 			Expect(resourcesReady).NotTo(BeNil())
