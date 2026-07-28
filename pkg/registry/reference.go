@@ -2,16 +2,22 @@ package registry
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"regexp"
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	corev1alpha1 "stackdome.io/cluster-agent/api/core/v1alpha1"
 	registryv1alpha1 "stackdome.io/cluster-agent/api/registry/v1alpha1"
 )
+
+// ErrRegistryNotReady signals the ClusterRegistry has not reached its Ready
+// condition yet; callers should requeue rather than fail the build.
+var ErrRegistryNotReady = errors.New("cluster registry not ready")
 
 type ResolvedRepository struct {
 	Host       string
@@ -62,9 +68,15 @@ func ResolveImageRepository(ctx context.Context, c client.Client, namespace stri
 			}
 			return out, fmt.Errorf("failed to get cluster registry %q: %w", spec.ClusterRegistryRef.Name, err)
 		}
+		if !meta.IsStatusConditionTrue(reg.Status.Conditions, string(registryv1alpha1.RegistryReady)) {
+			return out, fmt.Errorf("cluster registry %q: %w", spec.ClusterRegistryRef.Name, ErrRegistryNotReady)
+		}
 		host, err := hostFromURL(reg.Status.InternalURL)
 		if err != nil {
 			return out, fmt.Errorf("invalid cluster registry internalUrl %q: %w", reg.Status.InternalURL, err)
+		}
+		if host == "" {
+			return out, fmt.Errorf("cluster registry %q internalUrl %q has no host", spec.ClusterRegistryRef.Name, reg.Status.InternalURL)
 		}
 		out.Host = host
 		out.Insecure = true

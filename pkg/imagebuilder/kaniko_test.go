@@ -5,6 +5,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
 	corev1alpha1 "stackdome.io/cluster-agent/api/core/v1alpha1"
 )
 
@@ -111,6 +112,55 @@ var _ = Describe("GenerateImageBuildJob", func() {
 				Build()
 
 			Expect(params.ImageUrl()).To(Equal("registry.local/team/app:abc123"))
+		})
+	})
+
+	Context("pod restart policy", func() {
+		It("sets restartPolicy Never so failed pods are replaced via backoffLimit, not restarted in place", func() {
+			params := NewBuildParamsBuilder().
+				WithJobName("build-restart-policy").
+				WithNamespace("ns").
+				WithDestination("registry.local/team/app:abc123").
+				WithInsecureRegistry(false).
+				WithDockerfilePath("Dockerfile").
+				WithContextPath("/").
+				WithSource(&Source{Volume: &VolumeSource{PvcName: "pvc"}}).
+				Build()
+
+			job, err := GenerateImageBuildJob(params)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(job.Spec.Template.Spec.RestartPolicy).To(Equal(corev1.RestartPolicyNever))
+			Expect(job.Spec.BackoffLimit).To(HaveValue(Equal(int32(3))))
+		})
+	})
+
+	Context("common build args", func() {
+		It("includes caching and snapshot performance flags", func() {
+			params := NewBuildParamsBuilder().
+				WithJobName("build-common-args").
+				WithNamespace("ns").
+				WithDestination("registry.local/team/app:abc123").
+				WithInsecureRegistry(false).
+				WithDockerfilePath("Dockerfile").
+				WithContextPath("/").
+				WithSource(&Source{Volume: &VolumeSource{PvcName: "pvc"}}).
+				Build()
+
+			job, err := GenerateImageBuildJob(params)
+			Expect(err).NotTo(HaveOccurred())
+
+			args := job.Spec.Template.Spec.Containers[0].Args
+			Expect(args).To(ContainElements(
+				"--cache=true",
+				"--cache-copy-layers=true",
+				"--cache-run-layers=true",
+				"--cache-ttl=336h",
+				"--snapshot-mode=redo",
+				"--use-new-run",
+				"--skip-unused-stages=true",
+				"--compressed-caching=false",
+			))
 		})
 	})
 

@@ -2,17 +2,27 @@ package registry
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	corev1alpha1 "stackdome.io/cluster-agent/api/core/v1alpha1"
 	registryv1alpha1 "stackdome.io/cluster-agent/api/registry/v1alpha1"
 )
+
+func markRegistryReady(reg *registryv1alpha1.ClusterRegistry) {
+	apimeta.SetStatusCondition(&reg.Status.Conditions, metav1.Condition{
+		Type:   string(registryv1alpha1.RegistryReady),
+		Status: metav1.ConditionTrue,
+		Reason: "RegistryReady",
+	})
+}
 
 func newScheme() *runtime.Scheme {
 	s := runtime.NewScheme()
@@ -60,17 +70,26 @@ var _ = Describe("SanitizeTag", func() {
 
 var _ = Describe("ResolveImageRepository", func() {
 	Context("with a ClusterRegistryRef", func() {
-		It("resolves host from the ClusterRegistry status and marks insecure", func() {
-			reg := &registryv1alpha1.ClusterRegistry{
+		var (
+			reg  *registryv1alpha1.ClusterRegistry
+			spec corev1alpha1.ImageRepositorySpec
+		)
+
+		BeforeEach(func() {
+			reg = &registryv1alpha1.ClusterRegistry{
 				ObjectMeta: metav1.ObjectMeta{Name: "org-registry", Namespace: "ns"},
 			}
-			reg.Status.InternalURL = "http://default-registry.stackdome-registry.svc.cluster.local:5000"
-			c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(reg).Build()
-
-			spec := corev1alpha1.ImageRepositorySpec{
+			spec = corev1alpha1.ImageRepositorySpec{
 				ClusterRegistryRef: &corev1.LocalObjectReference{Name: "org-registry"},
 				Repository:         "team/app",
 			}
+		})
+
+		It("resolves host from a Ready ClusterRegistry status and marks insecure", func() {
+			markRegistryReady(reg)
+			reg.Status.InternalURL = "http://default-registry.stackdome-registry.svc.cluster.local:5000"
+			c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(reg).Build()
+
 			got, err := ResolveImageRepository(context.Background(), c, "ns", spec, "abc123")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(got.Host).To(Equal("default-registry.stackdome-registry.svc.cluster.local:5000"))
@@ -78,6 +97,48 @@ var _ = Describe("ResolveImageRepository", func() {
 			Expect(got.Tag).To(Equal("abc123"))
 			Expect(got.Insecure).To(BeTrue())
 			Expect(got.Reference()).To(Equal("default-registry.stackdome-registry.svc.cluster.local:5000/team/app:abc123"))
+		})
+
+		It("returns ErrRegistryNotReady when the Ready condition is absent", func() {
+			reg.Status.InternalURL = "http://default-registry.stackdome-registry.svc.cluster.local:5000"
+			c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(reg).Build()
+
+			_, err := ResolveImageRepository(context.Background(), c, "ns", spec, "abc123")
+			Expect(err).To(MatchError(ErrRegistryNotReady))
+			Expect(err.Error()).To(ContainSubstring("org-registry"))
+		})
+
+		It("returns ErrRegistryNotReady when the Ready condition is False", func() {
+			apimeta.SetStatusCondition(&reg.Status.Conditions, metav1.Condition{
+				Type:   string(registryv1alpha1.RegistryReady),
+				Status: metav1.ConditionFalse,
+				Reason: "Provisioning",
+			})
+			c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(reg).Build()
+
+			_, err := ResolveImageRepository(context.Background(), c, "ns", spec, "abc123")
+			Expect(err).To(MatchError(ErrRegistryNotReady))
+		})
+
+		It("returns a non-sentinel error when Ready but internalUrl is empty", func() {
+			markRegistryReady(reg)
+			c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(reg).Build()
+
+			_, err := ResolveImageRepository(context.Background(), c, "ns", spec, "abc123")
+			Expect(err).To(HaveOccurred())
+			Expect(errors.Is(err, ErrRegistryNotReady)).To(BeFalse())
+			Expect(err.Error()).To(ContainSubstring("has no host"))
+		})
+
+		It("returns a non-sentinel error when Ready but internalUrl has no host", func() {
+			markRegistryReady(reg)
+			reg.Status.InternalURL = "http:///just-a-path"
+			c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(reg).Build()
+
+			_, err := ResolveImageRepository(context.Background(), c, "ns", spec, "abc123")
+			Expect(err).To(HaveOccurred())
+			Expect(errors.Is(err, ErrRegistryNotReady)).To(BeFalse())
+			Expect(err.Error()).To(ContainSubstring("has no host"))
 		})
 	})
 

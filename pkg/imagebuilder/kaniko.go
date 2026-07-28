@@ -63,7 +63,7 @@ spec:
           subPath: {{ .SubPath }}
           {{- end }}
         {{- end }}
-      restartPolicy: OnFailure
+      restartPolicy: Never
       volumes:
       {{- range .UniqueVolumes }}
       - name: {{ . }}
@@ -343,7 +343,21 @@ func GenerateImageBuildJob(params BuildParams) (*batchv1.Job, error) {
 	// Add common Kaniko args for all builds
 	// --ignore-path=/product_uuid avoids "device or resource busy" errors when
 	// running inside Kind clusters, where that path is a host-mounted virtual file.
-	container.Args = append(container.Args, "--cache=true", "--cache-copy-layers=true", "--cache-run-layers=true", "--cleanup=true", "--ignore-path=/product_uuid")
+	// --snapshot-mode=redo and --use-new-run snapshot via file metadata instead
+	// of content-hashing the full filesystem; --compressed-caching=false trades
+	// ephemeral disk for less CPU/memory while caching layers.
+	container.Args = append(container.Args,
+		"--cache=true",
+		"--cache-copy-layers=true",
+		"--cache-run-layers=true",
+		"--cache-ttl=336h",
+		"--cleanup=true",
+		"--ignore-path=/product_uuid",
+		"--snapshot-mode=redo",
+		"--use-new-run",
+		"--skip-unused-stages=true",
+		"--compressed-caching=false",
+	)
 
 	for _, arg := range params.BuildArgs {
 		container.Args = append(container.Args, fmt.Sprintf("--build-arg=%s=%s", arg.Name, arg.Value))

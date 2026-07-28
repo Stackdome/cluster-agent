@@ -2,8 +2,10 @@ package imagebuild
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"golang.org/x/sync/errgroup"
 	batchv1 "k8s.io/api/batch/v1"
@@ -34,6 +36,10 @@ import (
 // deleteUntagged-only precisely so a still-referenced image is never pruned), so
 // the ImageBuild CR is the owner of its image's lifecycle.
 const ImageBuildCleanupFinalizer = "builds.stackdome.io/registry-image-cleanup"
+
+// registryNotReadyRequeueDelay is how long to wait before retrying a build
+// whose target ClusterRegistry is still provisioning.
+const registryNotReadyRequeueDelay = 10 * time.Second
 
 // ImageBuildReconciler reconciles a ImageBuild object
 type ImageBuildReconciler struct {
@@ -268,6 +274,10 @@ func (r *ImageBuildReconciler) reconcileImageBuildWithVolumeSource(ctx context.C
 	}
 
 	resolved, err := r.resolveDestination(ctx, buildConfig)
+	if errors.Is(err, registry.ErrRegistryNotReady) {
+		logger.Info(fmt.Sprintf("registry not ready for image build %s, requeueing", buildConfig.Name))
+		return ctrl.Result{RequeueAfter: registryNotReadyRequeueDelay}, nil
+	}
 	if err != nil {
 		reportImageBuildStatus(buildConfig, buildsv1alpha1.BuildAvailable, metav1.ConditionFalse, "RepositoryResolveFailed")
 		return ctrl.Result{}, err
@@ -332,6 +342,10 @@ func (r *ImageBuildReconciler) reconcileImageBuildWithGitSource(ctx context.Cont
 	}
 
 	resolved, err := r.resolveDestination(ctx, buildConfig)
+	if errors.Is(err, registry.ErrRegistryNotReady) {
+		logger.Info(fmt.Sprintf("registry not ready for image build %s, requeueing", buildConfig.Name))
+		return ctrl.Result{RequeueAfter: registryNotReadyRequeueDelay}, nil
+	}
 	if err != nil {
 		reportImageBuildStatus(buildConfig, buildsv1alpha1.BuildAvailable, metav1.ConditionFalse, "RepositoryResolveFailed")
 		return ctrl.Result{}, err

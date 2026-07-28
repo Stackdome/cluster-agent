@@ -7,15 +7,18 @@ import (
 	. "github.com/onsi/gomega"
 	"go.uber.org/mock/gomock"
 	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	buildsv1alpha1 "stackdome.io/cluster-agent/api/builds/v1alpha1"
 	corev1alpha1 "stackdome.io/cluster-agent/api/core/v1alpha1"
+	registryv1alpha1 "stackdome.io/cluster-agent/api/registry/v1alpha1"
 	"stackdome.io/cluster-agent/internal/controller/mocks"
 )
 
@@ -133,6 +136,93 @@ var _ = Describe("reconcileCancellation", func() {
 			Expect(cond).NotTo(BeNil())
 			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
 			Expect(cond.Reason).To(Equal("BuildCancelled"))
+		})
+	})
+})
+
+var _ = Describe("reconcile with a ClusterRegistryRef destination", func() {
+	const (
+		ns           = "test-ns"
+		registryName = "org-registry"
+		resourceName = "test-resource"
+		commit       = "abc123"
+	)
+
+	var (
+		scheme      *runtime.Scheme
+		buildConfig *buildsv1alpha1.ImageBuild
+		reg         *registryv1alpha1.ClusterRegistry
+	)
+
+	BeforeEach(func() {
+		scheme = runtime.NewScheme()
+		Expect(buildsv1alpha1.AddToScheme(scheme)).To(Succeed())
+		Expect(registryv1alpha1.AddToScheme(scheme)).To(Succeed())
+		Expect(batchv1.AddToScheme(scheme)).To(Succeed())
+
+		buildConfig = &buildsv1alpha1.ImageBuild{
+			ObjectMeta: metav1.ObjectMeta{Name: "test-build", Namespace: ns},
+			Spec: buildsv1alpha1.ImageBuildSpec{
+				ResourceName: resourceName,
+				SourceRevision: corev1alpha1.SourceRevisionSpec{
+					GitRepo: &corev1alpha1.GitRepoRevision{Branch: "main", Commit: commit},
+				},
+				BuildContext: buildsv1alpha1.BuildContextSpec{
+					DockerfilePath: "Dockerfile",
+					ContextPath:    "/",
+					ContextSource: &corev1alpha1.BuildContextSource{
+						Git: &corev1alpha1.GitRepoSource{RepoUrl: "https://github.com/org/repo"},
+					},
+				},
+				Repository: corev1alpha1.ImageRepositorySpec{
+					ClusterRegistryRef: &corev1.LocalObjectReference{Name: registryName},
+					Repository:         "team/app",
+				},
+			},
+		}
+		reg = &registryv1alpha1.ClusterRegistry{
+			ObjectMeta: metav1.ObjectMeta{Name: registryName, Namespace: ns},
+		}
+	})
+
+	newReconciler := func(objs ...client.Object) *ImageBuildReconciler {
+		fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
+		return &ImageBuildReconciler{Client: fc, Scheme: scheme}
+	}
+
+	Context("when the registry is not Ready yet", func() {
+		It("requeues without error, creates no job, and reports no resolve failure", func() {
+			r := newReconciler(buildConfig, reg)
+
+			result, err := r.reconcile(context.Background(), buildConfig)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(registryNotReadyRequeueDelay))
+
+			var jobs batchv1.JobList
+			Expect(r.Client.List(context.Background(), &jobs, client.InNamespace(ns))).To(Succeed())
+			Expect(jobs.Items).To(BeEmpty())
+
+			Expect(apimeta.FindStatusCondition(buildConfig.Status.Conditions, string(buildsv1alpha1.BuildAvailable))).To(BeNil())
+		})
+	})
+
+	Context("when the registry is Ready", func() {
+		It("creates the build job", func() {
+			apimeta.SetStatusCondition(&reg.Status.Conditions, metav1.Condition{
+				Type:   string(registryv1alpha1.RegistryReady),
+				Status: metav1.ConditionTrue,
+				Reason: "RegistryReady",
+			})
+			reg.Status.InternalURL = "http://org-registry.stackdome-registry.svc.cluster.local:5000"
+			r := newReconciler(buildConfig, reg)
+
+			result, err := r.reconcile(context.Background(), buildConfig)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeZero())
+
+			job := &batchv1.Job{}
+			jobName := buildsv1alpha1.BuildJobName(resourceName, commit)
+			Expect(r.Client.Get(context.Background(), types.NamespacedName{Name: jobName, Namespace: ns}, job)).To(Succeed())
 		})
 	})
 })
