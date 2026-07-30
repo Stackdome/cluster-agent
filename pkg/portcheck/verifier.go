@@ -117,27 +117,33 @@ func (v *Verifier) Enqueue(key Key, podIP string, ports []int32) {
 		return
 	}
 	v.pending[key] = struct{}{}
-	// Initialize generation on first enqueue if not present.
-	if _, ok := v.generations[key]; !ok {
-		v.generations[key] = 0
-	}
+	// A key never Forgotten has no generations entry; the zero value is its
+	// generation, so nothing needs to be materialized here.
 	generation := v.generations[key]
 	v.mu.Unlock()
 
 	select {
 	case v.queue <- job{key: key, podIP: podIP, ports: ports, generation: generation}:
 	default:
+		// The queue is full, so this job will never run and its pending marker
+		// must be cleared. Between the unlock above and here a Forget+Enqueue
+		// pair may have installed a newer job under the same key; that job owns
+		// the marker now, so only clear it while the generation is still ours.
 		v.mu.Lock()
-		delete(v.pending, key)
+		if v.generations[key] == generation {
+			delete(v.pending, key)
+		}
 		v.mu.Unlock()
 	}
 }
 
 // Forget drops any stored result for key, forcing the next Enqueue to redial.
 // It bumps the generation to invalidate any in-flight jobs from before the Forget.
-// Note: generations[key] entries are never deleted. Bounded growth: entries exist only
-// for keys that have been Forgotten. Cardinality is bounded by the number of distinct
-// Key values ever enqueued, same order as the results map before Forget.
+//
+// Forget is the only writer of the generations map and entries are never
+// deleted, so the map retains exactly one int per key that has ever been
+// Forgotten — a subset of the keys the caller already tracks, and never more
+// than the results map held over the same lifetime.
 func (v *Verifier) Forget(key Key) {
 	v.mu.Lock()
 	defer v.mu.Unlock()

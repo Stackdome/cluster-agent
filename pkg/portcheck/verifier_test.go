@@ -9,6 +9,21 @@ import (
 	. "github.com/onsi/gomega"
 )
 
+// testNetIP is RFC 5737 TEST-NET-1, reserved for documentation and never
+// routed on the public internet. Dialing it normally hangs until the dial
+// timeout, which is how the specs below hold a job in flight for a known
+// duration without mocking the dialer.
+const testNetIP = "192.0.2.1"
+
+// testNetAssumption annotates every assertion that depends on that hang. On a
+// network whose gateway answers TEST-NET-1 with ICMP unreachable the dial
+// fails in milliseconds instead, and the spec can no longer stage the ordering
+// it exists to test. Failing with this message names the environment as the
+// suspect rather than leaving a bare unexplained boolean.
+const testNetAssumption = "this spec needs a dial to " + testNetIP + " (RFC 5737 TEST-NET-1) to hang " +
+	"until the dial timeout; if this network answers it with ICMP unreachable the dial returns " +
+	"immediately and the interleaving under test cannot be staged"
+
 var _ = Describe("Verifier", func() {
 	var (
 		ctx    context.Context
@@ -89,19 +104,16 @@ var _ = Describe("Verifier", func() {
 		v = NewVerifier(2, 3*time.Second)
 		v.Start(ctx)
 
-		// Job A: Enqueue against RFC 5737 TEST-NET (unroutable, guaranteed to timeout).
-		// The Dial will hang for the full 3s timeout trying to connect, keeping the
-		// job in-flight for the whole test.
-		v.Enqueue(key, "192.0.2.1", []int32{1})
+		// Job A dials TEST-NET-1, so its Dial hangs for the full 3s timeout and
+		// the job stays in flight across the Forget below.
+		v.Enqueue(key, testNetIP, []int32{1})
 
-		// Give job A a moment to be dequeued and start its Dial. We verify by
-		// attempting another enqueue with the same key; if job A is in-flight, this
-		// will be rejected (pending[key] already set).
+		// Give job A a moment to be dequeued and start its Dial.
 		time.Sleep(100 * time.Millisecond)
 
-		// Verify job A has no result yet (still dialing)
+		// Job A must still be mid-Dial with nothing stored.
 		_, ok := v.Get(key)
-		Expect(ok).To(BeFalse(), "Job A should still be mid-Dial, no result yet")
+		Expect(ok).To(BeFalse(), testNetAssumption)
 
 		// Call Forget to bump the generation, invalidating job A
 		v.Forget(key)
@@ -130,67 +142,63 @@ var _ = Describe("Verifier", func() {
 			"Result should stay AllOpen; stale job A's write must be skipped")
 	})
 
-	It("stale job completion must not clear state belonging to in-flight fresh job", func() {
-		// This test covers the critical interleaving where the stale job completes
-		// BEFORE the fresh job, exposing a bug if stale completion clears pending/generation.
-		// Setup: 2 workers, both jobs dial TEST-NET (slow), A completes first due to shorter timeout.
+	It("does not let a stale job's completion clear the in-flight fresh job's state", func() {
+		// The dangerous interleaving is the mirror of the spec above: the stale
+		// job finishes FIRST, while the fresh job is still dialing. If the stale
+		// job clears the shared pending marker and generation on its way out, it
+		// hands the key to a third Enqueue and the fresh job's own result is then
+		// discarded as stale.
+		//
+		// A single worker makes the ordering exact rather than probabilistic:
+		// the queue is FIFO, so one long-running blocker job lets the whole queue
+		// be staged before any of it starts dialing.
+		const bPort = int32(5555)
 
-		v = NewVerifier(2, 1*time.Second) // Workers + short timeout for A
+		v = NewVerifier(1, time.Second)
 		v.Start(ctx)
 
-		// Job A: Enqueue against TEST-NET with 1s timeout (expires first)
-		v.Enqueue(key, "192.0.2.1", []int32{1})
+		aPort, closeA := listenOnFreePort()
+		closeA() // nothing listening, so job A's dial fails in microseconds
+		cPort, closeC := listenOnFreePort()
+		closeC()
 
-		// Give job A a moment to be dequeued
-		time.Sleep(100 * time.Millisecond)
-		_, ok := v.Get(key)
-		Expect(ok).To(BeFalse(), "Job A still mid-Dial")
+		blocker := Key{Namespace: "ns", Name: "blocker", Revision: "h1"}
+		v.Enqueue(blocker, testNetIP, []int32{1})
 
-		// Forget bumps generation, invalidating job A
+		// Staged behind the blocker, in queue order: job A at generation 0, then
+		// the Forget that invalidates it, then job B at generation 1.
+		v.Enqueue(key, "127.0.0.1", []int32{aPort})
 		v.Forget(key)
+		v.Enqueue(key, testNetIP, []int32{bPort})
 
-		// Job B: Create a custom context with 3s timeout for this one, enqueue with TEST-NET
-		// We use a different verifier timeout here, but we can approximate with a helper check
-		// Actually, simpler: just enqueue against the real listening port so B completes fast
-		// But we want B to be slow... let me reconsider.
-		// Actually we want both slow but A faster. Let me use the real port.
-		// No wait, the requirement says: A dials TEST-NET with 1s, B dials TEST-NET with 3s.
-		// Both slow, A completes first.
-		// But we only have one Verifier timeout setting.
+		// The blocker's result appearing means the worker is free and job A is
+		// next off the queue.
+		Eventually(func() bool { _, ok := v.Get(blocker); return ok }).
+			Within(3 * time.Second).ProbeEvery(10 * time.Millisecond).
+			Should(BeTrue(), testNetAssumption)
 
-		// Different approach: Just enqueue B right after Forget, but against unroutable IP too
-		// with a longer port (no significant difference). A will timeout first (1s verifier timeout).
-		v.Enqueue(key, "192.0.2.1", []int32{2})
+		// Job A now completes within microseconds and, being stale, must store
+		// nothing. Job B takes the worker next and holds it for the full dial
+		// timeout, so the key stays unanswered across this whole window.
+		Consistently(func() bool { _, ok := v.Get(key); return ok }).
+			Within(300 * time.Millisecond).ProbeEvery(20 * time.Millisecond).
+			Should(BeFalse(), testNetAssumption)
 
-		// Wait for A to timeout and complete (~1s)
-		time.Sleep(1200 * time.Millisecond)
+		// Job C is admitted only if stale job A wrongly cleared the pending
+		// marker that belongs to job B. Being admitted also resets the
+		// generation, which is what makes B's own write look stale.
+		v.Enqueue(key, "127.0.0.1", []int32{cPort})
 
-		// At this point:
-		// - Job A completed and was discarded as stale (0 != 1)
-		// - CRITICAL: A must NOT have cleared pending or generation
-		// - Job B is still dialing
-
-		// If the bug exists (unconditional delete), then:
-		// - pending[key] was cleared by A
-		// - A new Enqueue would be wrongly admitted
-		// - It would reinitialize generations[key] to 0
-		// - When B completes, its gen 1 != 0 → B's result discarded (BUG REINTRODUCED)
-
-		// Try to enqueue a third job C while B is still in-flight
-		// With the bug, C would be admitted; without bug, it's rejected (pending still set by B)
-		v.Enqueue(key, "127.0.0.1", []int32{9999})
-		// Check if the enqueue resulted in anything being queued
-		// We can't directly check, but we can verify B's result is still valid after it completes
-
-		// Wait for B to timeout and complete (~2s more, total ~3.2s from start)
-		time.Sleep(2500 * time.Millisecond)
-
-		// B's result should be stored (even though it's closed ports, it did complete)
-		result, ok := v.Get(key)
-		Expect(ok).To(BeTrue(), "Job B's result must be stored")
-		// Job B dialed TEST-NET:2, which is unroutable, so port is closed
-		Expect(len(result.Ports)).To(Equal(1))
-		Expect(result.Ports[0].Open).To(BeFalse(), "Port 2 on TEST-NET should be refused")
-		// This proves B's result was stored, not discarded as stale due to C's interference
+		Eventually(func() []PortResult {
+			result, ok := v.Get(key)
+			if !ok {
+				return nil
+			}
+			return result.Ports
+		}).Within(3 * time.Second).ProbeEvery(20 * time.Millisecond).
+			Should(Equal([]PortResult{{Port: bPort, Open: false}}),
+				"the stored result must be job B's (port %d, refused); port %d would mean job C "+
+					"was admitted over B's pending marker and B's result was discarded as stale",
+				bPort, cPort)
 	})
 })
