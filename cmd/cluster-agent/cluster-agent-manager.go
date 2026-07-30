@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"flag"
 	"os"
+	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -23,6 +24,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
@@ -43,6 +45,7 @@ import (
 	"stackdome.io/cluster-agent/internal/controller/workspaceuser"
 	"stackdome.io/cluster-agent/pkg/config"
 	"stackdome.io/cluster-agent/pkg/execute"
+	"stackdome.io/cluster-agent/pkg/portcheck"
 	"stackdome.io/cluster-agent/pkg/registry/zotregistry"
 	"stackdome.io/cluster-agent/pkg/rwmany_provisioner"
 
@@ -76,6 +79,7 @@ func main() {
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var imageBuildHistoryLimit int
+	var portCheckGrace time.Duration
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
@@ -87,6 +91,8 @@ func main() {
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
 	flag.IntVar(&imageBuildHistoryLimit, "image-build-history-limit", 5,
 		"Number of completed/cancelled ImageBuilds to retain per StackResource.")
+	flag.DurationVar(&portCheckGrace, "port-check-grace", 3*time.Minute,
+		"How long a StackResource keeps being requeued while its declared-port verification is still outstanding.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -173,7 +179,25 @@ func main() {
 		os.Exit(1)
 	}
 
-	stackResourceController := stackresource.NewStackResourceReconciler(mgr.GetClient(), mgr.GetScheme(), uncachedClient, imageBuildHistoryLimit)
+	// One verifier for the whole process: its worker pool bounds concurrent
+	// dialing globally, and its result cache is shared across reconciles.
+	portVerifier := portcheck.NewVerifier(portcheck.DefaultWorkers, portcheck.DefaultDialTimeout)
+	if err = mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+		portVerifier.Start(ctx)
+		<-ctx.Done()
+		return nil
+	})); err != nil {
+		setupLog.Error(err, "unable to start port verifier")
+		os.Exit(1)
+	}
+
+	stackResourceController := stackresource.NewStackResourceReconciler(
+		mgr.GetClient(), mgr.GetScheme(), uncachedClient,
+		stackresource.StackResourceReconcilerOpts{
+			ImageBuildHistoryLimit: imageBuildHistoryLimit,
+			PortVerifier:           portVerifier,
+			PortCheckGrace:         portCheckGrace,
+		})
 	if err = stackResourceController.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "WorkspaceResource")
 		os.Exit(1)

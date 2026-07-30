@@ -121,6 +121,8 @@ func (r *Reconciler) evaluateDeploymentStatus(ctx context.Context, resource *v1a
 		r.Status.SetCondition(resource, v1alpha1.StackResourceConverged, false, "NotConverged", convergenceMessage(deployment))
 	}
 
+	revision := deployment.Annotations[deploymentRevisionAnnotation]
+
 	// --- Serving: deployment has minimum availability ---
 	if serving {
 		r.Status.SetCondition(resource, v1alpha1.StackResourceWorkloadAvailable, true, "DeploymentServing", "deployment serving at minimum availability")
@@ -128,10 +130,31 @@ func (r *Reconciler) evaluateDeploymentStatus(ctx context.Context, resource *v1a
 			resource.Status.LastFailureDetails = nil
 			resource.Status.LastFailureDeploymentRevision = ""
 		} else {
-			r.captureFailureDetailsOnce(ctx, resource, deployment.Annotations[deploymentRevisionAnnotation])
-			if len(resource.Status.LastFailureDetails) == 0 && !controller.DeploymentRolloutSettled(deployment, deploymentGracePeriodAfterNewReplicaSetAvailable) {
-				return controller.ResultDeferredRequeue(10 * time.Second)
-			}
+			r.captureFailureDetailsOnce(ctx, resource, revision)
+		}
+
+		// Serving means the primary port passed its kubelet probe; the remaining
+		// declared ports are only covered here. This is best effort: an unverified
+		// result returns false and the resource proceeds, so a secondary port can
+		// read Available for one reconcile before a proven failure flips it. The
+		// primary port has no such window — a dead primary never reaches this
+		// branch, because the kubelet probe keeps the deployment from serving.
+		if r.capturePortVerification(ctx, resource, revision) {
+			r.reportPortNotListening(resource)
+			return controller.ResultStop
+		}
+
+		if !converged && len(resource.Status.LastFailureDetails) == 0 &&
+			!controller.DeploymentRolloutSettled(deployment, deploymentGracePeriodAfterNewReplicaSetAvailable) {
+			return controller.ResultDeferredRequeue(10 * time.Second)
+		}
+		// A scheduled check answers asynchronously, so an unverified resource needs
+		// another reconcile to read the result. The grace budget bounds that
+		// polling: a check that can never be answered (no dialable pod on this
+		// revision) stops costing reconciles once the budget runs out.
+		if !r.portVerificationAnswered(resource, revision) &&
+			!controller.DeploymentRolloutSettled(deployment, r.portCheckGrace()) {
+			return controller.ResultDeferredRequeue(portCheckRequeueInterval)
 		}
 		return controller.ResultContinue
 	}
@@ -139,7 +162,13 @@ func (r *Reconciler) evaluateDeploymentStatus(ctx context.Context, resource *v1a
 	// --- Not serving: capture failures, requeue until settled ---
 	controller.LoggerFromContext(ctx).Info("deployment not serving")
 	r.Status.SetCondition(resource, v1alpha1.StackResourceWorkloadAvailable, false, "DeploymentNotAvailable", "deployment is not yet available")
-	r.captureFailureDetailsOnce(ctx, resource, deployment.Annotations[deploymentRevisionAnnotation])
+	r.captureFailureDetailsOnce(ctx, resource, revision)
+	// A crash produces details above. If the container is running but never
+	// becomes Ready, the cause is usually a port nobody is listening on, which
+	// only the port verifier can name.
+	if len(resource.Status.LastFailureDetails) == 0 {
+		r.capturePortVerification(ctx, resource, revision)
+	}
 	r.Status.ReportNotReady(resource, "StackResourceDeploymentNotReady", "StackResourceDeploymentNotReady")
 
 	if !controller.DeploymentRolloutSettled(deployment, deploymentGracePeriodAfterNewReplicaSetAvailable) {
