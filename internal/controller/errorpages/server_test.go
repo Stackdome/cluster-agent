@@ -1,11 +1,13 @@
 package errorpages
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 )
 
 var _ = Describe("Handler", func() {
@@ -59,5 +61,30 @@ var _ = Describe("Handler", func() {
 
 		Expect(rec.Code).To(Equal(http.StatusOK))
 		Expect(rec.Body.String()).NotTo(ContainSubstring("<html"))
+	})
+})
+
+var _ = Describe("Runnable", func() {
+	It("runs on every replica rather than only the leader", func() {
+		// The error-page Service selects all agent pods and readiness is probed
+		// on the health port, so a non-leader replica is Ready and receives
+		// error-page traffic. If the server waited for the leader lease, those
+		// replicas would refuse connections on the error-page port.
+		runnable := Runnable(DefaultAddr)
+
+		election, ok := runnable.(manager.LeaderElectionRunnable)
+		Expect(ok).To(BeTrue(), "Runnable must declare its leader election behaviour")
+		Expect(election.NeedLeaderElection()).To(BeFalse())
+	})
+
+	It("stops when the manager's context is cancelled", func() {
+		ctx, cancel := context.WithCancel(context.Background())
+		// Port 0 lets the kernel pick a free port, so the spec never collides
+		// with anything already listening.
+		stopped := make(chan error, 1)
+		go func() { stopped <- Runnable("127.0.0.1:0").Start(ctx) }()
+
+		cancel()
+		Eventually(stopped).Should(Receive(BeNil()))
 	})
 })

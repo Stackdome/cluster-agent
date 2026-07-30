@@ -56,21 +56,34 @@ func pageFor(path string) (int, string) {
 // Runnable wraps the handler in a manager.Runnable so its lifecycle follows the
 // manager's, shutting down cleanly when the agent stops.
 func Runnable(addr string) manager.Runnable {
-	return manager.RunnableFunc(func(ctx context.Context) error {
-		server := &http.Server{
-			Addr:              addr,
-			Handler:           Handler(),
-			ReadHeaderTimeout: 5 * time.Second,
-		}
-		go func() {
-			<-ctx.Done()
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			_ = server.Shutdown(shutdownCtx)
-		}()
-		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			return err
-		}
-		return nil
-	})
+	return errorPageServer{addr: addr}
+}
+
+// errorPageServer serves the pages for the lifetime of the manager.
+type errorPageServer struct {
+	addr string
+}
+
+// NeedLeaderElection is false: the error-page Service selects every agent pod
+// and readiness is probed on the health port, so a non-leader replica is Ready
+// and lands in the Service's endpoints. Were this gated on the leader lease,
+// those replicas would refuse connections on the error-page port.
+func (errorPageServer) NeedLeaderElection() bool { return false }
+
+func (s errorPageServer) Start(ctx context.Context) error {
+	server := &http.Server{
+		Addr:              s.addr,
+		Handler:           Handler(),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = server.Shutdown(shutdownCtx)
+	}()
+	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
 }

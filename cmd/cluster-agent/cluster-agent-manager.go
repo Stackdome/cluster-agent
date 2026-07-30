@@ -382,12 +382,16 @@ func main() {
 	// ensured once at start-up rather than reconciled. A cluster without Traefik
 	// CRDs simply goes without custom error pages; that must not stop the agent.
 	// The uncached client is used because the manager's cache is not running yet.
+	// The timeout bounds the wait: this runs before mgr.Start, so a slow or
+	// unreachable API server would otherwise hold up every controller.
+	errorPagesCtx, cancelErrorPages := context.WithTimeout(context.Background(), 30*time.Second)
 	if err := errorpages.Ensure(
-		context.Background(), uncachedClient, errorPagesNamespace, parseSelector(errorPagesSelector),
+		errorPagesCtx, uncachedClient, errorPagesNamespace, parseSelector(errorPagesSelector),
 	); err != nil {
 		setupLog.Error(err, "unable to set up error pages, continuing without them",
 			"namespace", errorPagesNamespace)
 	}
+	cancelErrorPages()
 
 	setupLog.Info("starting manager")
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
