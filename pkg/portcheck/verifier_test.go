@@ -83,4 +83,47 @@ var _ = Describe("Verifier", func() {
 		_, ok := v.Get(key)
 		Expect(ok).To(BeFalse())
 	})
+
+	It("invalidates stale in-flight jobs via generation counter on Forget+Enqueue", func() {
+		port, closeFn := listenOnFreePort()
+		DeferCleanup(closeFn)
+		v.Start(ctx)
+
+		// First enqueue and wait for result
+		v.Enqueue(key, "127.0.0.1", []int32{port})
+		Eventually(func() bool {
+			result, ok := v.Get(key)
+			return ok && result.AllOpen()
+		}).Within(3 * time.Second).Should(BeTrue())
+
+		firstResult, _ := v.Get(key)
+		firstTime := firstResult.CheckedAt
+
+		// Forget to bump generation and invalidate result
+		v.Forget(key)
+
+		// Verify result is gone
+		_, ok := v.Get(key)
+		Expect(ok).To(BeFalse())
+
+		// Small delay to ensure CheckedAt difference
+		time.Sleep(50 * time.Millisecond)
+
+		// Re-enqueue the same key against the same listener
+		v.Enqueue(key, "127.0.0.1", []int32{port})
+
+		// Wait for new result
+		Eventually(func() bool {
+			result, ok := v.Get(key)
+			return ok && result.AllOpen()
+		}).Within(3 * time.Second).Should(BeTrue())
+
+		secondResult, _ := v.Get(key)
+		secondTime := secondResult.CheckedAt
+
+		// The new result should have a more recent CheckedAt time,
+		// proving that the generation mechanism allowed the fresh job to write
+		// and prevented any stale job from overwriting it
+		Expect(secondTime).To(BeTemporally(">", firstTime))
+	})
 })

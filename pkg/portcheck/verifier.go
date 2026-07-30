@@ -28,9 +28,10 @@ type Key struct {
 }
 
 type job struct {
-	key   Key
-	podIP string
-	ports []int32
+	key        Key
+	podIP      string
+	ports      []int32
+	generation int
 }
 
 // Verifier runs port checks on a bounded worker pool and stores their results
@@ -40,9 +41,10 @@ type Verifier struct {
 	timeout time.Duration
 	queue   chan job
 
-	mu      sync.RWMutex
-	results map[Key]Result
-	pending map[Key]struct{}
+	mu          sync.RWMutex
+	results     map[Key]Result
+	pending     map[Key]struct{}
+	generations map[Key]int
 }
 
 func NewVerifier(workers int, timeout time.Duration) *Verifier {
@@ -53,11 +55,12 @@ func NewVerifier(workers int, timeout time.Duration) *Verifier {
 		timeout = DefaultDialTimeout
 	}
 	return &Verifier{
-		workers: workers,
-		timeout: timeout,
-		queue:   make(chan job, queueDepth),
-		results: make(map[Key]Result),
-		pending: make(map[Key]struct{}),
+		workers:     workers,
+		timeout:     timeout,
+		queue:       make(chan job, queueDepth),
+		results:     make(map[Key]Result),
+		pending:     make(map[Key]struct{}),
+		generations: make(map[Key]int),
 	}
 }
 
@@ -77,7 +80,11 @@ func (v *Verifier) run(ctx context.Context) {
 		case j := <-v.queue:
 			result := Dial(ctx, j.podIP, j.ports, v.timeout)
 			v.mu.Lock()
-			v.results[j.key] = result
+			// Only write result if generation hasn't changed (Forget wasn't called).
+			// Stale jobs from before a Forget must not overwrite newer results.
+			if v.generations[j.key] == j.generation {
+				v.results[j.key] = result
+			}
 			delete(v.pending, j.key)
 			v.mu.Unlock()
 		}
@@ -105,10 +112,15 @@ func (v *Verifier) Enqueue(key Key, podIP string, ports []int32) {
 		return
 	}
 	v.pending[key] = struct{}{}
+	// Initialize generation on first enqueue if not present.
+	if _, ok := v.generations[key]; !ok {
+		v.generations[key] = 0
+	}
+	generation := v.generations[key]
 	v.mu.Unlock()
 
 	select {
-	case v.queue <- job{key: key, podIP: podIP, ports: ports}:
+	case v.queue <- job{key: key, podIP: podIP, ports: ports, generation: generation}:
 	default:
 		v.mu.Lock()
 		delete(v.pending, key)
@@ -117,9 +129,11 @@ func (v *Verifier) Enqueue(key Key, podIP string, ports []int32) {
 }
 
 // Forget drops any stored result for key, forcing the next Enqueue to redial.
+// It bumps the generation to invalidate any in-flight jobs from before the Forget.
 func (v *Verifier) Forget(key Key) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	delete(v.results, key)
 	delete(v.pending, key)
+	v.generations[key]++
 }
