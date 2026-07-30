@@ -80,20 +80,17 @@ func (v *Verifier) run(ctx context.Context) {
 		case j := <-v.queue:
 			result := Dial(ctx, j.podIP, j.ports, v.timeout)
 			v.mu.Lock()
-			// Only write result if generation hasn't changed (Forget wasn't called).
-			// Stale jobs from before a Forget must not overwrite newer results.
-			isStale := v.generations[j.key] != j.generation
-			if !isStale {
+			// Only proceed with cleanup if this job's generation is still current.
+			// Stale jobs (from before a Forget) must do nothing to avoid clearing
+			// state that belongs to the newer in-flight job with bumped generation.
+			if v.generations[j.key] == j.generation {
+				// Current job: write result and clean up its pending marker
 				v.results[j.key] = result
+				delete(v.pending, j.key)
+				// Do NOT delete generations[j.key] — it may be needed by subsequent
+				// Forget/Enqueue cycles or to validate incoming stale jobs.
 			}
-			delete(v.pending, j.key)
-			// If this job was stale, clean up the generation entry. Since generation
-			// was checked (above) and pending is now deleted, no concurrent Enqueue
-			// can reference this stale entry. The next Enqueue will reinitialize it
-			// if needed. This prevents unbounded map growth across rollouts.
-			if isStale {
-				delete(v.generations, j.key)
-			}
+			// Stale job: do nothing. Pending and generations belong to the newer job.
 			v.mu.Unlock()
 		}
 	}
@@ -138,6 +135,9 @@ func (v *Verifier) Enqueue(key Key, podIP string, ports []int32) {
 
 // Forget drops any stored result for key, forcing the next Enqueue to redial.
 // It bumps the generation to invalidate any in-flight jobs from before the Forget.
+// Note: generations[key] entries are never deleted. Bounded growth: entries exist only
+// for keys that have been Forgotten. Cardinality is bounded by the number of distinct
+// Key values ever enqueued, same order as the results map before Forget.
 func (v *Verifier) Forget(key Key) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
