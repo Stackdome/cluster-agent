@@ -491,9 +491,14 @@ var _ = Describe("Stack convergence", func() {
 
 		It("should converge at revision 1 with both resources healthy", func() {
 			By("Creating Stack with two resources")
+			// nginx-unprivileged serves :8080, not the :80 that NewResource
+			// declares by default. The synthesized TCP readiness probe guards the
+			// declared port, so both resources must declare 8080 to become Ready.
 			swr := fixtures.NewStack(stackName,
-				fixtures.NewResource(stackName, resA, fixtures.WithImage(workingImage), fixtures.WithHardenedSecurity()),
-				fixtures.NewResource(stackName, resB, fixtures.WithImage(workingImage), fixtures.WithHardenedSecurity()))
+				fixtures.NewResource(stackName, resA, fixtures.WithImage(workingImage), fixtures.WithHardenedSecurity(),
+					fixtures.WithPorts(corev1alpha1.Port{Name: "http", Number: 8080, Protocol: "http", FQDN: resA + ".local"})),
+				fixtures.NewResource(stackName, resB, fixtures.WithImage(workingImage), fixtures.WithHardenedSecurity(),
+					fixtures.WithPorts(corev1alpha1.Port{Name: "http", Number: 8080, Protocol: "http", FQDN: resB + ".local"})))
 
 			stampAnnotation(swr.Stack, root1)
 			Expect(c.Create(ctx, swr.Stack)).To(Succeed())
@@ -849,7 +854,8 @@ var _ = Describe("Stack convergence", func() {
 		// still exist in the cluster.
 		//
 		// The test uses a marker file in a PVC-backed volume to control crash behavior:
-		//   - First run: no marker file exists → create it → sleep 60s → exit 1
+		//   - First run: no marker file exists → create it → start busybox httpd on the
+		//     declared port 8080 (so the synthesized readiness probe passes) → sleep 60s → exit 1
 		//     This gives MinReadySeconds (10s) time to pass, so the rollout completes,
 		//     the svc reconciler runs, and addresses are populated.
 		//   - Subsequent runs: marker file exists → sleep 3s → exit 1
@@ -892,7 +898,10 @@ var _ = Describe("Stack convergence", func() {
 
 			By("Creating Stack with a resource that uses the marker-file crash pattern")
 			// The command implements a two-phase crash pattern:
-			//   Phase 1 (first run): Creates /marker/ran, sleeps 60s, then exits.
+			//   Phase 1 (first run): Creates /marker/ran, starts a real listener on the
+			//     declared port 8080 (busybox httpd daemonizes), sleeps 60s, then exits.
+			//     The listener is what satisfies the synthesized TCP readiness probe;
+			//     without it the pod never goes Ready and the rollout never completes.
 			//     The 60s sleep exceeds MinReadySeconds (10s), so the deployment
 			//     controller considers the rollout complete. The svc reconciler runs,
 			//     populates ExternalAddress and InternalAddress.
@@ -904,7 +913,7 @@ var _ = Describe("Stack convergence", func() {
 				fixtures.WithImage("busybox:1.36"),
 				fixtures.WithCommand(
 					[]string{"sh"},
-					[]string{"-c", "if [ -f /marker/ran ]; then sleep 3; exit 1; fi; touch /marker/ran; sleep 60; exit 1"},
+					[]string{"-c", "if [ -f /marker/ran ]; then sleep 3; exit 1; fi; touch /marker/ran; httpd -p 8080 -h /marker; sleep 60; exit 1"},
 				),
 				fixtures.WithPorts(corev1alpha1.Port{
 					Name: "http", Number: 8080, Protocol: "http",

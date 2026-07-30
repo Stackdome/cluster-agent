@@ -57,7 +57,7 @@ test-unit: ## Run unit tests only (no codegen, no envtest).
 
 .PHONY: test-integration
 test-integration: ## Run integration tests (requires Docker for Kind cluster). Use FOCUS="pattern" to run specific tests.
-	go run github.com/onsi/ginkgo/v2/ginkgo -v --timeout 1h $(if $(FOCUS),--focus "$(FOCUS)") ./test/integration/... 2>&1 | tee test/integration/last-run.log
+	go run github.com/onsi/ginkgo/v2/ginkgo -v --timeout 90m $(if $(FOCUS),--focus "$(FOCUS)") ./test/integration/... 2>&1 | tee test/integration/last-run.log
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter.
