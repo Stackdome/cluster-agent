@@ -132,6 +132,17 @@ func reportStackResourceNotReady(resource *v1alpha1.StackResource, reason, msg s
 		Reason:             reason,
 		Message:            msg,
 	})
+	// Not-ready is retriable, so Stalled stays False — but its reason and
+	// message must describe the current state. Leaving them untouched keeps
+	// the success text written by reportStackResourceReady on an object that
+	// is visibly failing.
+	meta.SetStatusCondition(&resource.Status.Conditions, metav1.Condition{
+		Type:               string(v1alpha1.StackResourceStalled),
+		Status:             metav1.ConditionFalse,
+		ObservedGeneration: resource.Generation,
+		Reason:             reason,
+		Message:            msg,
+	})
 	resource.Status.StatusHash = resource.StatusHash()
 }
 
