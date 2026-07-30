@@ -1,6 +1,8 @@
 package integration
 
 import (
+	"time"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -75,17 +77,32 @@ var _ = Describe("StackResource port readiness", Ordered, func() {
 		Expect(fixtures.CreateStackWithResources(ctx, c, swr)).To(Succeed())
 		healthyStack = swr.Stack
 
-		By("Waiting for the correctly configured StackResource to become Available")
-		sr, err := helpers.WaitForStackResourceAvailable(ctx, c, client.ObjectKey{
+		srKey := client.ObjectKey{
 			Name:      healthyStack.Spec.ResourceNames[0],
 			Namespace: healthyStack.Namespace,
-		}, readyTimeout)
+		}
+
+		By("Waiting for the correctly configured StackResource to become Available")
+		sr, err := helpers.WaitForStackResourceAvailable(ctx, c, srKey, readyTimeout)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(helpers.StackResourceIsAvailable(sr)).To(BeTrue())
 
-		_, hasReadinessFailure := readinessFailureDetail(sr)
-		Expect(hasReadinessFailure).To(BeFalse(),
-			"a resource listening on its declared port should record no readiness failure")
+		// Available=True lands before the port check answers: the first serving
+		// reconcile only enqueues the dial, and the result is read on a later
+		// reconcile (10s requeue). Asserting on LastFailureDetails the instant
+		// Available flips would therefore check before the guarded thing ran.
+		// Hold past that window so a gate that wrongly proves a live port dead
+		// is caught flipping Available back off.
+		By("Holding to confirm the async port check does not later revoke Available")
+		Consistently(func(g Gomega) {
+			latest, getErr := helpers.GetStackResource(ctx, c, srKey)
+			g.Expect(getErr).NotTo(HaveOccurred())
+			g.Expect(helpers.StackResourceIsAvailable(latest)).To(BeTrue(),
+				"the port readiness gate revoked Available from a resource listening on its declared port")
+			_, hasReadinessFailure := readinessFailureDetail(latest)
+			g.Expect(hasReadinessFailure).To(BeFalse(),
+				"a resource listening on its declared port should record no readiness failure")
+		}, stabilityWindow, 5*time.Second).Should(Succeed())
 	})
 
 	AfterAll(func() {
