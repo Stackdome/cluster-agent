@@ -53,6 +53,15 @@ func managedLabels() map[string]string {
 // selector must be the agent Deployment's own pod selector: the Service points
 // at the agent, which serves the pages itself.
 func Ensure(ctx context.Context, c client.Client, namespace string, selector map[string]string) error {
+	// An empty selector is not "select nothing" — a Service with a non-nil but
+	// empty selector matches every pod in the namespace, so the error pages
+	// would be load balanced across whatever else runs alongside the agent.
+	// Refusing is the only safe answer; the caller retries, and a
+	// misconfigured --error-pages-selector shows up as a loud, repeated error
+	// rather than as traffic silently landing on the wrong pods.
+	if len(selector) == 0 {
+		return fmt.Errorf("refusing to create error page Service in %s: empty pod selector would match every pod in the namespace", namespace)
+	}
 	if err := ensureService(ctx, c, namespace, selector); err != nil {
 		return fmt.Errorf("ensuring error page Service: %w", err)
 	}

@@ -97,9 +97,12 @@ func (r *Reconciler) evaluateStatefulSetStatus(ctx context.Context, resource *v1
 			r.reportPortNotListening(resource)
 			return controller.ResultStop
 		}
-		// The check answers asynchronously, so come back to read it. The grace
-		// budget, measured from convergence, bounds the polling.
-		if !r.portVerificationAnswered(resource, sts.Status.UpdateRevision) && r.withinPortCheckGrace(resource) {
+		// The check answers asynchronously, so come back to read it. The budget,
+		// measured from when the check was first wanted, bounds the polling.
+		// Convergence used to be the anchor, which meant a StatefulSet with no
+		// convergence record — or one that converged before this process started
+		// — was never polled at all and its verdict went unread.
+		if r.portCheckOutstanding(resource, sts.Status.UpdateRevision) {
 			return controller.ResultDeferredRequeue(portCheckRequeueInterval)
 		}
 		return controller.ResultContinue

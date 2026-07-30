@@ -2,23 +2,28 @@ package errorpages
 
 import (
 	"context"
+	"errors"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 )
 
 const testNamespace = "stackdome-control-plane"
 
 var traefikGV = schema.GroupVersion{Group: "traefik.io", Version: "v1alpha1"}
 
-func newTestClient() client.Client {
+func newTestScheme() *runtime.Scheme {
 	scheme := runtime.NewScheme()
 	Expect(corev1.AddToScheme(scheme)).To(Succeed())
 
@@ -31,7 +36,11 @@ func newTestClient() client.Client {
 		list.SetGroupVersionKind(traefikGV.WithKind(kind + "List"))
 		scheme.AddKnownTypeWithName(traefikGV.WithKind(kind+"List"), list)
 	}
-	return fake.NewClientBuilder().WithScheme(scheme).Build()
+	return scheme
+}
+
+func newTestClient() client.Client {
+	return fake.NewClientBuilder().WithScheme(newTestScheme()).Build()
 }
 
 var _ = Describe("Ensure", func() {
@@ -102,5 +111,95 @@ var _ = Describe("Ensure", func() {
 			Expect(c.List(ctx, list, client.InNamespace(testNamespace))).To(Succeed())
 			Expect(list.Items).To(HaveLen(1))
 		})
+	})
+
+	Context("when the selector parsed to nothing", func() {
+		// A Service with a non-nil but empty selector matches every pod in the
+		// namespace, so error-page traffic would be load balanced across
+		// whatever else happens to run beside the agent. That is worse than no
+		// error pages at all, and silent.
+		DescribeTable("refuses rather than creating a Service that matches every pod",
+			func(empty map[string]string) {
+				err := Ensure(ctx, c, testNamespace, empty)
+
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("empty pod selector"))
+
+				svc := &corev1.Service{}
+				getErr := c.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: ServiceName}, svc)
+				Expect(apierrors.IsNotFound(getErr)).To(BeTrue(), "no Service may be created on the refusal path")
+			},
+			Entry("nil map", nil),
+			Entry("empty map", map[string]string{}),
+		)
+	})
+})
+
+var _ = Describe("EnsureRunnable", func() {
+	var (
+		ctx      context.Context
+		selector map[string]string
+	)
+
+	BeforeEach(func() {
+		ctx = context.Background()
+		selector = map[string]string{"app": "stackdome-operator"}
+	})
+
+	It("runs only on the leader, since the objects are cluster-wide singletons", func() {
+		runnable, ok := EnsureRunnable(newTestClient(), testNamespace, selector).(manager.LeaderElectionRunnable)
+		Expect(ok).To(BeTrue())
+		Expect(runnable.NeedLeaderElection()).To(BeTrue())
+	})
+
+	It("retries until the objects land, instead of leaving every router unroutable", func() {
+		// Two transient API failures stand in for the realistic start-up
+		// failures: CRDs not yet established, API server still warming.
+		failures := 2
+		c := fake.NewClientBuilder().
+			WithScheme(newTestScheme()).
+			WithInterceptorFuncs(interceptor.Funcs{
+				Create: func(fctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+					if failures > 0 {
+						failures--
+						return errors.New("the server is currently unable to handle the request")
+					}
+					return cl.Create(fctx, obj, opts...)
+				},
+			}).Build()
+
+		runner := EnsureRunnable(c, testNamespace, selector).(*ensureRunner)
+		runner.initialBackoff = time.Millisecond
+		runner.maxBackoff = 2 * time.Millisecond
+
+		Expect(runner.Start(ctx)).To(Succeed())
+
+		Expect(failures).To(Equal(0))
+		svc := &corev1.Service{}
+		Expect(c.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: ServiceName}, svc)).To(Succeed())
+	})
+
+	It("gives up quietly when the manager shuts down rather than failing it", func() {
+		// A permanently failing cluster must not take the whole agent down: the
+		// other controllers are still worth running.
+		c := fake.NewClientBuilder().
+			WithScheme(newTestScheme()).
+			WithInterceptorFuncs(interceptor.Funcs{
+				Create: func(context.Context, client.WithWatch, client.Object, ...client.CreateOption) error {
+					return errors.New("permanently broken")
+				},
+			}).Build()
+
+		runner := EnsureRunnable(c, testNamespace, selector).(*ensureRunner)
+		runner.initialBackoff = time.Millisecond
+		runner.maxBackoff = time.Millisecond
+
+		cancelCtx, cancel := context.WithCancel(ctx)
+		done := make(chan error, 1)
+		go func() { done <- runner.Start(cancelCtx) }()
+
+		Consistently(done, "50ms", "10ms").ShouldNot(Receive(), "must keep retrying while the manager runs")
+		cancel()
+		Eventually(done, "2s", "10ms").Should(Receive(BeNil()))
 	})
 })

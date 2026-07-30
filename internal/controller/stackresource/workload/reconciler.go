@@ -42,14 +42,15 @@ type Reconciler struct {
 	// while it waits for an answer. Zero means DefaultPortCheckGrace.
 	PortCheckGrace time.Duration
 
-	// portCheckRetried records the verification keys whose closed verdict has
-	// already been retried once against a workload the kubelet probe has since
-	// proven up. It exists because the first dial can land while a slow-booting
-	// app is still binding, and that premature verdict must not become the
-	// resource's permanent truth. Entries are dropped as soon as a port
-	// verifies open.
-	portCheckMu      sync.Mutex
-	portCheckRetried map[portcheck.Key]struct{}
+	// portCheckStartedAt records, per verification key, when a result was first
+	// wanted. It is the anchor for the port check budget: a closed verdict is
+	// re-verified while the budget lasts and only believed once it is spent, and
+	// an unanswered check is requeued for exactly as long. Entries are dropped
+	// as soon as a key's ports verify open; a condemned key keeps its entry so
+	// the verdict cannot churn. Keys are revision-scoped, so the map holds at
+	// most one entry per StackResource revision the process has seen.
+	portCheckMu        sync.Mutex
+	portCheckStartedAt map[portcheck.Key]time.Time
 }
 
 func NewReconciler(

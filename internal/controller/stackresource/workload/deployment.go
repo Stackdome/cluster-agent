@@ -153,11 +153,17 @@ func (r *Reconciler) evaluateDeploymentStatus(ctx context.Context, resource *v1a
 			return controller.ResultDeferredRequeue(10 * time.Second)
 		}
 		// A scheduled check answers asynchronously, so an unverified resource needs
-		// another reconcile to read the result. The grace budget bounds that
-		// polling: a check that can never be answered (no dialable pod on this
-		// revision) stops costing reconciles once the budget runs out.
-		if !r.portVerificationAnswered(resource, revision) &&
-			!controller.DeploymentRolloutSettled(deployment, r.portCheckGrace()) {
+		// another reconcile to read the result. The budget bounds that polling: a
+		// check that can never be answered (no dialable pod on this revision)
+		// stops costing reconciles once the budget runs out.
+		//
+		// The budget is anchored on when the check was first wanted, not on
+		// whether the rollout has settled. Gating on settledness left a restart
+		// blind spot: a freshly started operator re-discovers a long-settled
+		// Deployment, schedules a dial with an empty cache, and — because the
+		// rollout settled hours ago — never came back to read the answer until
+		// some unrelated event or the 10h resync fired.
+		if r.portCheckOutstanding(resource, revision) {
 			return controller.ResultDeferredRequeue(portCheckRequeueInterval)
 		}
 		return controller.ResultContinue

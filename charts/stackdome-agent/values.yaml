@@ -31,7 +31,10 @@ traefik:
   # creates the `stackdome-errors` Middleware in — i.e. the release namespace.
   # Helm does not template values.yaml, so this cannot be derived from
   # `.Release.Namespace`; installing the agent outside `stackdome-control-plane`
-  # requires overriding these two values to match.
+  # requires overriding these two values to match. A mismatch is not a missing
+  # error page — Traefik fails every router whose middleware does not resolve —
+  # so templates/validate-error-page-middleware.yaml refuses to render rather
+  # than let the install take the cluster's ingress down.
   ports:
     web:
       middlewares:

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"flag"
 	"os"
 	"strings"
@@ -43,6 +44,7 @@ import (
 	objectstoragecontroller "stackdome.io/cluster-agent/internal/controller/objectstorage"
 	"stackdome.io/cluster-agent/internal/controller/stack"
 	"stackdome.io/cluster-agent/internal/controller/stackresource"
+	"stackdome.io/cluster-agent/internal/controller/stackresource/workload"
 	"stackdome.io/cluster-agent/internal/controller/volume"
 	"stackdome.io/cluster-agent/internal/controller/workspaceuser"
 	"stackdome.io/cluster-agent/pkg/config"
@@ -79,8 +81,15 @@ var defaultErrorPagesNamespace = func() string {
 	return fallbackErrorPagesNamespace
 }()
 
+// errEmptyErrorPagesSelector marks the one parseSelector outcome that silently
+// breaks the error pages, so it is logged with the raw flag value rather than
+// dropped.
+var errEmptyErrorPagesSelector = errors.New("error page pod selector parsed to an empty label set")
+
 // parseSelector turns "k1=v1,k2=v2" into a label map. Malformed entries are
-// dropped rather than fatal: a wrong selector must not stop the agent.
+// dropped rather than fatal: a wrong selector must not stop the agent. An
+// all-malformed value yields an empty map, which errorpages.Ensure rejects —
+// an empty Service selector matches every pod in the namespace.
 func parseSelector(raw string) map[string]string {
 	out := map[string]string{}
 	for _, pair := range strings.Split(raw, ",") {
@@ -135,7 +144,7 @@ func main() {
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
 	flag.IntVar(&imageBuildHistoryLimit, "image-build-history-limit", 5,
 		"Number of completed/cancelled ImageBuilds to retain per StackResource.")
-	flag.DurationVar(&portCheckGrace, "port-check-grace", 3*time.Minute,
+	flag.DurationVar(&portCheckGrace, "port-check-grace", workload.DefaultPortCheckGrace,
 		"How long a StackResource keeps being requeued while its declared-port verification is still outstanding.")
 	opts := zap.Options{
 		Development: true,
@@ -378,20 +387,24 @@ func main() {
 		os.Exit(1)
 	}
 
-	// The Service and Traefik objects are cluster-wide singletons, so they are
-	// ensured once at start-up rather than reconciled. A cluster without Traefik
-	// CRDs simply goes without custom error pages; that must not stop the agent.
-	// The uncached client is used because the manager's cache is not running yet.
-	// The timeout bounds the wait: this runs before mgr.Start, so a slow or
-	// unreachable API server would otherwise hold up every controller.
-	errorPagesCtx, cancelErrorPages := context.WithTimeout(context.Background(), 30*time.Second)
-	if err := errorpages.Ensure(
-		errorPagesCtx, uncachedClient, errorPagesNamespace, parseSelector(errorPagesSelector),
-	); err != nil {
-		setupLog.Error(err, "unable to set up error pages, continuing without them",
-			"namespace", errorPagesNamespace)
+	// The Service and Traefik objects are cluster-wide singletons, but they are
+	// not optional: Traefik applies the stackdome-errors middleware to every
+	// router, and a router whose middleware does not resolve serves a 500. So
+	// the objects are ensured by a Runnable that retries until it succeeds
+	// rather than once at start-up with a log-and-continue. The uncached client
+	// is used because the objects are Traefik CRs the manager's cache has no
+	// informer for.
+	errorPagesPodSelector := parseSelector(errorPagesSelector)
+	if len(errorPagesPodSelector) == 0 {
+		// Ensure refuses an empty selector, so this only ever costs the error
+		// pages — but the raw value is the one thing needed to fix it.
+		setupLog.Error(errEmptyErrorPagesSelector, "--error-pages-selector parsed to no labels; error pages will not be created",
+			"value", errorPagesSelector)
 	}
-	cancelErrorPages()
+	if err := mgr.Add(errorpages.EnsureRunnable(uncachedClient, errorPagesNamespace, errorPagesPodSelector)); err != nil {
+		setupLog.Error(err, "unable to schedule error page setup")
+		os.Exit(1)
+	}
 
 	setupLog.Info("starting manager")
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {

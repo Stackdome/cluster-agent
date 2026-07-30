@@ -1,0 +1,32 @@
+{{- /*
+Fail-fast guard on the Traefik error-page middleware reference.
+
+Traefik resolves a Kubernetes CRD middleware as `<namespace>-<name>@kubernetescrd`,
+and the agent creates the `stackdome-errors` Middleware in the namespace it runs
+in — the release namespace. values.yaml applies that reference to every router on
+both entrypoints, and Traefik fails a router whose middleware cannot be resolved.
+
+So a reference that names the wrong namespace does not degrade to "no branded error
+page": it turns every route in the cluster into a 500. Helm cannot template
+values.yaml, so the reference cannot be derived from .Release.Namespace and has to
+be checked instead.
+
+The guard only inspects references to our own middleware. Other middlewares an
+operator adds are their business.
+
+This file renders to nothing when the check passes.
+*/ -}}
+{{- $traefik := .Values.traefik | default dict -}}
+{{- if $traefik.enabled -}}
+{{- $prefix := printf "%s-" .Release.Namespace -}}
+{{- range $entrypoint, $config := ($traefik.ports | default dict) -}}
+{{- range $ref := ((default dict $config).middlewares | default list) -}}
+{{- if contains "stackdome-errors" (toString $ref) -}}
+{{- if not (hasPrefix $prefix (toString $ref)) -}}
+{{- fail (printf "\n\nstackdome-agent: the Traefik error-page middleware reference does not match the release namespace.\n\n  release namespace : %s\n  entrypoint        : %s\n  middleware ref    : %s\n  expected prefix   : %s\n\nTraefik resolves CRD middlewares as <namespace>-<name>@kubernetescrd, and the agent\ncreates the stackdome-errors Middleware in the release namespace. A reference that\ndoes not resolve makes EVERY router on that entrypoint return 500 - a cluster-wide\ningress outage, not merely a missing error page.\n\nFix by installing into the namespace the reference already names:\n\n  helm install ... --namespace stackdome-control-plane\n\nor by overriding both references to match your namespace:\n\n  --set traefik.ports.web.middlewares[0]=%sstackdome-errors@kubernetescrd \\\n  --set traefik.ports.websecure.middlewares[0]=%sstackdome-errors@kubernetescrd\n"
+  $.Release.Namespace $entrypoint $ref $prefix $prefix $prefix) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
