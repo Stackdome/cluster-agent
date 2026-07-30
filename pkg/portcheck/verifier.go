@@ -1,0 +1,125 @@
+package portcheck
+
+import (
+	"context"
+	"sync"
+	"time"
+)
+
+// DefaultWorkers bounds concurrent checks across every resource, not per
+// resource, so dialing can never starve the process of file descriptors.
+const DefaultWorkers = 8
+
+// DefaultDialTimeout is the per-port TCP connect timeout.
+const DefaultDialTimeout = 2 * time.Second
+
+// queueDepth is deliberately generous: Enqueue drops rather than blocks when
+// full, because a reconcile thread must never wait on this package.
+const queueDepth = 512
+
+// Key identifies one verification. Revision scopes a result to a deployment
+// revision so a rollout invalidates the previous answer. It is deliberately
+// the revision and not a pod-template-hash: callers hold the revision already,
+// so a cache hit costs no API calls.
+type Key struct {
+	Namespace string
+	Name      string
+	Revision  string
+}
+
+type job struct {
+	key   Key
+	podIP string
+	ports []int32
+}
+
+// Verifier runs port checks on a bounded worker pool and stores their results
+// for reconcilers to read without blocking.
+type Verifier struct {
+	workers int
+	timeout time.Duration
+	queue   chan job
+
+	mu      sync.RWMutex
+	results map[Key]Result
+	pending map[Key]struct{}
+}
+
+func NewVerifier(workers int, timeout time.Duration) *Verifier {
+	if workers <= 0 {
+		workers = DefaultWorkers
+	}
+	if timeout <= 0 {
+		timeout = DefaultDialTimeout
+	}
+	return &Verifier{
+		workers: workers,
+		timeout: timeout,
+		queue:   make(chan job, queueDepth),
+		results: make(map[Key]Result),
+		pending: make(map[Key]struct{}),
+	}
+}
+
+// Start launches the worker pool and returns immediately. Workers exit when
+// ctx is cancelled.
+func (v *Verifier) Start(ctx context.Context) {
+	for i := 0; i < v.workers; i++ {
+		go v.run(ctx)
+	}
+}
+
+func (v *Verifier) run(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case j := <-v.queue:
+			result := Dial(ctx, j.podIP, j.ports, v.timeout)
+			v.mu.Lock()
+			v.results[j.key] = result
+			delete(v.pending, j.key)
+			v.mu.Unlock()
+		}
+	}
+}
+
+// Get returns the stored result for key. The boolean is false when no check
+// has completed yet; callers must requeue rather than wait.
+func (v *Verifier) Get(key Key) (Result, bool) {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	res, ok := v.results[key]
+	return res, ok
+}
+
+// Enqueue schedules a check. It never blocks: a duplicate, already-answered,
+// or unqueueable request is dropped and the caller retries on its next
+// reconcile.
+func (v *Verifier) Enqueue(key Key, podIP string, ports []int32) {
+	v.mu.Lock()
+	_, done := v.results[key]
+	_, inFlight := v.pending[key]
+	if done || inFlight {
+		v.mu.Unlock()
+		return
+	}
+	v.pending[key] = struct{}{}
+	v.mu.Unlock()
+
+	select {
+	case v.queue <- job{key: key, podIP: podIP, ports: ports}:
+	default:
+		v.mu.Lock()
+		delete(v.pending, key)
+		v.mu.Unlock()
+	}
+}
+
+// Forget drops any stored result for key, forcing the next Enqueue to redial.
+func (v *Verifier) Forget(key Key) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	delete(v.results, key)
+	delete(v.pending, key)
+}
