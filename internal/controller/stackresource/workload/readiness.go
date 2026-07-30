@@ -86,29 +86,44 @@ func (r *Reconciler) portCheckGrace() time.Duration {
 	return r.PortCheckGrace
 }
 
-// beginPortCheckBudget stamps the moment a verification for key was first
-// wanted and returns that stamp, recording it if this is the first sighting.
+// beginPortCheckBudget returns the moment key's budget started, opening one at
+// now if key has none yet, and re-anchoring an existing budget the first time
+// the kubelet probe is known to have passed.
 //
-// The budget is anchored on our own first interest rather than on the
-// workload's rollout or convergence timestamp, and that is deliberate. Those
-// anchors live on the object and survive a process restart; the verifier's
-// cache does not. A long-settled workload re-discovered by a freshly started
-// operator would therefore be born with its entire budget already spent — no
-// requeue to read the result it just scheduled, no retry for a verdict that
-// arrives late. Anchoring on first interest gives every resource the same
-// budget no matter when the process happened to start.
-func (r *Reconciler) beginPortCheckBudget(key portcheck.Key) time.Time {
+// Two rules, for two different failure modes.
+//
+// The budget is anchored on our own interest rather than on the workload's
+// rollout or convergence timestamp because those anchors live on the object and
+// survive a process restart while the verifier's cache does not. A long-settled
+// workload re-discovered by a freshly started operator would otherwise be born
+// with its entire budget already spent — no requeue to read the result it just
+// scheduled, no retry for a verdict that arrives late.
+//
+// It is re-anchored on the first probe-passed sighting because the budget's job
+// on that path is to give a slow *secondary* port time to bind, and that clock
+// can only start once the primary port is up. A pod that spent longer than the
+// whole budget booting — an image pull plus a slow runtime, entirely ordinary
+// during the fleet-wide rolling restart this release triggers — would otherwise
+// reach the serving branch with nothing left and have its first, premature
+// refusal believed on sight. The re-anchor latches, so it cannot be used to
+// extend the budget indefinitely.
+func (r *Reconciler) beginPortCheckBudget(key portcheck.Key, probePassed bool) time.Time {
 	r.portCheckMu.Lock()
 	defer r.portCheckMu.Unlock()
-	if first, ok := r.portCheckStartedAt[key]; ok {
-		return first
+	if r.portCheckBudgets == nil {
+		r.portCheckBudgets = make(map[portcheck.Key]portCheckBudget)
 	}
-	if r.portCheckStartedAt == nil {
-		r.portCheckStartedAt = make(map[portcheck.Key]time.Time)
+	budget, ok := r.portCheckBudgets[key]
+	switch {
+	case !ok:
+		budget = portCheckBudget{startedAt: time.Now(), probeAnchored: probePassed}
+	case probePassed && !budget.probeAnchored:
+		budget = portCheckBudget{startedAt: time.Now(), probeAnchored: true}
+	default:
+		return budget.startedAt
 	}
-	now := time.Now()
-	r.portCheckStartedAt[key] = now
-	return now
+	r.portCheckBudgets[key] = budget
+	return budget.startedAt
 }
 
 // portCheckBudgetActive reports, without recording anything, whether key has a
@@ -117,11 +132,11 @@ func (r *Reconciler) beginPortCheckBudget(key portcheck.Key) time.Time {
 func (r *Reconciler) portCheckBudgetActive(key portcheck.Key) bool {
 	r.portCheckMu.Lock()
 	defer r.portCheckMu.Unlock()
-	first, ok := r.portCheckStartedAt[key]
+	budget, ok := r.portCheckBudgets[key]
 	if !ok {
 		return false
 	}
-	return time.Since(first) < r.portCheckGrace()
+	return time.Since(budget.startedAt) < r.portCheckGrace()
 }
 
 // clearPortCheckBudget drops key's budget once its ports verify open, so a
@@ -130,7 +145,7 @@ func (r *Reconciler) portCheckBudgetActive(key portcheck.Key) bool {
 func (r *Reconciler) clearPortCheckBudget(key portcheck.Key) {
 	r.portCheckMu.Lock()
 	defer r.portCheckMu.Unlock()
-	delete(r.portCheckStartedAt, key)
+	delete(r.portCheckBudgets, key)
 }
 
 // portCheckOutstanding reports whether a verification is still unanswered and
@@ -187,18 +202,24 @@ func (r *Reconciler) evaluatePortVerification(ctx context.Context, resource *v1a
 
 	result, done := r.PortVerifier.Get(key)
 	if !done {
-		// Opening the budget here rather than at the first closed verdict is
-		// what makes the caller's requeue possible: portCheckOutstanding polls
-		// only keys that have a budget.
-		r.beginPortCheckBudget(key)
-		r.schedulePortCheck(ctx, resource, key)
+		// The budget opens only once a dial is actually in flight. A revision
+		// with no dialable pod yet — still pulling its image, still scheduling —
+		// has nothing to spend a budget on, and spending it there would leave a
+		// slow-starting workload with none by the time it is worth checking.
+		//
+		// Opening it here rather than at the first closed verdict is what makes
+		// the caller's requeue possible: portCheckOutstanding polls only keys
+		// that have a budget.
+		if r.schedulePortCheck(ctx, resource, key) {
+			r.beginPortCheckBudget(key, probePassed)
+		}
 		return false
 	}
 	if result.AllOpen() {
 		r.clearPortCheckBudget(key)
 		return false
 	}
-	if probePassed && time.Since(r.beginPortCheckBudget(key)) < r.portCheckGrace() {
+	if probePassed && time.Since(r.beginPortCheckBudget(key, true)) < r.portCheckGrace() {
 		// Still inside the budget: discard the verdict and redial against the
 		// workload the probe has since proven up. The answer lands
 		// asynchronously; until it does the resource is treated as unverified,
@@ -208,7 +229,14 @@ func (r *Reconciler) evaluatePortVerification(ctx context.Context, resource *v1a
 		// one requeue at portCheckRequeueInterval, and once the budget is spent
 		// the branch below takes over permanently for this revision.
 		r.PortVerifier.Forget(key)
-		r.schedulePortCheck(ctx, resource, key)
+		if !r.schedulePortCheck(ctx, resource, key) {
+			// The verdict is already discarded, so the key stays unanswered and
+			// the caller keeps requeueing for the rest of the budget. Worth a
+			// breadcrumb: repeated occurrences mean the pod listing and the
+			// revision disagree about which pods are current.
+			controller.LoggerFromContext(ctx).V(1).Info("no dialable pod to re-verify declared ports against",
+				"resource", resource.Name, "revision", key.Revision)
+		}
 		return false
 	}
 	// The budget entry is deliberately left in place: clearing it here would

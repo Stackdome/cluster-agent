@@ -42,15 +42,26 @@ type Reconciler struct {
 	// while it waits for an answer. Zero means DefaultPortCheckGrace.
 	PortCheckGrace time.Duration
 
-	// portCheckStartedAt records, per verification key, when a result was first
-	// wanted. It is the anchor for the port check budget: a closed verdict is
-	// re-verified while the budget lasts and only believed once it is spent, and
-	// an unanswered check is requeued for exactly as long. Entries are dropped
-	// as soon as a key's ports verify open; a condemned key keeps its entry so
-	// the verdict cannot churn. Keys are revision-scoped, so the map holds at
-	// most one entry per StackResource revision the process has seen.
-	portCheckMu        sync.Mutex
-	portCheckStartedAt map[portcheck.Key]time.Time
+	// portCheckBudgets records, per verification key, the window in which a port
+	// verification is worth pursuing: a closed verdict is re-verified while the
+	// budget lasts and only believed once it is spent, and an unanswered check
+	// is requeued for exactly as long. Entries are dropped as soon as a key's
+	// ports verify open; a condemned key keeps its entry so the verdict cannot
+	// churn. Keys are revision-scoped, so the map holds at most one entry per
+	// StackResource revision the process has seen.
+	portCheckMu      sync.Mutex
+	portCheckBudgets map[portcheck.Key]portCheckBudget
+}
+
+// portCheckBudget is one key's polling and disbelief window.
+type portCheckBudget struct {
+	// startedAt is when the budget opened — the first moment a dial for this key
+	// was actually in flight, or the moment the kubelet probe was first known to
+	// have passed, whichever is later.
+	startedAt time.Time
+	// probeAnchored records that startedAt has already been re-based onto a
+	// probe-passed sighting, so the re-base happens at most once per key.
+	probeAnchored bool
 }
 
 func NewReconciler(

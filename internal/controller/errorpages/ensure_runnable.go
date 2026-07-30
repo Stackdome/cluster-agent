@@ -24,6 +24,9 @@ const (
 	// ensureBackoffJitter spreads retries so several agents restarting together
 	// do not synchronise their attempts.
 	ensureBackoffJitter = 0.2
+	// ensureAttemptTimeout bounds a single attempt, so a hung API call fails and
+	// is retried rather than parking the loop forever.
+	ensureAttemptTimeout = 30 * time.Second
 )
 
 // EnsureRunnable wraps Ensure in a manager.Runnable that keeps retrying until
@@ -77,7 +80,12 @@ func (e *ensureRunner) Start(ctx context.Context) error {
 
 	delay := e.initialBackoff
 	for attempt := 1; ; attempt++ {
-		err := Ensure(ctx, e.client, e.namespace, e.selector)
+		// Bound each attempt: an API call that hangs would otherwise stall the
+		// retry loop indefinitely, which is the failure this Runnable exists to
+		// rule out.
+		attemptCtx, cancel := context.WithTimeout(ctx, ensureAttemptTimeout)
+		err := Ensure(attemptCtx, e.client, e.namespace, e.selector)
+		cancel()
 		if err == nil {
 			log.Info("error page objects ensured", "namespace", e.namespace, "attempts", attempt)
 			return nil

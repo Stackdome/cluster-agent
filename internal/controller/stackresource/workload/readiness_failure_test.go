@@ -103,6 +103,21 @@ var _ = Describe("capturePortVerification", func() {
 		Expect(resource.Status.LastFailureDetails).To(BeEmpty())
 	})
 
+	It("opens no budget when there is nothing dialable, so a slow-starting revision does not spend it", func() {
+		// UncachedClient is nil, so no pod IP is found and nothing is enqueued —
+		// the state of a revision still pulling its image or still scheduling.
+		// Opening a budget here would have it expire while the workload was
+		// still booting, and the first premature refusal after that would be
+		// believed on sight.
+		key := portcheck.Key{Namespace: "team-a", Name: "svc-01", Revision: "9"}
+
+		Expect(reconciler.capturePortVerification(context.Background(), resource, "9")).To(BeFalse())
+
+		Expect(reconciler.portCheckBudgetActive(key)).To(BeFalse())
+		Expect(reconciler.portCheckOutstanding(resource, "9")).To(BeFalse(),
+			"a check that was never enqueued is not worth requeueing for")
+	})
+
 	It("does nothing for a resource that declares no ports", func() {
 		resource.Spec.Ports = nil
 		Expect(reconciler.capturePortVerification(context.Background(), resource, "7")).To(BeFalse())
@@ -235,6 +250,32 @@ var _ = Describe("capturePortVerificationAfterProbe (grace-bounded condemnation)
 		Expect(resource.Status.LastFailureDetails).To(BeEmpty())
 	})
 
+	It("re-anchors the budget when the probe first passes, so a slow boot cannot spend it", func() {
+		// The not-serving path dialed this revision (BeforeEach) while the app
+		// was booting. Booting then took longer than the whole budget — an image
+		// pull plus a slow runtime, entirely ordinary during a fleet-wide
+		// rolling restart.
+		Expect(reconciler.portCheckBudgets).To(HaveKey(key))
+		Expect(reconciler.portCheckBudgets[key].probeAnchored).To(BeFalse())
+		reconciler.portCheckBudgets[key] = portCheckBudget{startedAt: time.Now().Add(-time.Hour)}
+
+		// The probe now passes. The premature refusal cached during the boot
+		// must be re-verified against the budget that starts here, not condemned
+		// on one that was spent before the app was ever up.
+		Expect(reconciler.capturePortVerificationAfterProbe(ctx, resource, "7")).To(BeFalse())
+		Expect(resource.Status.LastFailureDetails).To(BeEmpty())
+		Expect(reconciler.portCheckBudgets[key].probeAnchored).To(BeTrue())
+		Expect(reconciler.portCheckBudgetActive(key)).To(BeTrue())
+
+		// The re-anchor latches: it cannot be spent again to extend the budget
+		// forever.
+		reconciler.portCheckBudgets[key] = portCheckBudget{
+			startedAt: time.Now().Add(-time.Hour), probeAnchored: true,
+		}
+		Expect(waitForVerdict().AllOpen()).To(BeFalse())
+		Expect(reconciler.capturePortVerificationAfterProbe(ctx, resource, "7")).To(BeTrue())
+	})
+
 	It("condemns a closed verdict that outlives the budget, so a genuinely dead port is still reported", func() {
 		reconciler.PortCheckGrace = time.Nanosecond
 
@@ -264,7 +305,9 @@ var _ = Describe("capturePortVerificationAfterProbe (grace-bounded condemnation)
 
 		// Age the budget: this workload has been verified open since long before
 		// its grace window would have expired.
-		reconciler.portCheckStartedAt[key] = time.Now().Add(-time.Hour)
+		reconciler.portCheckBudgets[key] = portCheckBudget{
+			startedAt: time.Now().Add(-time.Hour), probeAnchored: true,
+		}
 
 		Expect(reconciler.capturePortVerificationAfterProbe(ctx, resource, "7")).To(BeFalse())
 		Expect(reconciler.portCheckBudgetActive(key)).To(BeFalse(), "an open verdict must drop the budget")
@@ -478,6 +521,9 @@ var _ = Describe("port verification after an operator restart", func() {
 
 	It("requeues a converged StatefulSet with no convergence record", func() {
 		reconciler.UncachedClient = newStatefulSetPortCheckClient("rev-1")
+		// The pod lookup dispatches on workload type: a StatefulSet has no
+		// ReplicaSet, so its pods carry the controller revision directly.
+		resource.Spec.WorkloadType = v1alpha1.WorkloadTypeStatefulService
 		sts := &appsv1.StatefulSet{
 			ObjectMeta: metav1.ObjectMeta{Name: "svc-01", Namespace: "team-a", Generation: 1},
 			Status: appsv1.StatefulSetStatus{
@@ -499,6 +545,9 @@ var _ = Describe("port verification after an operator restart", func() {
 
 	It("stops requeueing once the budget is spent, so an unanswerable check cannot poll forever", func() {
 		reconciler.UncachedClient = newStatefulSetPortCheckClient("rev-1")
+		// The pod lookup dispatches on workload type: a StatefulSet has no
+		// ReplicaSet, so its pods carry the controller revision directly.
+		resource.Spec.WorkloadType = v1alpha1.WorkloadTypeStatefulService
 		reconciler.PortCheckGrace = time.Nanosecond
 		sts := &appsv1.StatefulSet{
 			ObjectMeta: metav1.ObjectMeta{Name: "svc-01", Namespace: "team-a", Generation: 1},
