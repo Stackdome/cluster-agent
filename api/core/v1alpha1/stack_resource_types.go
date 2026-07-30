@@ -466,7 +466,18 @@ type StackResourceStatus struct {
 	LastRunSucceeded              *bool               `json:"lastRunSucceeded,omitempty"`
 }
 
+// Failure classifications for LastFailureDetail.Type.
+const (
+	FailureTypeRuntimeCrash     = "runtime_crash"
+	FailureTypeReadinessFailure = "readiness_failure"
+)
+
 type LastFailureDetail struct {
+	// Type classifies this failure. An empty value means runtime_crash,
+	// preserving the behaviour of agents and hubs predating this field.
+	// +kubebuilder:validation:Enum=runtime_crash;readiness_failure
+	// +optional
+	Type                    string `json:"type,omitempty"`
 	ContainerName           string `json:"containerName,omitempty"`
 	RestartCount            int32  `json:"restartCount,omitempty"`
 	LastTerminationReason   string `json:"lastTerminationReason,omitempty"`
