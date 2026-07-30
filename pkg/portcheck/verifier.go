@@ -82,10 +82,18 @@ func (v *Verifier) run(ctx context.Context) {
 			v.mu.Lock()
 			// Only write result if generation hasn't changed (Forget wasn't called).
 			// Stale jobs from before a Forget must not overwrite newer results.
-			if v.generations[j.key] == j.generation {
+			isStale := v.generations[j.key] != j.generation
+			if !isStale {
 				v.results[j.key] = result
 			}
 			delete(v.pending, j.key)
+			// If this job was stale, clean up the generation entry. Since generation
+			// was checked (above) and pending is now deleted, no concurrent Enqueue
+			// can reference this stale entry. The next Enqueue will reinitialize it
+			// if needed. This prevents unbounded map growth across rollouts.
+			if isStale {
+				delete(v.generations, j.key)
+			}
 			v.mu.Unlock()
 		}
 	}
