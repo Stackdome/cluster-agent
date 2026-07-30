@@ -3,6 +3,7 @@ package workload
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"k8s.io/apimachinery/pkg/runtime"
@@ -40,6 +41,15 @@ type Reconciler struct {
 	// PortCheckGrace bounds how long an unverified resource keeps requeueing
 	// while it waits for an answer. Zero means DefaultPortCheckGrace.
 	PortCheckGrace time.Duration
+
+	// portCheckRetried records the verification keys whose closed verdict has
+	// already been retried once against a workload the kubelet probe has since
+	// proven up. It exists because the first dial can land while a slow-booting
+	// app is still binding, and that premature verdict must not become the
+	// resource's permanent truth. Entries are dropped as soon as a port
+	// verifies open.
+	portCheckMu      sync.Mutex
+	portCheckRetried map[portcheck.Key]struct{}
 }
 
 func NewReconciler(

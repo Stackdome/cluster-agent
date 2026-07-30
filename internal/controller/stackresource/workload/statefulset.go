@@ -93,7 +93,7 @@ func (r *Reconciler) evaluateStatefulSetStatus(ctx context.Context, resource *v1
 		// Converged means the pod passed its kubelet probe, which guards only the
 		// primary port. A secondary port nobody listens on would otherwise stay
 		// silently green, so the verifier runs on this branch too.
-		if r.capturePortVerification(ctx, resource, sts.Status.UpdateRevision) {
+		if r.capturePortVerificationAfterProbe(ctx, resource, sts.Status.UpdateRevision) {
 			r.reportPortNotListening(resource)
 			return controller.ResultStop
 		}

@@ -139,7 +139,11 @@ func (r *Reconciler) evaluateDeploymentStatus(ctx context.Context, resource *v1a
 		// read Available for one reconcile before a proven failure flips it. The
 		// primary port has no such window — a dead primary never reaches this
 		// branch, because the kubelet probe keeps the deployment from serving.
-		if r.capturePortVerification(ctx, resource, revision) {
+		//
+		// A crash detail captured just above is the more specific diagnosis and
+		// must not be overwritten by a port verdict.
+		if len(resource.Status.LastFailureDetails) == 0 &&
+			r.capturePortVerificationAfterProbe(ctx, resource, revision) {
 			r.reportPortNotListening(resource)
 			return controller.ResultStop
 		}

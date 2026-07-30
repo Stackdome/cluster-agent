@@ -109,32 +109,92 @@ func (r *Reconciler) withinPortCheckGrace(resource *v1alpha1.StackResource) bool
 //
 // The cached result is consulted before any API call, so a resource that has
 // already verified costs nothing on subsequent reconciles.
+//
+// This is the entry point for paths where nothing has yet proven the workload
+// is up. A closed verdict recorded here is provisional: see
+// capturePortVerificationAfterProbe.
 func (r *Reconciler) capturePortVerification(ctx context.Context, resource *v1alpha1.StackResource, deploymentRevision string) bool {
+	return r.evaluatePortVerification(ctx, resource, deploymentRevision, false)
+}
+
+// capturePortVerificationAfterProbe is the entry point for paths where the
+// kubelet probe has already proven the primary port good.
+//
+// A closed verdict reaching this path is retried once before it is believed. A
+// pod gets an IP the moment it starts, so the first dial can land while a
+// slow-booting app is still binding its listeners; without the retry that
+// premature refusal is cached for the life of the revision and pins a healthy
+// workload as NotReady. The retry is bounded to one attempt per key, so a
+// genuinely dead port is confirmed by the second verdict and stays reported.
+func (r *Reconciler) capturePortVerificationAfterProbe(ctx context.Context, resource *v1alpha1.StackResource, deploymentRevision string) bool {
+	return r.evaluatePortVerification(ctx, resource, deploymentRevision, true)
+}
+
+func (r *Reconciler) evaluatePortVerification(ctx context.Context, resource *v1alpha1.StackResource, revision string, probePassed bool) bool {
 	if !r.portVerificationApplies(resource) {
 		return false
 	}
 	// Keyed by deployment revision rather than pod-template-hash: the revision
 	// is already in hand, so a cache hit needs no pod lookup at all, and a new
 	// rollout still invalidates the previous answer.
-	key := portCheckKey(resource, deploymentRevision)
+	key := portCheckKey(resource, revision)
 
 	result, done := r.PortVerifier.Get(key)
 	if !done {
-		// Only a cache miss pays for the pod lookup.
-		podIP, found := r.representativePodIP(ctx, resource, deploymentRevision)
-		if !found {
-			return false
-		}
-		r.PortVerifier.Enqueue(key, podIP, declaredPortNumbers(resource))
+		r.schedulePortCheck(ctx, resource, key)
 		return false
 	}
 	if result.AllOpen() {
+		r.clearPortCheckRetry(key)
+		return false
+	}
+	if probePassed && r.markPortCheckRetried(key) {
+		// Discard the verdict and redial against the workload the probe has
+		// since proven up. The answer lands asynchronously; until it does the
+		// resource is treated as unverified, so the caller requeues rather than
+		// acting on either verdict.
+		r.PortVerifier.Forget(key)
+		r.schedulePortCheck(ctx, resource, key)
 		return false
 	}
 	resource.Status.LastFailureDetails = []v1alpha1.LastFailureDetail{
 		readinessFailureDetail(resource.Name, result),
 	}
 	return true
+}
+
+// schedulePortCheck queues a check for key. Only a cache miss (or a discarded
+// verdict) reaches here, so the pod lookup is never on the hot path.
+func (r *Reconciler) schedulePortCheck(ctx context.Context, resource *v1alpha1.StackResource, key portcheck.Key) {
+	podIP, found := r.representativePodIP(ctx, resource, key.Revision)
+	if !found {
+		return
+	}
+	r.PortVerifier.Enqueue(key, podIP, declaredPortNumbers(resource))
+}
+
+// markPortCheckRetried records that key's closed verdict is being retried, and
+// reports whether this call is the one that claimed the single retry.
+func (r *Reconciler) markPortCheckRetried(key portcheck.Key) bool {
+	r.portCheckMu.Lock()
+	defer r.portCheckMu.Unlock()
+	if _, retried := r.portCheckRetried[key]; retried {
+		return false
+	}
+	if r.portCheckRetried == nil {
+		r.portCheckRetried = make(map[portcheck.Key]struct{})
+	}
+	r.portCheckRetried[key] = struct{}{}
+	return true
+}
+
+// clearPortCheckRetry drops the retry marker once the ports verify open, so a
+// workload that flaps closed later is given a fresh retry rather than being
+// condemned on a stale marker.
+func (r *Reconciler) clearPortCheckRetry(key portcheck.Key) {
+	r.portCheckMu.Lock()
+	defer r.portCheckMu.Unlock()
+	delete(r.portCheckRetried, key)
 }
 
 // representativePodIP returns the IP of one Running pod of the current
@@ -221,8 +281,15 @@ func firstDialablePodIP(pods []corev1.Pod) (string, bool) {
 // reportPortNotListening records the proven-dead port on the resource status.
 // Callers stop the sub-reconciler chain afterwards: the workload is serving
 // traffic nobody answers, which is not Available.
+//
+// Converged is driven False alongside Available. The replica counts that made
+// the workload look converged are still true, but a rollout that lands a
+// workload nobody can reach has not delivered the resource the user asked for,
+// and reporting "fully converged" next to "not available" is precisely the
+// mixed signal the Available/Converged alignment work removed elsewhere.
 func (r *Reconciler) reportPortNotListening(resource *v1alpha1.StackResource) {
 	msg := resource.Status.LastFailureDetails[0].LastTerminationMessage
 	r.Status.SetCondition(resource, v1alpha1.StackResourceWorkloadAvailable, false, "PortNotListening", msg)
+	r.Status.SetCondition(resource, v1alpha1.StackResourceConverged, false, "PortNotListening", msg)
 	r.Status.ReportNotReady(resource, "PortNotListening", msg)
 }
