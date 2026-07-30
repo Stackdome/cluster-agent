@@ -106,6 +106,46 @@ func SimpleStack(name string) *StackWithResources {
 	}
 }
 
+// StackWithMismatchedPort creates a Stack whose single resource declares a port
+// nothing inside the container listens on. crccheck/hello-world serves :8000,
+// so the declared :80 is provably dead. This reproduces the live incident where
+// a wrong port number left a public resource permanently unavailable behind a
+// 502, and is the negative case for the port readiness gate.
+func StackWithMismatchedPort(name string) *StackWithResources {
+	resourceName := name + "-mismatch"
+	return &StackWithResources{
+		Stack: &corev1alpha1.Stack{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name,
+				Namespace: defaultNamespace,
+				Labels:    stackLabels(name),
+			},
+			Spec: corev1alpha1.StackSpec{
+				ResourceNames: []string{resourceName},
+			},
+		},
+		Resources: []*corev1alpha1.StackResource{
+			{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: defaultNamespace,
+					Labels:    resourceLabels(name, resourceName),
+				},
+				Spec: corev1alpha1.StackResourceSpec{
+					ImageSpec: &corev1alpha1.ImageSpec{
+						// Listens on :8000 only.
+						Image: "crccheck/hello-world:latest",
+					},
+					Ports: []corev1alpha1.Port{
+						// Deliberately wrong: nothing answers on :80.
+						{Name: "http", Number: 80, Protocol: "http", ExposeToPublic: true, FQDN: resourceName + ".example.com"},
+					},
+				},
+			},
+		},
+	}
+}
+
 // MultiResourceStack creates a Stack with a backend and frontend resource.
 // The frontend has a plain BACKEND_URL env var (no interpolation).
 func MultiResourceStack(name string) *StackWithResources {
