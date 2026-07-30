@@ -22,6 +22,23 @@ cloudnative-pg:
 
 traefik:
   enabled: true
+  # Applies the branded error-page middleware to every router on both
+  # entrypoints, so no generated Ingress carries the annotation and the rule
+  # exists in exactly one place per cluster.
+  #
+  # The reference follows Traefik's provider naming convention
+  # (`<namespace>-<name>@kubernetescrd`) and must match the namespace the agent
+  # creates the `stackdome-errors` Middleware in — i.e. the release namespace.
+  # Helm does not template values.yaml, so this cannot be derived from
+  # `.Release.Namespace`; installing the agent outside `stackdome-control-plane`
+  # requires overriding these two values to match.
+  ports:
+    web:
+      middlewares:
+        - stackdome-control-plane-stackdome-errors@kubernetescrd
+    websecure:
+      middlewares:
+        - stackdome-control-plane-stackdome-errors@kubernetescrd
 
 plugin-barman-cloud:
   enabled: true
