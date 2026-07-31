@@ -73,8 +73,8 @@ func buildProbes(resource *v1alpha1.StackResource) (probeSet, error) {
 	return probeSet{readiness: readiness, liveness: liveness, startup: startup}, nil
 }
 
-// defaultReadinessProbe synthesizes a TCP readiness probe for port-bearing
-// serving workloads that declare no readiness check of their own. Without it
+// defaultReadinessProbe synthesizes a TCP readiness probe for workloads
+// with ports that declare no readiness check of their own. Without it
 // kubelet marks the pod Ready the instant the process starts, so a container
 // listening on a port other than the declared one is published to Service
 // endpoints and returns 502 while every status signal reads healthy.

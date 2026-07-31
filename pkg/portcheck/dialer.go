@@ -10,7 +10,7 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -47,7 +47,7 @@ func (r Result) ClosedPorts() []int32 {
 			closed = append(closed, p.Port)
 		}
 	}
-	sort.Slice(closed, func(i, j int) bool { return closed[i] < closed[j] })
+	slices.Sort(closed)
 	return closed
 }
 
@@ -76,7 +76,7 @@ func (r Result) Message() string {
 		plural = "ports"
 	}
 	return fmt.Sprintf(
-		"readiness check failed: nothing listening on %s %s (ports verified: %s). "+
+		"readiness check failed: nothing listening on %s %s (ports verified: [%s]). "+
 			"If your app listens on a different port, update the port in your stack definition. "+
 			"If it listens on 127.0.0.1, change it to 0.0.0.0.",
 		plural, strings.Join(names, ", "), strings.Join(verified, ", "))
@@ -102,5 +102,5 @@ func Dial(ctx context.Context, host string, ports []int32, timeout time.Duration
 	}
 	wg.Wait()
 
-	return Result{Ports: results, CheckedAt: time.Now()}
+	return Result{Ports: results, CheckedAt: time.Now().UTC()}
 }

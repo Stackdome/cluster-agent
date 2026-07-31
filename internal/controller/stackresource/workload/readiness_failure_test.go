@@ -64,7 +64,7 @@ var _ = Describe("capturePortVerification", func() {
 		deadPort = int32(listener.Addr().(*net.TCPAddr).Port)
 		Expect(listener.Close()).To(Succeed())
 
-		verifier := portcheck.NewVerifier(1, time.Second)
+		verifier := portcheck.NewVerifierWithDefaults()
 		ctx, cancel := context.WithCancel(context.Background())
 		DeferCleanup(cancel)
 		verifier.Start(ctx)
@@ -190,7 +190,7 @@ var _ = Describe("capturePortVerificationAfterProbe (grace-bounded condemnation)
 		port = int32(listener.Addr().(*net.TCPAddr).Port)
 		Expect(listener.Close()).To(Succeed())
 
-		verifier := portcheck.NewVerifier(1, time.Second)
+		verifier := portcheck.NewVerifierWithDefaults()
 		verifierCtx, cancel := context.WithCancel(context.Background())
 		DeferCleanup(cancel)
 		verifier.Start(verifierCtx)
@@ -348,7 +348,7 @@ var _ = Describe("evaluateDeploymentStatus port verification", func() {
 		port = int32(listener.Addr().(*net.TCPAddr).Port)
 		Expect(listener.Close()).To(Succeed())
 
-		verifier := portcheck.NewVerifier(1, time.Second)
+		verifier := portcheck.NewVerifierWithDefaults()
 		verifierCtx, cancel := context.WithCancel(context.Background())
 		DeferCleanup(cancel)
 		verifier.Start(verifierCtx)
@@ -480,7 +480,7 @@ var _ = Describe("port verification after an operator restart", func() {
 		// No workers are started: the check stays unanswered for the whole spec,
 		// which is exactly the state the requeue has to cover.
 		reconciler = &Reconciler{
-			PortVerifier: portcheck.NewVerifier(1, time.Second),
+			PortVerifier: portcheck.NewVerifierWithDefaults(),
 			Status:       testStatusReporter{},
 		}
 		resource = &v1alpha1.StackResource{
