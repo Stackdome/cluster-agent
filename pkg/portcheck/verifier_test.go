@@ -74,6 +74,21 @@ var _ = Describe("Verifier", func() {
 			"Enqueue must drop rather than block; a reconcile thread cannot wait on this")
 	})
 
+	It("reports admission truthfully, including when the queue is full", func() {
+		// Workers deliberately not started: every admitted job sits in the
+		// queue, so exactly queueDepth admissions fit.
+		for i := 0; i < queueDepth; i++ {
+			k := Key{Namespace: "ns", Name: "app", Revision: fmt.Sprint(i)}
+			Expect(v.Enqueue(k, "127.0.0.1", []int32{1})).To(BeTrue())
+		}
+
+		// Queue full: refused.
+		Expect(v.Enqueue(Key{Namespace: "ns", Name: "app", Revision: "overflow"}, "127.0.0.1", []int32{1})).To(BeFalse())
+
+		// A key already in flight is refused regardless of queue space.
+		Expect(v.Enqueue(Key{Namespace: "ns", Name: "app", Revision: "0"}, "127.0.0.1", []int32{1})).To(BeFalse())
+	})
+
 	It("does not let a new revision inherit the previous result", func() {
 		port, closeFn := listenOnFreePort()
 		DeferCleanup(closeFn)

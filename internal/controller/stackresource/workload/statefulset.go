@@ -93,16 +93,12 @@ func (r *Reconciler) evaluateStatefulSetStatus(ctx context.Context, resource *v1
 		// Converged means the pod passed its kubelet probe, which guards only the
 		// primary port. A secondary port nobody listens on would otherwise stay
 		// silently green, so the verifier runs on this branch too.
-		if r.capturePortVerificationAfterProbe(ctx, resource, sts.Status.UpdateRevision) {
+		portFailed, portOutstanding := r.verifyServingPorts(ctx, resource, sts.Status.UpdateRevision)
+		if portFailed {
 			r.reportPortNotListening(resource)
-			return controller.ResultStop
-		}
-		// The check answers asynchronously, so come back to read it. The budget,
-		// measured from when the check was first wanted, bounds the polling.
-		// Convergence used to be the anchor, which meant a StatefulSet with no
-		// convergence record — or one that converged before this process started
-		// — was never polled at all and its verdict went unread.
-		if r.portCheckOutstanding(resource, sts.Status.UpdateRevision) {
+		} else if portOutstanding {
+			// The check answers asynchronously; come back to read it. The
+			// deferred requeue lets the rest of the chain run meanwhile.
 			return controller.ResultDeferredRequeue(portCheckRequeueInterval)
 		}
 		return controller.ResultContinue
@@ -115,7 +111,7 @@ func (r *Reconciler) evaluateStatefulSetStatus(ctx context.Context, resource *v1
 	// becomes Ready, the cause is usually a port nobody is listening on, which
 	// only the port verifier can name.
 	if len(resource.Status.LastFailureDetails) == 0 {
-		r.capturePortVerification(ctx, resource, sts.Status.UpdateRevision)
+		r.capturePortDiagnosis(ctx, resource, sts.Status.UpdateRevision)
 	}
 	r.Status.SetCondition(resource, v1alpha1.StackResourceWorkloadAvailable, false, "StatefulSetNotAvailable", "statefulset pod not ready")
 	r.Status.ReportNotReady(resource, "StackResourceStatefulSetNotReady", "statefulset pod not yet ready")

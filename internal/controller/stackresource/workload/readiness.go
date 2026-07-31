@@ -7,6 +7,7 @@ import (
 	"github.com/samber/lo"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"stackdome.io/cluster-agent/api/core/v1alpha1"
@@ -15,22 +16,15 @@ import (
 )
 
 const (
-	// DefaultPortCheckGrace bounds how long a workload keeps being requeued
-	// while its port verification is still outstanding. It matches the
-	// deployment rollout grace period, so an unanswerable check costs no more
-	// polling than a rollout that never settles.
+	// DefaultPortCheckGrace is how long a closed-port verdict on a serving
+	// workload is re-verified before it is believed.
 	DefaultPortCheckGrace = 3 * time.Minute
 
-	// portCheckRequeueInterval is how often an unverified resource comes back to
-	// read its result. It mirrors the rollout polling interval already used by
-	// the status paths.
 	portCheckRequeueInterval = 10 * time.Second
 )
 
-// readinessFailureDetail renders a port verification failure into the shared
-// LastFailureDetail shape. ContainerName is set to the resource name because
-// the hub's MapLastFailureDetails drops details whose container name matches
-// neither the resource nor its init container.
+// ContainerName must match the resource name or the hub's
+// MapLastFailureDetails drops the detail.
 func readinessFailureDetail(resourceName string, result portcheck.Result) v1alpha1.LastFailureDetail {
 	return v1alpha1.LastFailureDetail{
 		Type:                   v1alpha1.FailureTypeReadinessFailure,
@@ -40,7 +34,6 @@ func readinessFailureDetail(resourceName string, result portcheck.Result) v1alph
 	}
 }
 
-// declaredPortNumbers returns the ports the user asked us to publish.
 func declaredPortNumbers(resource *v1alpha1.StackResource) []int32 {
 	ports := make([]int32, 0, len(resource.Spec.Ports))
 	for _, p := range resource.Spec.Ports {
@@ -49,8 +42,7 @@ func declaredPortNumbers(resource *v1alpha1.StackResource) []int32 {
 	return ports
 }
 
-// portCheckKey scopes a verification to one workload revision, so a rollout
-// invalidates the previous answer.
+// Keyed by revision so a rollout invalidates the previous answer.
 func portCheckKey(resource *v1alpha1.StackResource, revision string) portcheck.Key {
 	return portcheck.Key{
 		Namespace: resource.Namespace,
@@ -59,26 +51,11 @@ func portCheckKey(resource *v1alpha1.StackResource, revision string) portcheck.K
 	}
 }
 
-// portVerificationApplies reports whether this resource has anything to verify
-// with a verifier available to do it. A Reconciler built without a verifier
-// (unit tests, workload types that never publish ports) simply skips the check.
+// A nil verifier disables the check (unit tests, reduced deployments).
 func (r *Reconciler) portVerificationApplies(resource *v1alpha1.StackResource) bool {
 	return r.PortVerifier != nil && len(resource.Spec.Ports) > 0
 }
 
-// portVerificationAnswered reports whether a completed result is already in
-// hand. It reads the cache only — no API calls, no dialing — so status paths can
-// use it to decide whether another reconcile is worth scheduling.
-func (r *Reconciler) portVerificationAnswered(resource *v1alpha1.StackResource, revision string) bool {
-	if !r.portVerificationApplies(resource) {
-		return true
-	}
-	_, done := r.PortVerifier.Get(portCheckKey(resource, revision))
-	return done
-}
-
-// portCheckGrace is the requeue budget for a resource whose verification has
-// not come back yet.
 func (r *Reconciler) portCheckGrace() time.Duration {
 	if r.PortCheckGrace <= 0 {
 		return DefaultPortCheckGrace
@@ -86,196 +63,87 @@ func (r *Reconciler) portCheckGrace() time.Duration {
 	return r.PortCheckGrace
 }
 
-// beginPortCheckBudget returns the moment key's budget started, opening one at
-// now if key has none yet, and re-anchoring an existing budget the first time
-// the kubelet probe is known to have passed.
+// verifyServingPorts checks the declared ports of a workload whose kubelet
+// probe has passed. Never dials inline.
 //
-// Two rules, for two different failure modes.
+// failed: a closed verdict outlived the grace window; failure detail is on
+// status, caller should mark the resource unavailable. shouldRequeue: no
+// answer yet, caller should requeue to read it.
 //
-// The budget is anchored on our own interest rather than on the workload's
-// rollout or convergence timestamp because those anchors live on the object and
-// survive a process restart while the verifier's cache does not. A long-settled
-// workload re-discovered by a freshly started operator would otherwise be born
-// with its entire budget already spent — no requeue to read the result it just
-// scheduled, no retry for a verdict that arrives late.
-//
-// It is re-anchored on the first probe-passed sighting because the budget's job
-// on that path is to give a slow *secondary* port time to bind, and that clock
-// can only start once the primary port is up. A pod that spent longer than the
-// whole budget booting — an image pull plus a slow runtime, entirely ordinary
-// during the fleet-wide rolling restart this release triggers — would otherwise
-// reach the serving branch with nothing left and have its first, premature
-// refusal believed on sight. The re-anchor latches, so it cannot be used to
-// extend the budget indefinitely.
-func (r *Reconciler) beginPortCheckBudget(key portcheck.Key, probePassed bool) time.Time {
-	r.portCheckMu.Lock()
-	defer r.portCheckMu.Unlock()
-	if r.portCheckBudgets == nil {
-		r.portCheckBudgets = make(map[portcheck.Key]portCheckBudget)
-	}
-	budget, ok := r.portCheckBudgets[key]
-	switch {
-	case !ok:
-		budget = portCheckBudget{startedAt: time.Now(), probeAnchored: probePassed}
-	case probePassed && !budget.probeAnchored:
-		budget = portCheckBudget{startedAt: time.Now(), probeAnchored: true}
-	default:
-		return budget.startedAt
-	}
-	r.portCheckBudgets[key] = budget
-	return budget.startedAt
-}
-
-// portCheckBudgetActive reports, without recording anything, whether key has a
-// budget that has not yet run out. A key nobody has asked about has no budget
-// and is not worth polling for.
-func (r *Reconciler) portCheckBudgetActive(key portcheck.Key) bool {
-	r.portCheckMu.Lock()
-	defer r.portCheckMu.Unlock()
-	budget, ok := r.portCheckBudgets[key]
-	if !ok {
-		return false
-	}
-	return time.Since(budget.startedAt) < r.portCheckGrace()
-}
-
-// clearPortCheckBudget drops key's budget once its ports verify open, so a
-// workload that flaps closed later starts a fresh budget rather than being
-// condemned on a stale one.
-func (r *Reconciler) clearPortCheckBudget(key portcheck.Key) {
-	r.portCheckMu.Lock()
-	defer r.portCheckMu.Unlock()
-	delete(r.portCheckBudgets, key)
-}
-
-// portCheckOutstanding reports whether a verification is still unanswered and
-// still inside its budget — that is, whether another reconcile is worth
-// scheduling to read the result. It reads the cache only; it never dials and
-// never makes an API call.
-func (r *Reconciler) portCheckOutstanding(resource *v1alpha1.StackResource, revision string) bool {
-	if r.portVerificationAnswered(resource, revision) {
-		return false
-	}
-	return r.portCheckBudgetActive(portCheckKey(resource, revision))
-}
-
-// capturePortVerification reports whether a declared port has been proven
-// dead, and records a typed failure detail when so.
-//
-// It is best effort. An unknown result is not a failure: the check is
-// scheduled and false is returned, so the caller proceeds normally rather than
-// stalling on an answer that may never come. It never dials inline.
-//
-// The cached result is consulted before any API call, so a resource that has
-// already verified costs nothing on subsequent reconciles.
-//
-// This is the entry point for paths where nothing has yet proven the workload
-// is up. A closed verdict recorded here is provisional: see
-// capturePortVerificationAfterProbe.
-func (r *Reconciler) capturePortVerification(ctx context.Context, resource *v1alpha1.StackResource, deploymentRevision string) bool {
-	return r.evaluatePortVerification(ctx, resource, deploymentRevision, false)
-}
-
-// capturePortVerificationAfterProbe is the entry point for paths where the
-// kubelet probe has already proven the primary port good.
-//
-// A closed verdict reaching this path is disbelieved for as long as the port
-// check budget lasts. A pod gets an IP the moment it starts, so a dial can land
-// while a slow-booting app is still binding its listeners; a single premature
-// refusal must never become the resource's permanent truth. Condemnation is a
-// deadline, not a counter: the verdict has to stay closed past the grace budget
-// before it is believed, so an app whose secondary port binds a minute after
-// its primary one heals itself instead of staying pinned Available=False until
-// the next rollout.
-func (r *Reconciler) capturePortVerificationAfterProbe(ctx context.Context, resource *v1alpha1.StackResource, deploymentRevision string) bool {
-	return r.evaluatePortVerification(ctx, resource, deploymentRevision, true)
-}
-
-func (r *Reconciler) evaluatePortVerification(ctx context.Context, resource *v1alpha1.StackResource, revision string, probePassed bool) bool {
+// The grace window (Status.PortCheck.FailingSince) starts at the first closed
+// verdict seen while serving, per revision, and survives operator restarts.
+// Inside the window closed verdicts are discarded and redialed, so a refusal
+// cached during boot never condemns the app and a slow secondary port gets
+// time to bind.
+func (r *Reconciler) verifyServingPorts(ctx context.Context, resource *v1alpha1.StackResource, revision string) (failed, shouldRequeue bool) {
 	if !r.portVerificationApplies(resource) {
-		return false
+		resource.Status.PortCheck = nil
+		return false, false
 	}
-	// Keyed by deployment revision rather than pod-template-hash: the revision
-	// is already in hand, so a cache hit needs no pod lookup at all, and a new
-	// rollout still invalidates the previous answer.
 	key := portCheckKey(resource, revision)
 
 	result, done := r.PortVerifier.Get(key)
 	if !done {
-		// The budget opens only once a dial is actually in flight. A revision
-		// with no dialable pod yet — still pulling its image, still scheduling —
-		// has nothing to spend a budget on, and spending it there would leave a
-		// slow-starting workload with none by the time it is worth checking.
-		//
-		// Opening it here rather than at the first closed verdict is what makes
-		// the caller's requeue possible: portCheckOutstanding polls only keys
-		// that have a budget.
-		if r.schedulePortCheck(ctx, resource, key) {
-			r.beginPortCheckBudget(key, probePassed)
-		}
-		return false
+		// Requeue only if an answer can arrive: dial admitted or in flight.
+		return false, r.schedulePortCheck(ctx, resource, key) || r.PortVerifier.Pending(key)
 	}
 	if result.AllOpen() {
-		r.clearPortCheckBudget(key)
-		return false
+		resource.Status.PortCheck = nil
+		return false, false
 	}
-	if probePassed && time.Since(r.beginPortCheckBudget(key, true)) < r.portCheckGrace() {
-		// Still inside the budget: discard the verdict and redial against the
-		// workload the probe has since proven up. The answer lands
-		// asynchronously; until it does the resource is treated as unverified,
-		// so the caller requeues rather than acting on either verdict.
-		//
-		// The verifier is single-flight, so the Enqueue below silently does
-		// nothing if the previous dial for this key is somehow still in flight.
-		// That is not a lost retry: the key simply stays unanswered, the caller
-		// requeues at portCheckRequeueInterval, and the next pass tries again
-		// once the dial has landed. See portcheck.Verifier.Forget for the
-		// tradeoff this accepts — an in-flight job's answer is not discarded,
-		// it lands and is corrected a cycle later.
-		//
-		// The budget is what stops this looping. Each pass costs at most one
-		// dial and one requeue at portCheckRequeueInterval, and once the budget
-		// is spent the branch below takes over permanently for this revision.
+
+	pc := resource.Status.PortCheck
+	if pc == nil || pc.Revision != revision {
+		resource.Status.PortCheck = &v1alpha1.PortCheckStatus{Revision: revision, FailingSince: metav1.Now()}
+		pc = resource.Status.PortCheck
+	}
+	// Still in the grace window, requeue the port check.
+	if time.Since(pc.FailingSince.Time) < r.portCheckGrace() {
 		r.PortVerifier.Forget(key)
-		if !r.schedulePortCheck(ctx, resource, key) {
-			// The verdict is already discarded, so the key stays unanswered and
-			// the caller keeps requeueing for the rest of the budget. Worth a
-			// breadcrumb: repeated occurrences mean the pod listing and the
-			// revision disagree about which pods are current.
-			controller.LoggerFromContext(ctx).V(1).Info("no dialable pod to re-verify declared ports against",
-				"resource", resource.Name, "revision", key.Revision)
-		}
-		return false
+		r.schedulePortCheck(ctx, resource, key)
+		return false, true
 	}
-	// The budget entry is deliberately left in place: clearing it here would
-	// hand the next reconcile a fresh budget and churn between "condemned" and
-	// "re-verifying" forever. An open verdict is the only thing that clears it.
+	// Terminal per revision: keep the cached verdict so a dead port doesn't
+	// poll forever. A new rollout starts fresh.
 	resource.Status.LastFailureDetails = []v1alpha1.LastFailureDetail{
 		readinessFailureDetail(resource.Name, result),
 	}
-	return true
+	return true, false
 }
 
-// schedulePortCheck queues a check for key and reports whether a dialable pod
-// was found to check. Only a cache miss (or a discarded verdict) reaches here,
-// so the pod lookup is never on the hot path.
-//
-// The boolean reports the pod lookup, not the enqueue: the verifier is
-// single-flight and drops the request when a dial for key is already in flight
-// or its queue is full. Either way the key stays unanswered and the caller's
-// requeue is the retry.
+// capturePortDiagnosis records a PortNotListening detail for a workload that
+// is not serving. Provisional: verifyServingPorts re-verifies once serving.
+func (r *Reconciler) capturePortDiagnosis(ctx context.Context, resource *v1alpha1.StackResource, revision string) {
+	if !r.portVerificationApplies(resource) {
+		return
+	}
+	key := portCheckKey(resource, revision)
+	result, done := r.PortVerifier.Get(key)
+	if !done {
+		r.schedulePortCheck(ctx, resource, key)
+		return
+	}
+	if result.AllOpen() {
+		return
+	}
+	resource.Status.LastFailureDetails = []v1alpha1.LastFailureDetail{
+		readinessFailureDetail(resource.Name, result),
+	}
+}
+
+// schedulePortCheck queues a check and reports whether a dial was admitted.
+// On refusal (no dialable pod, in flight, queue full) the caller's requeue is
+// the retry.
 func (r *Reconciler) schedulePortCheck(ctx context.Context, resource *v1alpha1.StackResource, key portcheck.Key) bool {
 	podIP, found := r.representativePodIP(ctx, resource, key.Revision)
 	if !found {
 		return false
 	}
-	r.PortVerifier.Enqueue(key, podIP, declaredPortNumbers(resource))
-	return true
+	return r.PortVerifier.Enqueue(key, podIP, declaredPortNumbers(resource))
 }
 
-// representativePodIP returns the IP of one Running pod of the current
-// revision. Called only on a cache miss.
-func (r *Reconciler) representativePodIP(ctx context.Context, resource *v1alpha1.StackResource, revision string) (string, bool) {
+func (r *Reconciler) representativePodIP(
+	ctx context.Context, resource *v1alpha1.StackResource, revision string) (string, bool) {
 	if r.UncachedClient == nil {
 		return "", false
 	}
@@ -285,9 +153,8 @@ func (r *Reconciler) representativePodIP(ctx context.Context, resource *v1alpha1
 	return r.deploymentPodIP(ctx, resource, revision)
 }
 
-// deploymentPodIP resolves the pod IP through the ReplicaSet that owns the
-// given deployment revision. The ReplicaSet lookup mirrors
-// captureLastFailureDetails so both paths agree on which revision is current.
+// Walks deployment revision -> ReplicaSet -> pod, mirroring
+// captureLastFailureDetails so both agree on which revision is current.
 func (r *Reconciler) deploymentPodIP(ctx context.Context, resource *v1alpha1.StackResource, deploymentRevision string) (string, bool) {
 	labels := GetWorkloadLabelForResource(resource)
 
@@ -324,8 +191,7 @@ func (r *Reconciler) deploymentPodIP(ctx context.Context, resource *v1alpha1.Sta
 	return firstDialablePodIP(podList.Items)
 }
 
-// statefulSetPodIP resolves the pod IP for a StatefulSet, which has no
-// ReplicaSet: its pods carry the controller revision directly.
+// StatefulSets have no ReplicaSet; pods carry the controller revision directly.
 func (r *Reconciler) statefulSetPodIP(ctx context.Context, resource *v1alpha1.StackResource, controllerRevision string) (string, bool) {
 	if controllerRevision == "" {
 		return "", false
@@ -342,9 +208,8 @@ func (r *Reconciler) statefulSetPodIP(ctx context.Context, resource *v1alpha1.St
 	return firstDialablePodIP(podList.Items)
 }
 
-// firstDialablePodIP picks a pod that can actually be dialed. A pod that is
-// Running with an assigned IP is dialable even though it is not Ready —
-// precisely the state a wrong-port workload sits in.
+// Running with an IP is dialable even if not Ready — exactly the state a
+// wrong-port workload sits in.
 func firstDialablePodIP(pods []corev1.Pod) (string, bool) {
 	for _, pod := range pods {
 		if pod.Status.Phase == corev1.PodRunning && pod.Status.PodIP != "" {
@@ -354,15 +219,9 @@ func firstDialablePodIP(pods []corev1.Pod) (string, bool) {
 	return "", false
 }
 
-// reportPortNotListening records the proven-dead port on the resource status.
-// Callers stop the sub-reconciler chain afterwards: the workload is serving
-// traffic nobody answers, which is not Available.
-//
-// Converged is driven False alongside Available. The replica counts that made
-// the workload look converged are still true, but a rollout that lands a
-// workload nobody can reach has not delivered the resource the user asked for,
-// and reporting "fully converged" next to "not available" is precisely the
-// mixed signal the Available/Converged alignment work removed elsewhere.
+// Converged goes False with Available: "fully converged" next to "not
+// available" is a mixed signal. The chain keeps running; conditions carry the
+// verdict.
 func (r *Reconciler) reportPortNotListening(resource *v1alpha1.StackResource) {
 	msg := resource.Status.LastFailureDetails[0].LastTerminationMessage
 	r.Status.SetCondition(resource, v1alpha1.StackResourceWorkloadAvailable, false, "PortNotListening", msg)

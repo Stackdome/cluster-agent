@@ -124,11 +124,12 @@ var _ = Describe("PostgresCluster Addon", Ordered, func() {
 		It("should create a ScheduledBackup CR owned by the PostgresCluster", func() {
 			scheduledBackupName := pg.CnpgClusterName() + "-scheduled-backup"
 			sb := &cnpgv1.ScheduledBackup{}
-			err := c.Get(ctx, client.ObjectKey{
-				Name:      scheduledBackupName,
-				Namespace: pg.Namespace,
-			}, sb)
-			Expect(err).NotTo(HaveOccurred())
+			Eventually(func() error {
+				return c.Get(ctx, client.ObjectKey{
+					Name:      scheduledBackupName,
+					Namespace: pg.Namespace,
+				}, sb)
+			}, readyTimeout).Should(Succeed())
 			Expect(sb.Spec.Schedule).To(Equal("0 0 0 * * 0"))
 			Expect(sb.Spec.Cluster.Name).To(Equal(pg.CnpgClusterName()))
 

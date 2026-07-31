@@ -964,6 +964,28 @@ spec:
               phase:
                 default: Pending
                 type: string
+              portCheck:
+                description: |-
+                  PortCheck tracks an ongoing declared-port verification failure. It is set
+                  when a serving workload first returns a closed-port verdict and cleared
+                  when every declared port verifies open. Persisting it here (rather than in
+                  operator memory) keeps the grace window intact across operator restarts.
+                properties:
+                  failingSince:
+                    description: |-
+                      FailingSince is when the first closed-port verdict was seen for this
+                      revision while the workload was serving.
+                    format: date-time
+                    type: string
+                  revision:
+                    description: |-
+                      Revision is the workload revision the verdict applies to. A new rollout
+                      starts a fresh window.
+                    type: string
+                required:
+                - failingSince
+                - revision
+                type: object
               replicas:
                 format: int32
                 type: integer

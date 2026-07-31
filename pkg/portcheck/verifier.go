@@ -78,12 +78,6 @@ func (v *Verifier) run(ctx context.Context) {
 		case j := <-v.queue:
 			result := Dial(ctx, j.podIP, j.ports, v.timeout)
 			v.mu.Lock()
-			// Unconditional: single-flight guarantees this job is the only one
-			// ever in flight for its key, so the result it just produced is the
-			// only candidate and the pending marker it clears is its own. A
-			// Forget during the dial does not change that — it clears only the
-			// stored result, so this write lands and is corrected on a later
-			// Forget-and-redial cycle. See Forget for the tradeoff.
 			v.results[j.key] = result
 			delete(v.pending, j.key)
 			v.mu.Unlock()
@@ -107,56 +101,42 @@ func (v *Verifier) Get(key Key) (Result, bool) {
 // It is also single-flight. A key whose dial is already in flight is refused
 // outright, so a Forget+Enqueue issued mid-dial schedules nothing and the
 // caller's next reconcile tries again.
-func (v *Verifier) Enqueue(key Key, podIP string, ports []int32) {
+func (v *Verifier) Enqueue(key Key, podIP string, ports []int32) bool {
 	v.mu.Lock()
 	_, done := v.results[key]
 	_, inFlight := v.pending[key]
 	if done || inFlight {
 		v.mu.Unlock()
-		return
+		return false
 	}
 	v.pending[key] = struct{}{}
 	v.mu.Unlock()
 
 	select {
 	case v.queue <- job{key: key, podIP: podIP, ports: ports}:
+		return true
 	default:
 		// The queue is full, so this job will never run and its pending marker
-		// must be cleared. Clearing it unconditionally is safe: nobody else can
-		// have set it in the meantime, because Enqueue refuses while the marker
-		// exists and Forget never clears it, so the marker is still the one set
-		// a few lines above.
+		// must be cleared.
 		v.mu.Lock()
 		delete(v.pending, key)
 		v.mu.Unlock()
+		return false
 	}
+}
+
+// Pending reports whether a dial for key is currently in flight — scheduled
+// but not yet answered.
+func (v *Verifier) Pending(key Key) bool {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	_, inFlight := v.pending[key]
+	return inFlight
 }
 
 // Forget drops any stored result for key, forcing the next Enqueue to redial.
 // It reports whether a result was actually dropped, so a caller can tell a real
 // discard from a no-op on a key that was never answered.
-//
-// It deliberately does NOT clear the pending marker. That marker is the
-// single-flight lock: leaving it in place is what guarantees at most one job
-// per key is ever in flight, which in turn is what makes the completion path in
-// run() a race-free unconditional write. A Forget issued while a dial is in
-// flight therefore only discards the cached answer; the immediately following
-// Enqueue is refused and nothing is rescheduled until that dial completes.
-//
-// Accepted tradeoff, chosen deliberately over generation tracking: the in-flight
-// job's answer — computed before the Forget, possibly against a workload that
-// has since changed — DOES land in the cache. It is not discarded. Correction is
-// not immediate; it waits for the caller's next reconcile (~10s) to Forget the
-// now-stale result and redial, which succeeds because the pending marker is gone
-// by then. The state machine still terminates: every cycle either produces a
-// fresh answer or costs one requeue interval.
-//
-// Known accepted edge: if such a stale write lands just as the caller's grace
-// budget expires, the caller believes it and can condemn a healthy resource.
-// Low probability, and accepted by the design owner in exchange for deleting the
-// generation bookkeeping. This is a chosen cost, not an oversight — do not
-// "fix" it by clearing pending here without revisiting run()'s unconditional
-// write, which depends on this invariant.
 func (v *Verifier) Forget(key Key) bool {
 	v.mu.Lock()
 	defer v.mu.Unlock()

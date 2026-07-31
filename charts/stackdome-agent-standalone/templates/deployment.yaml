@@ -30,18 +30,6 @@ spec:
         {{- if .Values.leaderElect }}
         - --leader-elect
         {{- end }}
-        {{- /* The error page Service must select this Deployment's own pods, so
-               the selector is derived from the same helper the pod labels use. */}}
-        {{- $pairs := list }}
-        {{- range $key, $value := (include "stackdome-agent-standalone.selectorLabels" . | fromYaml) }}
-        {{- $pairs = append $pairs (printf "%s=%s" $key $value) }}
-        {{- end }}
-        - --error-pages-selector={{ join "," $pairs }}
-        env:
-        - name: POD_NAMESPACE
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.namespace
         ports:
         # The agent serves the Traefik error pages itself; the
         # stackdome-error-pages Service targets this port.

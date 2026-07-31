@@ -49,7 +49,7 @@ var _ = Describe("readinessFailureDetail", func() {
 	})
 })
 
-var _ = Describe("capturePortVerification", func() {
+var _ = Describe("capturePortDiagnosis", func() {
 	var (
 		reconciler *Reconciler
 		resource   *v1alpha1.StackResource
@@ -85,7 +85,7 @@ var _ = Describe("capturePortVerification", func() {
 		}).Should(BeTrue())
 
 		// UncachedClient is nil: a cache hit must not attempt a pod lookup.
-		Expect(reconciler.capturePortVerification(context.Background(), resource, "7")).To(BeTrue())
+		reconciler.capturePortDiagnosis(context.Background(), resource, "7")
 		Expect(resource.Status.LastFailureDetails).To(HaveLen(1))
 		Expect(resource.Status.LastFailureDetails[0].Type).To(Equal(v1alpha1.FailureTypeReadinessFailure))
 	})
@@ -99,34 +99,20 @@ var _ = Describe("capturePortVerification", func() {
 		}).Should(BeTrue())
 
 		// Revision 8 has no result yet, and with no client there is no pod to find.
-		Expect(reconciler.capturePortVerification(context.Background(), resource, "8")).To(BeFalse())
+		reconciler.capturePortDiagnosis(context.Background(), resource, "8")
 		Expect(resource.Status.LastFailureDetails).To(BeEmpty())
-	})
-
-	It("opens no budget when there is nothing dialable, so a slow-starting revision does not spend it", func() {
-		// UncachedClient is nil, so no pod IP is found and nothing is enqueued —
-		// the state of a revision still pulling its image or still scheduling.
-		// Opening a budget here would have it expire while the workload was
-		// still booting, and the first premature refusal after that would be
-		// believed on sight.
-		key := portcheck.Key{Namespace: "team-a", Name: "svc-01", Revision: "9"}
-
-		Expect(reconciler.capturePortVerification(context.Background(), resource, "9")).To(BeFalse())
-
-		Expect(reconciler.portCheckBudgetActive(key)).To(BeFalse())
-		Expect(reconciler.portCheckOutstanding(resource, "9")).To(BeFalse(),
-			"a check that was never enqueued is not worth requeueing for")
 	})
 
 	It("does nothing for a resource that declares no ports", func() {
 		resource.Spec.Ports = nil
-		Expect(reconciler.capturePortVerification(context.Background(), resource, "7")).To(BeFalse())
+		reconciler.capturePortDiagnosis(context.Background(), resource, "7")
+		Expect(resource.Status.LastFailureDetails).To(BeEmpty())
 	})
 
 	It("is disabled rather than fatal when no verifier is configured", func() {
 		bare := &Reconciler{}
-		Expect(bare.capturePortVerification(context.Background(), resource, "7")).To(BeFalse())
-		Expect(bare.portVerificationAnswered(resource, "7")).To(BeTrue())
+		bare.capturePortDiagnosis(context.Background(), resource, "7")
+		Expect(resource.Status.LastFailureDetails).To(BeEmpty())
 	})
 })
 
@@ -160,7 +146,7 @@ func newPortCheckUncachedClient() client.Client {
 	).Build()
 }
 
-var _ = Describe("capturePortVerificationAfterProbe (grace-bounded condemnation)", func() {
+var _ = Describe("verifyServingPorts (grace-bounded condemnation)", func() {
 	var (
 		reconciler *Reconciler
 		resource   *v1alpha1.StackResource
@@ -203,9 +189,10 @@ var _ = Describe("capturePortVerificationAfterProbe (grace-bounded condemnation)
 		key = portcheck.Key{Namespace: "team-a", Name: "svc-01", Revision: "7"}
 
 		// The not-serving path dials while the app is still booting and caches a
-		// refusal — the premature verdict this retry exists to survive.
-		Expect(reconciler.capturePortVerification(ctx, resource, "7")).To(BeFalse())
+		// refusal — the premature verdict the grace window exists to survive.
+		reconciler.capturePortDiagnosis(ctx, resource, "7")
 		Expect(waitForVerdict().AllOpen()).To(BeFalse())
+		resource.Status.LastFailureDetails = nil
 	})
 
 	It("re-dials a booted app instead of trusting a verdict cached while it was starting", func() {
@@ -216,79 +203,103 @@ var _ = Describe("capturePortVerificationAfterProbe (grace-bounded condemnation)
 
 		// First read on the serving path must discard the stale refusal rather
 		// than condemn the resource on it.
-		Expect(reconciler.capturePortVerificationAfterProbe(ctx, resource, "7")).To(BeFalse())
+		failed, outstanding := reconciler.verifyServingPorts(ctx, resource, "7")
+		Expect(failed).To(BeFalse())
+		Expect(outstanding).To(BeTrue())
 		Expect(resource.Status.LastFailureDetails).To(BeEmpty())
+		// The grace window opens at the first serving refusal — and on status, so
+		// it survives an operator restart.
+		Expect(resource.Status.PortCheck).NotTo(BeNil())
+		Expect(resource.Status.PortCheck.Revision).To(Equal("7"))
 
 		Expect(waitForVerdict().AllOpen()).To(BeTrue())
 
-		// With the port proven open the resource stays available.
-		Expect(reconciler.capturePortVerificationAfterProbe(ctx, resource, "7")).To(BeFalse())
+		// With the port proven open the resource stays available and the window
+		// is cleared, so a later flap is judged fresh.
+		failed, outstanding = reconciler.verifyServingPorts(ctx, resource, "7")
+		Expect(failed).To(BeFalse())
+		Expect(outstanding).To(BeFalse())
 		Expect(resource.Status.LastFailureDetails).To(BeEmpty())
+		Expect(resource.Status.PortCheck).To(BeNil())
 	})
 
-	It("keeps re-verifying a closed verdict while the budget lasts, so a slow secondary port is never condemned", func() {
-		// The old policy allowed exactly one retry per revision, which pinned an
-		// app whose secondary port bound a few seconds after its primary probe
-		// passed at Available=False until the next rollout. Condemnation is a
-		// deadline now, so every pass inside the budget re-dials.
-		for i := 0; i < 4; i++ {
-			Expect(reconciler.capturePortVerificationAfterProbe(ctx, resource, "7")).
-				To(BeFalse(), "pass %d must re-verify rather than condemn", i)
+	It("keeps re-verifying a closed verdict while the grace window lasts, so a slow secondary port is never condemned", func() {
+		firstSeen := time.Time{}
+		for i := range 4 {
+			failed, outstanding := reconciler.verifyServingPorts(ctx, resource, "7")
+			Expect(failed).To(BeFalse(), "pass %d must re-verify rather than condemn", i)
+			Expect(outstanding).To(BeTrue())
 			Expect(resource.Status.LastFailureDetails).To(BeEmpty())
+			// The anchor latches: later passes must not push it forward, or the
+			// window would never close.
+			if i == 0 {
+				firstSeen = resource.Status.PortCheck.FailingSince.Time
+			} else {
+				Expect(resource.Status.PortCheck.FailingSince.Time).To(Equal(firstSeen))
+			}
 			Expect(waitForVerdict().AllOpen()).To(BeFalse())
 		}
 
-		// And the app that finally binds is believed, not stuck behind a spent
-		// retry counter.
+		// And the app that finally binds is believed.
 		listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", fmt.Sprint(port)))
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(func() { _ = listener.Close() })
 
-		Expect(reconciler.capturePortVerificationAfterProbe(ctx, resource, "7")).To(BeFalse())
+		failed, outstanding := reconciler.verifyServingPorts(ctx, resource, "7")
+		Expect(failed).To(BeFalse())
+		Expect(outstanding).To(BeTrue())
 		Expect(waitForVerdict().AllOpen()).To(BeTrue())
-		Expect(reconciler.capturePortVerificationAfterProbe(ctx, resource, "7")).To(BeFalse())
+		failed, _ = reconciler.verifyServingPorts(ctx, resource, "7")
+		Expect(failed).To(BeFalse())
 		Expect(resource.Status.LastFailureDetails).To(BeEmpty())
 	})
 
-	It("re-anchors the budget when the probe first passes, so a slow boot cannot spend it", func() {
-		// The not-serving path dialed this revision (BeforeEach) while the app
-		// was booting. Booting then took longer than the whole budget — an image
-		// pull plus a slow runtime, entirely ordinary during a fleet-wide
-		// rolling restart.
-		Expect(reconciler.portCheckBudgets).To(HaveKey(key))
-		Expect(reconciler.portCheckBudgets[key].probeAnchored).To(BeFalse())
-		reconciler.portCheckBudgets[key] = portCheckBudget{startedAt: time.Now().Add(-time.Hour)}
-
-		// The probe now passes. The premature refusal cached during the boot
-		// must be re-verified against the budget that starts here, not condemned
-		// on one that was spent before the app was ever up.
-		Expect(reconciler.capturePortVerificationAfterProbe(ctx, resource, "7")).To(BeFalse())
-		Expect(resource.Status.LastFailureDetails).To(BeEmpty())
-		Expect(reconciler.portCheckBudgets[key].probeAnchored).To(BeTrue())
-		Expect(reconciler.portCheckBudgetActive(key)).To(BeTrue())
-
-		// The re-anchor latches: it cannot be spent again to extend the budget
-		// forever.
-		reconciler.portCheckBudgets[key] = portCheckBudget{
-			startedAt: time.Now().Add(-time.Hour), probeAnchored: true,
+	It("condemns a closed verdict that outlives the grace window, so a genuinely dead port is still reported", func() {
+		resource.Status.PortCheck = &v1alpha1.PortCheckStatus{
+			Revision:     "7",
+			FailingSince: metav1.NewTime(time.Now().Add(-time.Hour)),
 		}
-		Expect(waitForVerdict().AllOpen()).To(BeFalse())
-		Expect(reconciler.capturePortVerificationAfterProbe(ctx, resource, "7")).To(BeTrue())
-	})
 
-	It("condemns a closed verdict that outlives the budget, so a genuinely dead port is still reported", func() {
-		reconciler.PortCheckGrace = time.Nanosecond
-
-		Expect(reconciler.capturePortVerificationAfterProbe(ctx, resource, "7")).To(BeTrue())
+		failed, outstanding := reconciler.verifyServingPorts(ctx, resource, "7")
+		Expect(failed).To(BeTrue())
+		Expect(outstanding).To(BeFalse())
 		Expect(resource.Status.LastFailureDetails).To(HaveLen(1))
 		Expect(resource.Status.LastFailureDetails[0].Type).To(Equal(v1alpha1.FailureTypeReadinessFailure))
 	})
 
-	It("stays condemned once the budget is spent, never churning back to unverified", func() {
-		reconciler.PortCheckGrace = time.Nanosecond
+	It("survives an operator restart mid-window, because the anchor lives on status", func() {
+		// The previous operator opened the window an hour ago; this process
+		// starts with an empty verifier cache but inherits the status.
+		resource.Status.PortCheck = &v1alpha1.PortCheckStatus{
+			Revision:     "7",
+			FailingSince: metav1.NewTime(time.Now().Add(-time.Hour)),
+		}
+		freshVerifier := portcheck.NewVerifierWithDefaults()
+		verifierCtx, cancel := context.WithCancel(context.Background())
+		DeferCleanup(cancel)
+		freshVerifier.Start(verifierCtx)
+		reconciler.PortVerifier = freshVerifier
 
-		for i := 0; i < 3; i++ {
-			Expect(reconciler.capturePortVerificationAfterProbe(ctx, resource, "7")).To(BeTrue())
+		// First pass schedules a dial and requeues; the window is not reset.
+		failed, outstanding := reconciler.verifyServingPorts(ctx, resource, "7")
+		Expect(failed).To(BeFalse())
+		Expect(outstanding).To(BeTrue())
+		Expect(waitForVerdict().AllOpen()).To(BeFalse())
+
+		// The refusal lands against the inherited, already-spent window.
+		failed, _ = reconciler.verifyServingPorts(ctx, resource, "7")
+		Expect(failed).To(BeTrue())
+	})
+
+	It("stays condemned once the window is spent, never churning back to unverified", func() {
+		resource.Status.PortCheck = &v1alpha1.PortCheckStatus{
+			Revision:     "7",
+			FailingSince: metav1.NewTime(time.Now().Add(-time.Hour)),
+		}
+		for range 3 {
+			failed, outstanding := reconciler.verifyServingPorts(ctx, resource, "7")
+			Expect(failed).To(BeTrue())
+			Expect(outstanding).To(BeFalse())
 			// No further Forget: the cached verdict survives, so the resource
 			// cannot oscillate between failed and unverified forever.
 			_, done := reconciler.PortVerifier.Get(key)
@@ -296,30 +307,50 @@ var _ = Describe("capturePortVerificationAfterProbe (grace-bounded condemnation)
 		}
 	})
 
-	It("clears the budget on an open verdict, so a later flap is judged fresh", func() {
+	It("judges a new rollout fresh instead of inheriting the old revision's window", func() {
+		resource.Status.PortCheck = &v1alpha1.PortCheckStatus{
+			Revision:     "6",
+			FailingSince: metav1.NewTime(time.Now().Add(-time.Hour)),
+		}
+
+		failed, outstanding := reconciler.verifyServingPorts(ctx, resource, "7")
+		Expect(failed).To(BeFalse(), "revision 7 must open its own window, not be condemned on revision 6's")
+		Expect(outstanding).To(BeTrue())
+		Expect(resource.Status.PortCheck.Revision).To(Equal("7"))
+	})
+
+	It("clears the window on an open verdict, so a later flap is judged fresh", func() {
 		listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", fmt.Sprint(port)))
 		Expect(err).NotTo(HaveOccurred())
 
-		Expect(reconciler.capturePortVerificationAfterProbe(ctx, resource, "7")).To(BeFalse())
+		failed, outstanding := reconciler.verifyServingPorts(ctx, resource, "7")
+		Expect(failed).To(BeFalse())
+		Expect(outstanding).To(BeTrue())
 		Expect(waitForVerdict().AllOpen()).To(BeTrue())
 
-		// Age the budget: this workload has been verified open since long before
-		// its grace window would have expired.
-		reconciler.portCheckBudgets[key] = portCheckBudget{
-			startedAt: time.Now().Add(-time.Hour), probeAnchored: true,
-		}
+		failed, _ = reconciler.verifyServingPorts(ctx, resource, "7")
+		Expect(failed).To(BeFalse())
+		Expect(resource.Status.PortCheck).To(BeNil(), "an open verdict must clear the window")
 
-		Expect(reconciler.capturePortVerificationAfterProbe(ctx, resource, "7")).To(BeFalse())
-		Expect(reconciler.portCheckBudgetActive(key)).To(BeFalse(), "an open verdict must drop the budget")
-
-		// The app dies. The verdict flips closed, and the hour-old stamp must
-		// not condemn it on sight.
+		// The app dies. The verdict flips closed, and the flap must open a fresh
+		// window rather than being condemned on sight.
 		Expect(listener.Close()).To(Succeed())
 		reconciler.PortVerifier.Forget(key)
-		Expect(reconciler.capturePortVerificationAfterProbe(ctx, resource, "7")).To(BeFalse())
+		failed, _ = reconciler.verifyServingPorts(ctx, resource, "7")
+		Expect(failed).To(BeFalse())
 		Expect(waitForVerdict().AllOpen()).To(BeFalse())
-		Expect(reconciler.capturePortVerificationAfterProbe(ctx, resource, "7")).
-			To(BeFalse(), "the flap must start a fresh budget, not inherit the spent one")
+		failed, outstanding = reconciler.verifyServingPorts(ctx, resource, "7")
+		Expect(failed).To(BeFalse(), "the flap must start a fresh window, not inherit the spent one")
+		Expect(outstanding).To(BeTrue())
+	})
+
+	It("does not poll when nothing is dialable, so an unanswerable check costs no reconciles", func() {
+		reconciler.PortVerifier.Forget(key)
+		reconciler.UncachedClient = nil
+
+		failed, outstanding := reconciler.verifyServingPorts(ctx, resource, "7")
+		Expect(failed).To(BeFalse())
+		Expect(outstanding).To(BeFalse(), "a check that was never enqueued is not worth requeueing for")
 	})
 })
 
@@ -380,9 +411,9 @@ var _ = Describe("evaluateDeploymentStatus port verification", func() {
 		}
 	})
 
-	It("drives Converged False alongside Available once a closed verdict outlives the budget", func() {
+	It("drives Converged False alongside Available once a closed verdict outlives the window, and keeps the chain running", func() {
 		// Pass 1 schedules the check, pass 2 reads the refusal and — still inside
-		// the budget — re-dials rather than judging the resource. Both requeue.
+		// the window — re-dials rather than judging the resource. Both requeue.
 		Expect(reconciler.evaluateDeploymentStatus(ctx, resource, deployment)).
 			To(Equal(controller.ResultDeferredRequeue(portCheckRequeueInterval)))
 		awaitVerdict()
@@ -390,12 +421,14 @@ var _ = Describe("evaluateDeploymentStatus port verification", func() {
 			To(Equal(controller.ResultDeferredRequeue(portCheckRequeueInterval)))
 		awaitVerdict()
 
-		// The budget runs out with the port still closed. Only now is the verdict
+		// The window runs out with the port still closed. Only now is the verdict
 		// believed.
-		reconciler.PortCheckGrace = time.Nanosecond
+		resource.Status.PortCheck.FailingSince = metav1.NewTime(time.Now().Add(-time.Hour))
 		result := reconciler.evaluateDeploymentStatus(ctx, resource, deployment)
 
-		Expect(result).To(Equal(controller.ResultStop))
+		// Condemnation sets conditions but does not stop the chain: the remaining
+		// sub-reconcilers (Service, ...) still run.
+		Expect(result).To(Equal(controller.ResultContinue))
 		available := meta.FindStatusCondition(resource.Status.Conditions, string(v1alpha1.StackResourceWorkloadAvailable))
 		Expect(available).NotTo(BeNil())
 		Expect(available.Status).To(Equal(metav1.ConditionFalse))
@@ -419,11 +452,14 @@ var _ = Describe("evaluateDeploymentStatus port verification", func() {
 			LastTerminationExitCode: ptr.To(int32(137)),
 		}}
 
-		// Prime a closed verdict whose budget has already run out, so nothing but
+		// Prime a closed verdict whose window has already run out, so nothing but
 		// the guard can be keeping the crash detail alive.
 		reconciler.PortVerifier.Enqueue(key, "127.0.0.1", []int32{port})
 		awaitVerdict()
-		reconciler.PortCheckGrace = time.Nanosecond
+		resource.Status.PortCheck = &v1alpha1.PortCheckStatus{
+			Revision:     "7",
+			FailingSince: metav1.NewTime(time.Now().Add(-time.Hour)),
+		}
 
 		reconciler.evaluateDeploymentStatus(ctx, resource, deployment)
 
@@ -456,11 +492,10 @@ func newStatefulSetPortCheckClient(revision string) client.Client {
 }
 
 // An operator restart empties the verifier's in-memory cache. Every workload it
-// then re-discovers is, by definition, long settled — so anchoring the "is it
-// worth coming back to read the answer" decision on rollout settledness or on
-// the convergence timestamp meant the freshly scheduled check was never read.
-// The result sat in the cache until some unrelated event or the 10h resync
-// happened to reconcile the resource again.
+// then re-discovers is, by definition, long settled — so the decision "is it
+// worth coming back to read the answer" must not hinge on rollout settledness
+// or a convergence timestamp; those suppressed the requeue and left the freshly
+// scheduled check unread until some unrelated event or the 10h resync.
 var _ = Describe("port verification after an operator restart", func() {
 	var (
 		reconciler *Reconciler
@@ -543,12 +578,12 @@ var _ = Describe("port verification after an operator restart", func() {
 			To(Equal(controller.ResultDeferredRequeue(portCheckRequeueInterval)))
 	})
 
-	It("stops requeueing once the budget is spent, so an unanswerable check cannot poll forever", func() {
-		reconciler.UncachedClient = newStatefulSetPortCheckClient("rev-1")
-		// The pod lookup dispatches on workload type: a StatefulSet has no
-		// ReplicaSet, so its pods carry the controller revision directly.
+	It("does not requeue when nothing is dialable, so an unanswerable check cannot poll forever", func() {
+		// A client with no Running pod: no dial can be scheduled, so there is no
+		// answer worth polling for. The workload watch re-triggers when a pod
+		// appears.
 		resource.Spec.WorkloadType = v1alpha1.WorkloadTypeStatefulService
-		reconciler.PortCheckGrace = time.Nanosecond
+		reconciler.UncachedClient = newStatefulSetPortCheckClient("some-other-rev")
 		sts := &appsv1.StatefulSet{
 			ObjectMeta: metav1.ObjectMeta{Name: "svc-01", Namespace: "team-a", Generation: 1},
 			Status: appsv1.StatefulSetStatus{

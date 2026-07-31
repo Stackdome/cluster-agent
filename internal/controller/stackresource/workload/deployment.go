@@ -134,37 +134,29 @@ func (r *Reconciler) evaluateDeploymentStatus(ctx context.Context, resource *v1a
 		}
 
 		// Serving means the primary port passed its kubelet probe; the remaining
-		// declared ports are only covered here. This is best effort: an unverified
-		// result returns false and the resource proceeds, so a secondary port can
-		// read Available for one reconcile before a proven failure flips it. The
-		// primary port has no such window — a dead primary never reaches this
-		// branch, because the kubelet probe keeps the deployment from serving.
+		// declared ports are only covered here. This is best effort: an
+		// unverified result reports outstanding and the resource proceeds, so a
+		// secondary port can read Available until a verdict outlives its grace
+		// window. The primary port has no such window — a dead primary never
+		// reaches this branch, because the kubelet probe keeps the deployment
+		// from serving.
 		//
 		// A crash detail captured just above is the more specific diagnosis and
 		// must not be overwritten by a port verdict.
-		if len(resource.Status.LastFailureDetails) == 0 &&
-			r.capturePortVerificationAfterProbe(ctx, resource, revision) {
-			r.reportPortNotListening(resource)
-			return controller.ResultStop
+		if len(resource.Status.LastFailureDetails) == 0 {
+			portFailed, portOutstanding := r.verifyServingPorts(ctx, resource, revision)
+			if portFailed {
+				r.reportPortNotListening(resource)
+			} else if portOutstanding {
+				// The check answers asynchronously; come back to read it. The
+				// deferred requeue lets the rest of the chain run meanwhile.
+				return controller.ResultDeferredRequeue(portCheckRequeueInterval)
+			}
 		}
 
 		if !converged && len(resource.Status.LastFailureDetails) == 0 &&
 			!controller.DeploymentRolloutSettled(deployment, deploymentGracePeriodAfterNewReplicaSetAvailable) {
 			return controller.ResultDeferredRequeue(10 * time.Second)
-		}
-		// A scheduled check answers asynchronously, so an unverified resource needs
-		// another reconcile to read the result. The budget bounds that polling: a
-		// check that can never be answered (no dialable pod on this revision)
-		// stops costing reconciles once the budget runs out.
-		//
-		// The budget is anchored on when the check was first wanted, not on
-		// whether the rollout has settled. Gating on settledness left a restart
-		// blind spot: a freshly started operator re-discovers a long-settled
-		// Deployment, schedules a dial with an empty cache, and — because the
-		// rollout settled hours ago — never came back to read the answer until
-		// some unrelated event or the 10h resync fired.
-		if r.portCheckOutstanding(resource, revision) {
-			return controller.ResultDeferredRequeue(portCheckRequeueInterval)
 		}
 		return controller.ResultContinue
 	}
@@ -177,7 +169,7 @@ func (r *Reconciler) evaluateDeploymentStatus(ctx context.Context, resource *v1a
 	// becomes Ready, the cause is usually a port nobody is listening on, which
 	// only the port verifier can name.
 	if len(resource.Status.LastFailureDetails) == 0 {
-		r.capturePortVerification(ctx, resource, revision)
+		r.capturePortDiagnosis(ctx, resource, revision)
 	}
 	r.Status.ReportNotReady(resource, "StackResourceDeploymentNotReady", "StackResourceDeploymentNotReady")
 

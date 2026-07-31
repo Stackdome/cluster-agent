@@ -1,0 +1,71 @@
+{{- /*
+Branded Traefik error pages. The agent binary serves the pages itself (port
+8082 on every replica); this file wires Traefik to it:
+
+  - Service    -> the agent pods
+  - Middleware -> swaps any 5xx response for one of our pages. The umbrella
+                  chart references it on every router as
+                  "<release-namespace>-stackdome-errors@kubernetescrd".
+  - IngressRoute -> lowest-priority catch-all so unclaimed hostnames/paths get
+                  our 404 instead of Traefik's default.
+
+Disable errorPages.enabled when installing into a cluster without the Traefik
+CRDs.
+*/}}
+{{- if .Values.errorPages.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: stackdome-error-pages
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "stackdome-agent-standalone.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "stackdome-agent-standalone.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: 80
+      protocol: TCP
+      targetPort: error-pages
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: stackdome-errors
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "stackdome-agent-standalone.labels" . | nindent 4 }}
+spec:
+  errors:
+    status:
+      - "500-599"
+    service:
+      name: stackdome-error-pages
+      port: 80
+    # Traefik substitutes the real status code, so one page per status is
+    # served from a single middleware.
+    query: "/{status}"
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: stackdome-catch-all
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "stackdome-agent-standalone.labels" . | nindent 4 }}
+spec:
+  entryPoints:
+    - web
+    - websecure
+  routes:
+    - match: PathPrefix(`/`)
+      kind: Rule
+      # Priority 1 is the lowest Traefik accepts: every real stack route
+      # outranks it, so this only catches traffic nothing else claims.
+      priority: 1
+      services:
+        - name: stackdome-error-pages
+          port: 80
+{{- end }}

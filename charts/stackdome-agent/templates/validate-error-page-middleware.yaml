@@ -2,8 +2,8 @@
 Fail-fast guard on the Traefik error-page middleware reference.
 
 Traefik resolves a Kubernetes CRD middleware as `<namespace>-<name>@kubernetescrd`,
-and the agent creates the `stackdome-errors` Middleware in the namespace it runs
-in — the release namespace. values.yaml applies that reference to every router on
+and the standalone chart creates the `stackdome-errors` Middleware in the
+release namespace. values.yaml applies that reference to every router on
 both entrypoints, and Traefik fails a router whose middleware cannot be resolved.
 
 So a reference that names the wrong namespace does not degrade to "no branded error
@@ -22,8 +22,8 @@ This file renders to nothing when the check passes.
   The expected prefix carries the middleware name, not just the namespace
   separator. Matching on "<namespace>-" alone lets a namespace that happens to
   be a prefix of another one through: --namespace stackdome would accept
-  "stackdome-control-plane-stackdome-errors@kubernetescrd", while the agent
-  running in "stackdome" creates "stackdome-stackdome-errors@kubernetescrd" —
+  "stackdome-control-plane-stackdome-errors@kubernetescrd", while a release
+  in "stackdome" creates "stackdome-stackdome-errors@kubernetescrd" —
   the reference would not resolve and every router would 500, which is the exact
   outage this guard exists to prevent.
 */ -}}
@@ -32,7 +32,7 @@ This file renders to nothing when the check passes.
 {{- range $ref := ((default dict $config).middlewares | default list) -}}
 {{- if contains "stackdome-errors" (toString $ref) -}}
 {{- if not (hasPrefix $prefix (toString $ref)) -}}
-{{- fail (printf "\n\nstackdome-agent: the Traefik error-page middleware reference does not match the release namespace.\n\n  release namespace : %s\n  entrypoint        : %s\n  middleware ref    : %s\n  expected prefix   : %s\n\nTraefik resolves CRD middlewares as <namespace>-<name>@kubernetescrd, and the agent\ncreates the stackdome-errors Middleware in the release namespace. A reference that\ndoes not resolve makes EVERY router on that entrypoint return 500 - a cluster-wide\ningress outage, not merely a missing error page.\n\nFix by installing into the namespace the reference already names:\n\n  helm install ... --namespace stackdome-control-plane\n\nor by overriding both references to match your namespace:\n\n  --set traefik.ports.web.middlewares[0]=%s@kubernetescrd \\\n  --set traefik.ports.websecure.middlewares[0]=%s@kubernetescrd\n"
+{{- fail (printf "\n\nstackdome-agent: the Traefik error-page middleware reference does not match the release namespace.\n\n  release namespace : %s\n  entrypoint        : %s\n  middleware ref    : %s\n  expected prefix   : %s\n\nTraefik resolves CRD middlewares as <namespace>-<name>@kubernetescrd, and the chart\ncreates the stackdome-errors Middleware in the release namespace. A reference that\ndoes not resolve makes EVERY router on that entrypoint return 500 - a cluster-wide\ningress outage, not merely a missing error page.\n\nFix by installing into the namespace the reference already names:\n\n  helm install ... --namespace stackdome-control-plane\n\nor by overriding both references to match your namespace:\n\n  --set traefik.ports.web.middlewares[0]=%s@kubernetescrd \\\n  --set traefik.ports.websecure.middlewares[0]=%s@kubernetescrd\n"
   $.Release.Namespace $entrypoint $ref $prefix $prefix $prefix) -}}
 {{- end -}}
 {{- end -}}
