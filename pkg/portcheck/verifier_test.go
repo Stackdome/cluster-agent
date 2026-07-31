@@ -65,7 +65,7 @@ var _ = Describe("Verifier", func() {
 
 		go func() {
 			defer close(done)
-			for i := 0; i < 1000; i++ {
+			for i := range 1000 {
 				v.Enqueue(Key{Namespace: "ns", Name: "app", Revision: fmt.Sprint(i)}, "127.0.0.1", []int32{1})
 			}
 		}()
@@ -76,17 +76,20 @@ var _ = Describe("Verifier", func() {
 
 	It("reports admission truthfully, including when the queue is full", func() {
 		// Workers deliberately not started: every admitted job sits in the
-		// queue, so exactly queueDepth admissions fit.
-		for i := 0; i < queueDepth; i++ {
-			k := Key{Namespace: "ns", Name: "app", Revision: fmt.Sprint(i)}
+		// queue, so exactly queueDepth admissions fit. Distinct names, because
+		// single-flight is per resource.
+		for i := range queueDepth {
+			k := Key{Namespace: "ns", Name: fmt.Sprintf("app-%d", i), Revision: "h1"}
 			Expect(v.Enqueue(k, "127.0.0.1", []int32{1})).To(BeTrue())
 		}
 
 		// Queue full: refused.
-		Expect(v.Enqueue(Key{Namespace: "ns", Name: "app", Revision: "overflow"}, "127.0.0.1", []int32{1})).To(BeFalse())
+		Expect(v.Enqueue(Key{Namespace: "ns", Name: "app-overflow", Revision: "h1"}, "127.0.0.1", []int32{1})).To(BeFalse())
 
-		// A key already in flight is refused regardless of queue space.
-		Expect(v.Enqueue(Key{Namespace: "ns", Name: "app", Revision: "0"}, "127.0.0.1", []int32{1})).To(BeFalse())
+		// A resource already in flight is refused regardless of queue space,
+		// whatever the revision.
+		Expect(v.Enqueue(Key{Namespace: "ns", Name: "app-0", Revision: "h1"}, "127.0.0.1", []int32{1})).To(BeFalse())
+		Expect(v.Enqueue(Key{Namespace: "ns", Name: "app-0", Revision: "h2"}, "127.0.0.1", []int32{1})).To(BeFalse())
 	})
 
 	It("does not let a new revision inherit the previous result", func() {
@@ -99,6 +102,24 @@ var _ = Describe("Verifier", func() {
 		_, ok := v.Get(Key{Namespace: "ns", Name: "app", Revision: "h2"})
 
 		Expect(ok).To(BeFalse())
+	})
+
+	It("evicts the previous revision's answer when a new revision's dial lands", func() {
+		port, closeFn := listenOnFreePort()
+		DeferCleanup(closeFn)
+		v.Start(ctx)
+		v.Enqueue(key, "127.0.0.1", []int32{port})
+		Eventually(func() bool { _, ok := v.Get(key); return ok }).Within(3 * time.Second).Should(BeTrue())
+
+		// The rollout: a new revision's check is admitted despite the stored
+		// answer, and its result replaces the old entry rather than sitting
+		// beside it — the map stays one entry per resource, not per rollout.
+		rolled := Key{Namespace: "ns", Name: "app", Revision: "h2"}
+		Expect(v.Enqueue(rolled, "127.0.0.1", []int32{port})).To(BeTrue())
+		Eventually(func() bool { _, ok := v.Get(rolled); return ok }).Within(3 * time.Second).Should(BeTrue())
+
+		_, ok := v.Get(key)
+		Expect(ok).To(BeFalse(), "the old revision's answer must be gone, not orphaned")
 	})
 
 	It("drops a stored result on Forget", func() {

@@ -16,13 +16,27 @@ const DefaultDialTimeout = 1 * time.Second
 // full, because a reconcile thread must never wait on this package.
 const queueDepth = 512
 
-// Key identifies one verification. Revision scopes a result to a deployment
-// revision so a rollout invalidates the previous answer. It is deliberately
-// the revision.
+// Key identifies one verification. Results are stored per (Namespace, Name)
+// with the revision alongside the answer: Get and Forget only match when the
+// stored revision equals the requested one, and a new revision's dial
+// overwrites the old entry, so a rollout evicts the previous answer instead of
+// orphaning it.
 type Key struct {
 	Namespace string
 	Name      string
 	Revision  string
+}
+
+func (k Key) nameKey() nameKey { return nameKey{namespace: k.Namespace, name: k.Name} }
+
+type nameKey struct {
+	namespace string
+	name      string
+}
+
+type storedResult struct {
+	revision string
+	result   Result
 }
 
 type job struct {
@@ -34,18 +48,18 @@ type job struct {
 // Verifier runs port checks on a bounded worker pool and stores their results
 // for reconcilers to read without blocking.
 //
-// The verifier is single-flight per key: at most one job for a given Key is
-// ever in flight, because Enqueue refuses while pending[key] is set and Forget
-// never clears that marker. Two jobs therefore cannot race to write one key's
-// result, and no generation bookkeeping is needed to arbitrate between them.
+// The verifier is single-flight per resource: at most one job for a given
+// (namespace, name) is ever in flight, because Enqueue refuses while the
+// pending marker is set and only the worker clears it. Two jobs therefore
+// cannot race to write one resource's result.
 type Verifier struct {
 	workers int
 	timeout time.Duration
 	queue   chan job
 
 	mu      sync.RWMutex
-	results map[Key]Result
-	pending map[Key]struct{}
+	results map[nameKey]storedResult
+	pending map[nameKey]struct{}
 }
 
 func NewVerifierWithDefaults() *Verifier {
@@ -57,8 +71,8 @@ func newVerifier(workers int, timeout time.Duration) *Verifier {
 		workers: workers,
 		timeout: timeout,
 		queue:   make(chan job, queueDepth),
-		results: make(map[Key]Result),
-		pending: make(map[Key]struct{}),
+		results: make(map[nameKey]storedResult),
+		pending: make(map[nameKey]struct{}),
 	}
 }
 
@@ -78,38 +92,42 @@ func (v *Verifier) run(ctx context.Context) {
 		case j := <-v.queue:
 			result := Dial(ctx, j.podIP, j.ports, v.timeout)
 			v.mu.Lock()
-			v.results[j.key] = result
-			delete(v.pending, j.key)
+			v.results[j.key.nameKey()] = storedResult{revision: j.key.Revision, result: result}
+			delete(v.pending, j.key.nameKey())
 			v.mu.Unlock()
 		}
 	}
 }
 
 // Get returns the stored result for key. The boolean is false when no check
-// has completed yet; callers must requeue rather than wait.
+// for key's revision has completed yet; callers must requeue rather than wait.
 func (v *Verifier) Get(key Key) (Result, bool) {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
-	res, ok := v.results[key]
-	return res, ok
+	stored, ok := v.results[key.nameKey()]
+	if !ok || stored.revision != key.Revision {
+		return Result{}, false
+	}
+	return stored.result, true
 }
 
 // Enqueue schedules a check. It never blocks: a duplicate, already-answered,
 // or unqueueable request is dropped and the caller retries on its next
-// reconcile.
+// reconcile. An entry from a previous revision does not refuse the job — its
+// dial overwrites the stale answer.
 //
-// It is also single-flight. A key whose dial is already in flight is refused
-// outright, so a Forget+Enqueue issued mid-dial schedules nothing and the
-// caller's next reconcile tries again.
+// It is also single-flight. A resource whose dial is already in flight is
+// refused outright, so a Forget+Enqueue issued mid-dial schedules nothing and
+// the caller's next reconcile tries again.
 func (v *Verifier) Enqueue(key Key, podIP string, ports []int32) bool {
 	v.mu.Lock()
-	_, done := v.results[key]
-	_, inFlight := v.pending[key]
-	if done || inFlight {
+	stored, done := v.results[key.nameKey()]
+	_, inFlight := v.pending[key.nameKey()]
+	if (done && stored.revision == key.Revision) || inFlight {
 		v.mu.Unlock()
 		return false
 	}
-	v.pending[key] = struct{}{}
+	v.pending[key.nameKey()] = struct{}{}
 	v.mu.Unlock()
 
 	select {
@@ -119,28 +137,29 @@ func (v *Verifier) Enqueue(key Key, podIP string, ports []int32) bool {
 		// The queue is full, so this job will never run and its pending marker
 		// must be cleared.
 		v.mu.Lock()
-		delete(v.pending, key)
+		delete(v.pending, key.nameKey())
 		v.mu.Unlock()
 		return false
 	}
 }
 
-// Pending reports whether a dial for key is currently in flight — scheduled
-// but not yet answered.
+// Pending reports whether a dial for key's resource is currently in flight —
+// scheduled but not yet answered.
 func (v *Verifier) Pending(key Key) bool {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
-	_, inFlight := v.pending[key]
+	_, inFlight := v.pending[key.nameKey()]
 	return inFlight
 }
 
-// Forget drops any stored result for key, forcing the next Enqueue to redial.
-// It reports whether a result was actually dropped, so a caller can tell a real
-// discard from a no-op on a key that was never answered.
-func (v *Verifier) Forget(key Key) bool {
+// Forget drops the stored result for key's revision, forcing the next Enqueue
+// to redial.
+func (v *Verifier) Forget(key Key) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	_, ok := v.results[key]
-	delete(v.results, key)
-	return ok
+	stored, ok := v.results[key.nameKey()]
+	if !ok || stored.revision != key.Revision {
+		return
+	}
+	delete(v.results, key.nameKey())
 }

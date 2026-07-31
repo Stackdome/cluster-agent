@@ -25,11 +25,6 @@ spec:
         image: controller-image
         args:
         - --leader-elect
-        env:
-        - name: POD_NAMESPACE
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.namespace
         ports:
         # The agent serves the Traefik error pages itself; the
         # stackdome-error-pages Service targets this port.

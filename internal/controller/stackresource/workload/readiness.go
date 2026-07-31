@@ -85,7 +85,15 @@ func (r *Reconciler) verifyServingPorts(ctx context.Context, resource *v1alpha1.
 	result, done := r.PortVerifier.Get(key)
 	if !done {
 		// Requeue only if an answer can arrive: dial admitted or in flight.
-		return false, r.schedulePortCheck(ctx, resource, key) || r.PortVerifier.Pending(key)
+		if r.schedulePortCheck(ctx, resource, key) || r.PortVerifier.Pending(key) {
+			return false, true
+		}
+		// A dial can land between Get and Enqueue: Enqueue then refuses and
+		// Pending is already clear. Re-read so that verdict is processed now
+		// instead of sitting cached until the next resync.
+		if result, done = r.PortVerifier.Get(key); !done {
+			return false, false
+		}
 	}
 	if result.AllOpen() {
 		resource.Status.PortCheck = nil
