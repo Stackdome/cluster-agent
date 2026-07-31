@@ -32,6 +32,12 @@ spec:
         {{- if .IsGitSource }}
         - "--dockerfile={{ .DockerfilePath }}"
         - "--context={{ .GitContextUrl }}"
+        # One key=value per --git flag; kaniko's parser rejects comma-joined pairs.
+        # depth=10: shallow clone; pinned sha must be within 10 commits of the
+        # branch tip at clone time, else the build fails and the newer revision's
+        # build supersedes it.
+        - "--git=single-branch=true"
+        - "--git=depth=10"
         {{- if .ContextSubPath }}
         - "--context-sub-path={{ .ContextSubPath }}"
         {{- end }}
