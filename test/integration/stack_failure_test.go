@@ -51,6 +51,13 @@ var _ = Describe("StackResource failure reporting", func() {
 			sr.Spec.ImageSpec.Image = "nginx:1.25-alpine"
 			sr.Spec.Command = nil
 			sr.Spec.Args = nil
+			// The crash fixture declares :8080, but nginx:1.25-alpine serves :80
+			// only. The synthesized TCP readiness probe guards the declared port,
+			// so the declaration has to follow the image — otherwise the recovered
+			// resource never goes Ready and LastFailureDetails is never cleared.
+			for i := range sr.Spec.Ports {
+				sr.Spec.Ports[i].Number = 80
+			}
 			Expect(c.Update(ctx, sr)).To(Succeed())
 
 			By("Waiting for StackResource to become Available")

@@ -43,3 +43,8 @@ metrics:
     enabled: false
     interval: 30s
     labels: {}
+
+# Traefik error-page wiring (Service, Middleware, catch-all IngressRoute).
+# Requires the Traefik CRDs; disable in clusters without them.
+errorPages:
+  enabled: true

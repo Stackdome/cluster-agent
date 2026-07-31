@@ -106,6 +106,46 @@ func SimpleStack(name string) *StackWithResources {
 	}
 }
 
+// StackWithMismatchedPort creates a Stack whose single resource declares a port
+// nothing inside the container listens on. crccheck/hello-world serves :8000,
+// so the declared :80 is provably dead. This reproduces the live incident where
+// a wrong port number left a public resource permanently unavailable behind a
+// 502, and is the negative case for the port readiness gate.
+func StackWithMismatchedPort(name string) *StackWithResources {
+	resourceName := name + "-mismatch"
+	return &StackWithResources{
+		Stack: &corev1alpha1.Stack{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name,
+				Namespace: defaultNamespace,
+				Labels:    stackLabels(name),
+			},
+			Spec: corev1alpha1.StackSpec{
+				ResourceNames: []string{resourceName},
+			},
+		},
+		Resources: []*corev1alpha1.StackResource{
+			{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: defaultNamespace,
+					Labels:    resourceLabels(name, resourceName),
+				},
+				Spec: corev1alpha1.StackResourceSpec{
+					ImageSpec: &corev1alpha1.ImageSpec{
+						// Listens on :8000 only.
+						Image: "crccheck/hello-world:latest",
+					},
+					Ports: []corev1alpha1.Port{
+						// Deliberately wrong: nothing answers on :80.
+						{Name: "http", Number: 80, Protocol: "http", ExposeToPublic: true, FQDN: resourceName + ".example.com"},
+					},
+				},
+			},
+		},
+	}
+}
+
 // MultiResourceStack creates a Stack with a backend and frontend resource.
 // The frontend has a plain BACKEND_URL env var (no interpolation).
 func MultiResourceStack(name string) *StackWithResources {
@@ -134,7 +174,9 @@ func MultiResourceStack(name string) *StackWithResources {
 						Image: "nginx:1.25-alpine",
 					},
 					Ports: []corev1alpha1.Port{
-						{Name: "http", Number: 8080, Protocol: "http", FQDN: backendName + ".local"},
+						// nginx:1.25-alpine serves :80 only, so the declared
+						// port must be 80 for the readiness gate to pass.
+						{Name: "http", Number: 80, Protocol: "http", FQDN: backendName + ".local"},
 					},
 				},
 			},
@@ -236,6 +278,14 @@ func StackWithEnvAndPorts(name string) *StackWithResources {
 				Spec: corev1alpha1.StackResourceSpec{
 					ImageSpec: &corev1alpha1.ImageSpec{
 						Image: "nginx:1.25-alpine",
+					},
+					// This fixture exercises multi-port Service/Deployment
+					// shape, so both declared ports are kept. nginx serves
+					// :80 out of the box; teach it to listen on 8080 and 9090
+					// as well so the declaration is honest.
+					Command: []string{"/bin/sh", "-c"},
+					Args: []string{
+						"printf 'server{listen 8080;}\\nserver{listen 9090;}\\n' > /etc/nginx/conf.d/extra.conf && exec nginx -g 'daemon off;'",
 					},
 					Ports: []corev1alpha1.Port{
 						{Name: "http", Number: 8080, Protocol: "http", FQDN: resourceName + "-http.local"},
@@ -431,6 +481,13 @@ func StackWithPublicPorts(name string) *StackWithResources {
 				Spec: corev1alpha1.StackResourceSpec{
 					ImageSpec: &corev1alpha1.ImageSpec{
 						Image: "nginx:1.25-alpine",
+					},
+					// The public/metrics split is the point of this fixture,
+					// so both ports stay. nginx already serves :80; add a
+					// listener on 9090 so the metrics port is real too.
+					Command: []string{"/bin/sh", "-c"},
+					Args: []string{
+						"printf 'server{listen 9090;}\\n' > /etc/nginx/conf.d/extra.conf && exec nginx -g 'daemon off;'",
 					},
 					Ports: []corev1alpha1.Port{
 						{Name: "http", Number: 80, Protocol: "http", ExposeToPublic: true, FQDN: name + "-pub.example.com"},
@@ -696,7 +753,9 @@ func StackWithThreeResources(name string) *StackWithResources {
 						Image: "nginx:1.25-alpine",
 					},
 					Ports: []corev1alpha1.Port{
-						{Name: "http", Number: 8080, Protocol: "http", FQDN: apiName + ".local"},
+						// nginx serves :80 only; no test asserts on this
+						// number, so declare the port it actually listens on.
+						{Name: "http", Number: 80, Protocol: "http", FQDN: apiName + ".local"},
 					},
 				},
 			},
@@ -711,7 +770,9 @@ func StackWithThreeResources(name string) *StackWithResources {
 						Image: "nginx:1.25-alpine",
 					},
 					Ports: []corev1alpha1.Port{
-						{Name: "http", Number: 9090, Protocol: "http", FQDN: workerName + ".local"},
+						// nginx serves :80 only; no test asserts on this
+						// number, so declare the port it actually listens on.
+						{Name: "http", Number: 80, Protocol: "http", FQDN: workerName + ".local"},
 					},
 				},
 			},

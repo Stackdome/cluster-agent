@@ -464,9 +464,38 @@ type StackResourceStatus struct {
 	UpdatedReplicas               int32               `json:"updatedReplicas,omitempty"`
 	LastRunTime                   *metav1.Time        `json:"lastRunTime,omitempty"`
 	LastRunSucceeded              *bool               `json:"lastRunSucceeded,omitempty"`
+	// PortCheck tracks an ongoing declared-port verification failure. It is set
+	// when a serving workload first returns a closed-port verdict and cleared
+	// when every declared port verifies open. Persisting it here (rather than in
+	// operator memory) keeps the grace window intact across operator restarts.
+	// +optional
+	PortCheck *PortCheckStatus `json:"portCheck,omitempty"`
 }
 
+// PortCheckStatus records when a declared port was first proven closed on a
+// serving workload. The workload is condemned (Available=False) only once the
+// verdict stays closed past the port-check grace window.
+type PortCheckStatus struct {
+	// Revision is the workload revision the verdict applies to. A new rollout
+	// starts a fresh window.
+	Revision string `json:"revision"`
+	// FailingSince is when the first closed-port verdict was seen for this
+	// revision while the workload was serving.
+	FailingSince metav1.Time `json:"failingSince"`
+}
+
+// Failure classifications for LastFailureDetail.Type.
+const (
+	FailureTypeRuntimeCrash     = "runtime_crash"
+	FailureTypeReadinessFailure = "readiness_failure"
+)
+
 type LastFailureDetail struct {
+	// Type classifies this failure. An empty value means runtime_crash,
+	// preserving the behaviour of agents and hubs predating this field.
+	// +kubebuilder:validation:Enum=runtime_crash;readiness_failure
+	// +optional
+	Type                    string `json:"type,omitempty"`
 	ContainerName           string `json:"containerName,omitempty"`
 	RestartCount            int32  `json:"restartCount,omitempty"`
 	LastTerminationReason   string `json:"lastTerminationReason,omitempty"`

@@ -175,7 +175,10 @@ var _ = Describe("Stack mutations and deletion", func() {
 						Image: "nginx:1.25-alpine",
 					},
 					Ports: []corev1alpha1.Port{
-						{Name: "http", Number: 8080, Protocol: "http", FQDN: secondResourceName + ".local"},
+						// nginx:1.25-alpine serves :80 only; no spec here asserts
+						// on the number, so declare the port it actually listens
+						// on or the port readiness gate keeps it unavailable.
+						{Name: "http", Number: 80, Protocol: "http", FQDN: secondResourceName + ".local"},
 					},
 				},
 			}

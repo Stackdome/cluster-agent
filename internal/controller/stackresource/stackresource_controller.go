@@ -25,6 +25,7 @@ import (
 	storagev1alpha1 "stackdome.io/cluster-agent/api/storage/v1alpha1"
 	"stackdome.io/cluster-agent/internal/controller"
 	"stackdome.io/cluster-agent/internal/controller/stackresource/workload"
+	"stackdome.io/cluster-agent/pkg/portcheck"
 )
 
 type subReconcilerResult = controller.SubReconcilerResult
@@ -126,6 +127,17 @@ func reportStackResourceNotReady(resource *v1alpha1.StackResource, reason, msg s
 	})
 	meta.SetStatusCondition(&resource.Status.Conditions, metav1.Condition{
 		Type:               string(v1alpha1.StackResourceConverged),
+		Status:             metav1.ConditionFalse,
+		ObservedGeneration: resource.Generation,
+		Reason:             reason,
+		Message:            msg,
+	})
+	// Not-ready is retriable, so Stalled stays False — but its reason and
+	// message must describe the current state. Leaving them untouched keeps
+	// the success text written by reportStackResourceReady on an object that
+	// is visibly failing.
+	meta.SetStatusCondition(&resource.Status.Conditions, metav1.Condition{
+		Type:               string(v1alpha1.StackResourceStalled),
 		Status:             metav1.ConditionFalse,
 		ObservedGeneration: resource.Generation,
 		Reason:             reason,
@@ -289,7 +301,18 @@ func (defaultStatusReporter) SetCondition(r *v1alpha1.StackResource, t v1alpha1.
 	setResourceCondition(r, t, ready, reason, msg)
 }
 
-func NewStackResourceReconciler(client client.Client, scheme *runtime.Scheme, uncachedClient client.Client, imageBuildHistoryLimit int) *StackResourceReconciler {
+// StackResourceReconcilerOpts carries the tunables the controller needs beyond
+// its clients. Grouping them keeps the constructor readable as options accrue.
+type StackResourceReconcilerOpts struct {
+	ImageBuildHistoryLimit int
+	// PortVerifier proves declared ports are actually listening. Optional: a nil
+	// verifier disables the check.
+	PortVerifier *portcheck.Verifier
+	// PortCheckGrace bounds requeueing while a verification is outstanding.
+	PortCheckGrace time.Duration
+}
+
+func NewStackResourceReconciler(client client.Client, scheme *runtime.Scheme, uncachedClient client.Client, opts StackResourceReconcilerOpts) *StackResourceReconciler {
 	w := &StackResourceReconciler{
 		Client: client,
 		Scheme: scheme,
@@ -306,9 +329,12 @@ func NewStackResourceReconciler(client client.Client, scheme *runtime.Scheme, un
 		&imageBuildReconciler{
 			Client:       client,
 			scheme:       scheme,
-			historyLimit: imageBuildHistoryLimit,
+			historyLimit: opts.ImageBuildHistoryLimit,
 		},
-		workloadSubReconciler{inner: workload.NewReconciler(client, scheme, depChecker, uncachedClient, defaultStatusReporter{})},
+		workloadSubReconciler{inner: workload.NewReconciler(
+			client, scheme, depChecker, uncachedClient, defaultStatusReporter{},
+			opts.PortVerifier, opts.PortCheckGrace,
+		)},
 		&svcReconciler{
 			Client: client,
 			Scheme: scheme,

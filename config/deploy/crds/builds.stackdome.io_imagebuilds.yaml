@@ -436,6 +436,14 @@ spec:
                   restartCount:
                     format: int32
                     type: integer
+                  type:
+                    description: |-
+                      Type classifies this failure. An empty value means runtime_crash,
+                      preserving the behaviour of agents and hubs predating this field.
+                    enum:
+                    - runtime_crash
+                    - readiness_failure
+                    type: string
                 type: object
               observedGeneration:
                 description: The most recent generation observed by the controller.

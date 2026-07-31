@@ -10,6 +10,7 @@ import (
 
 	"stackdome.io/cluster-agent/api/core/v1alpha1"
 	"stackdome.io/cluster-agent/internal/controller"
+	"stackdome.io/cluster-agent/pkg/portcheck"
 )
 
 const DefaultRequeueTime = 5 * time.Second
@@ -32,15 +33,33 @@ type Reconciler struct {
 	DependencyChecker DependencyChecker
 	UncachedClient    client.Client
 	Status            StatusReporter
+	// PortVerifier proves that a workload actually listens on the ports it
+	// declared. It is optional: a nil verifier disables the check rather than
+	// failing the reconcile, so tests and reduced deployments still work.
+	PortVerifier *portcheck.Verifier
+	// PortCheckGrace bounds how long a closed-port verdict on a serving
+	// workload is re-verified before it is believed. Zero means
+	// DefaultPortCheckGrace.
+	PortCheckGrace time.Duration
 }
 
-func NewReconciler(c client.Client, scheme *runtime.Scheme, dep DependencyChecker, uncached client.Client, status StatusReporter) *Reconciler {
+func NewReconciler(
+	c client.Client,
+	scheme *runtime.Scheme,
+	dep DependencyChecker,
+	uncached client.Client,
+	status StatusReporter,
+	portVerifier *portcheck.Verifier,
+	portCheckGrace time.Duration,
+) *Reconciler {
 	return &Reconciler{
 		Client:            c,
 		Scheme:            scheme,
 		DependencyChecker: dep,
 		UncachedClient:    uncached,
 		Status:            status,
+		PortVerifier:      portVerifier,
+		PortCheckGrace:    portCheckGrace,
 	}
 }
 

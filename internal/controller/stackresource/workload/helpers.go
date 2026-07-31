@@ -40,14 +40,27 @@ type probeSet struct {
 	startup   *corev1.Probe
 }
 
+// Default synthesized readiness probe timings. Generous on purpose: a slow
+// JVM or Rails boot must not be judged too early, and no liveness probe is
+// generated so a slow starter is held out of endpoints rather than killed.
+const (
+	defaultReadinessInitialDelaySeconds = 5
+	defaultReadinessPeriodSeconds       = 10
+	defaultReadinessTimeoutSeconds      = 3
+	defaultReadinessFailureThreshold    = 30
+)
+
 func buildProbes(resource *v1alpha1.StackResource) (probeSet, error) {
 	hc := resource.Spec.HealthChecks
 	if hc == nil {
-		return probeSet{}, nil
+		return probeSet{readiness: defaultReadinessProbe(resource)}, nil
 	}
 	readiness, err := buildProbe(hc.Readiness, resource.Spec.Ports)
 	if err != nil {
 		return probeSet{}, fmt.Errorf("readiness probe: %w", err)
+	}
+	if readiness == nil {
+		readiness = defaultReadinessProbe(resource)
 	}
 	liveness, err := buildProbe(hc.Liveness, resource.Spec.Ports)
 	if err != nil {
@@ -58,6 +71,48 @@ func buildProbes(resource *v1alpha1.StackResource) (probeSet, error) {
 		return probeSet{}, fmt.Errorf("startup probe: %w", err)
 	}
 	return probeSet{readiness: readiness, liveness: liveness, startup: startup}, nil
+}
+
+// defaultReadinessProbe synthesizes a TCP readiness probe for workloads
+// with ports that declare no readiness check of their own. Without it
+// kubelet marks the pod Ready the instant the process starts, so a container
+// listening on a port other than the declared one is published to Service
+// endpoints and returns 502 while every status signal reads healthy.
+func defaultReadinessProbe(resource *v1alpha1.StackResource) *corev1.Probe {
+	switch resource.Spec.WorkloadType {
+	case v1alpha1.WorkloadTypeService, v1alpha1.WorkloadTypeStatefulService:
+	default:
+		return nil
+	}
+	port, ok := primaryProbePort(resource.Spec.Ports)
+	if !ok {
+		return nil
+	}
+	return &corev1.Probe{
+		ProbeHandler: corev1.ProbeHandler{
+			TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(port)},
+		},
+		InitialDelaySeconds: defaultReadinessInitialDelaySeconds,
+		PeriodSeconds:       defaultReadinessPeriodSeconds,
+		TimeoutSeconds:      defaultReadinessTimeoutSeconds,
+		FailureThreshold:    defaultReadinessFailureThreshold,
+	}
+}
+
+// primaryProbePort picks the port the kubelet probe guards. Kubernetes allows
+// exactly one readiness probe per container, so this is a choice rather than a
+// sweep: the public port is the one whose failure produces a user-visible 502.
+// Remaining ports are covered by the portcheck verifier.
+func primaryProbePort(ports []v1alpha1.Port) (int32, bool) {
+	if len(ports) == 0 {
+		return 0, false
+	}
+	for _, p := range ports {
+		if p.ExposeToPublic {
+			return p.Number, true
+		}
+	}
+	return ports[0].Number, true
 }
 
 func buildProbe(p *v1alpha1.Probe, ports []v1alpha1.Port) (*corev1.Probe, error) {

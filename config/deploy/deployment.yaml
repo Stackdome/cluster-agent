@@ -25,6 +25,12 @@ spec:
         image: us-west4-docker.pkg.dev/stackdome/stackdome-registry/stackdome-controller:1719318450
         args:
         - --leader-elect
+        ports:
+        # The agent serves the Traefik error pages itself; the
+        # stackdome-error-pages Service targets this port.
+        - name: error-pages
+          containerPort: 8082
+          protocol: TCP
         livenessProbe:
           httpGet:
             path: /healthz

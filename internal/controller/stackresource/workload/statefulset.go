@@ -89,12 +89,30 @@ func (r *Reconciler) evaluateStatefulSetStatus(ctx context.Context, resource *v1
 		r.stampLastConverged(resource)
 		resource.Status.LastFailureDetails = nil
 		resource.Status.LastFailureDeploymentRevision = ""
+
+		// Converged means the pod passed its kubelet probe, which guards only the
+		// primary port. A secondary port nobody listens on would otherwise stay
+		// silently green, so the verifier runs on this branch too.
+		portFailed, portOutstanding := r.verifyServingPorts(ctx, resource, sts.Status.UpdateRevision)
+		if portFailed {
+			r.reportPortNotListening(resource)
+		} else if portOutstanding {
+			// The check answers asynchronously; come back to read it. The
+			// deferred requeue lets the rest of the chain run meanwhile.
+			return controller.ResultDeferredRequeue(portCheckRequeueInterval)
+		}
 		return controller.ResultContinue
 	}
 
 	r.Status.SetCondition(resource, v1alpha1.StackResourceConverged, false, "NotConverged",
 		fmt.Sprintf("statefulset not converged: ready=%d updated=%d available=%d", sts.Status.ReadyReplicas, sts.Status.UpdatedReplicas, sts.Status.AvailableReplicas))
 	r.capturePodFailureDetailsOnce(ctx, resource, sts.Status.UpdateRevision)
+	// A crash produces details above. If the container is running but never
+	// becomes Ready, the cause is usually a port nobody is listening on, which
+	// only the port verifier can name.
+	if len(resource.Status.LastFailureDetails) == 0 {
+		r.capturePortDiagnosis(ctx, resource, sts.Status.UpdateRevision)
+	}
 	r.Status.SetCondition(resource, v1alpha1.StackResourceWorkloadAvailable, false, "StatefulSetNotAvailable", "statefulset pod not ready")
 	r.Status.ReportNotReady(resource, "StackResourceStatefulSetNotReady", "statefulset pod not yet ready")
 
