@@ -234,7 +234,7 @@ func main() {
 
 	// One verifier for the whole process: its worker pool bounds concurrent
 	// dialing globally, and its result cache is shared across reconciles.
-	portVerifier := portcheck.NewVerifier(portcheck.DefaultWorkers, portcheck.DefaultDialTimeout)
+	portVerifier := portcheck.NewVerifierWithDefaults()
 	if err = mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
 		portVerifier.Start(ctx)
 		<-ctx.Done()

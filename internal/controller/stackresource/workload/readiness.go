@@ -225,9 +225,17 @@ func (r *Reconciler) evaluatePortVerification(ctx context.Context, resource *v1a
 		// asynchronously; until it does the resource is treated as unverified,
 		// so the caller requeues rather than acting on either verdict.
 		//
-		// The budget is what stops this looping. Each pass costs one dial and
-		// one requeue at portCheckRequeueInterval, and once the budget is spent
-		// the branch below takes over permanently for this revision.
+		// The verifier is single-flight, so the Enqueue below silently does
+		// nothing if the previous dial for this key is somehow still in flight.
+		// That is not a lost retry: the key simply stays unanswered, the caller
+		// requeues at portCheckRequeueInterval, and the next pass tries again
+		// once the dial has landed. See portcheck.Verifier.Forget for the
+		// tradeoff this accepts — an in-flight job's answer is not discarded,
+		// it lands and is corrected a cycle later.
+		//
+		// The budget is what stops this looping. Each pass costs at most one
+		// dial and one requeue at portCheckRequeueInterval, and once the budget
+		// is spent the branch below takes over permanently for this revision.
 		r.PortVerifier.Forget(key)
 		if !r.schedulePortCheck(ctx, resource, key) {
 			// The verdict is already discarded, so the key stays unanswered and
@@ -251,6 +259,11 @@ func (r *Reconciler) evaluatePortVerification(ctx context.Context, resource *v1a
 // schedulePortCheck queues a check for key and reports whether a dialable pod
 // was found to check. Only a cache miss (or a discarded verdict) reaches here,
 // so the pod lookup is never on the hot path.
+//
+// The boolean reports the pod lookup, not the enqueue: the verifier is
+// single-flight and drops the request when a dial for key is already in flight
+// or its queue is full. Either way the key stays unanswered and the caller's
+// requeue is the retry.
 func (r *Reconciler) schedulePortCheck(ctx context.Context, resource *v1alpha1.StackResource, key portcheck.Key) bool {
 	podIP, found := r.representativePodIP(ctx, resource, key.Revision)
 	if !found {
