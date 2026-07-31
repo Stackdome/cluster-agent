@@ -232,7 +232,7 @@ func (r *StackResourceReconciler) getImageBuildStatus(ctx context.Context, resou
 	existingImageBuild := &buildsv1alpha1.ImageBuild{}
 	if err := r.Client.Get(ctx,
 		types.NamespacedName{
-			Name:      buildsv1alpha1.ImageBuildName(resource.Name, resource.Spec.BuildSpec.SourceRevision.GetSourceRevisionString()),
+			Name:      buildsv1alpha1.ImageBuildName(resource.Name, resource.Spec.BuildSpec),
 			Namespace: resource.Namespace,
 		},
 		existingImageBuild,

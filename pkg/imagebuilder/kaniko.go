@@ -32,6 +32,9 @@ spec:
         {{- if .IsGitSource }}
         - "--dockerfile={{ .DockerfilePath }}"
         - "--context={{ .GitContextUrl }}"
+        {{- if .ContextSubPath }}
+        - "--context-sub-path={{ .ContextSubPath }}"
+        {{- end }}
         {{- else }}
         - "--dockerfile={{ .DockerfilePath }}"
         - "--context=dir://{{ .Context }}"
@@ -42,8 +45,11 @@ spec:
         - "--insecure={{ .Insecure }}"
         - "--insecure-pull={{ .Insecure }}"
         {{- end }}
-        {{- if .GitAuth }}
         env:
+        # Kaniko pushes over HTTP/1.1; HTTP/2 to registries is slower and flaky.
+        - name: GODEBUG
+          value: "http2client=0"
+        {{- if .GitAuth }}
         - name: GIT_USERNAME
           valueFrom:
             secretKeyRef:
@@ -163,6 +169,7 @@ type BuildParams struct {
 	Source                *Source
 	// Git-specific fields
 	IsGitSource    bool
+	ContextSubPath string
 	GitContextUrl  string
 	GitAuth        bool
 	GitSecretName  string
@@ -202,6 +209,22 @@ type VolumeMount struct {
 type ResolvedBuildArg struct {
 	Name  string
 	Value string
+}
+
+// Normalises a context path within the repo into a kaniko --context-sub-path
+// value. Repo root ("", ".", "/") yields an empty sub path.
+func gitContextSubPath(contextPath string) string {
+	return strings.Trim(filepath.Clean("/"+contextPath), "/")
+}
+
+// Re-bases a repo-root-relative dockerfile path onto the context sub path.
+// Paths already relative to the sub path are left untouched.
+func dockerfileWithinSubPath(subPath, dockerfilePath string) string {
+	rel, err := filepath.Rel(subPath, strings.TrimPrefix(filepath.Clean("/"+dockerfilePath), "/"))
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return dockerfilePath
+	}
+	return rel
 }
 
 // Converts GitRepoSource to a Kaniko Git context URL
@@ -276,8 +299,13 @@ func (b *BuildParams) generateImageBuildJobYAML() (string, error) {
 				}
 			}
 
-			// For Git sources, the dockerfile path and context are relative to the repo root
-			// No need to adjust paths as they are already relative to the repo root
+			// For git sources kaniko's context is the repo root, so a context path
+			// within the repo has to be passed as --context-sub-path, and the
+			// dockerfile re-based onto it.
+			if sub := gitContextSubPath(b.Context); sub != "" {
+				b.ContextSubPath = sub
+				b.DockerfilePath = dockerfileWithinSubPath(sub, b.DockerfilePath)
+			}
 		}
 	}
 

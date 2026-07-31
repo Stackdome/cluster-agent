@@ -1,7 +1,10 @@
 package v1alpha1
 
 import (
+	"strings"
 	"testing"
+
+	corev1alpha1 "stackdome.io/cluster-agent/api/core/v1alpha1"
 )
 
 func TestBuildJobName_BranchCollisionFixed(t *testing.T) {
@@ -120,42 +123,53 @@ func TestBuildJobName_DifferentInputsProduceDifferentNames(t *testing.T) {
 	}
 }
 
-func TestImageBuildName(t *testing.T) {
-	tests := []struct {
-		name         string
-		resourceName string
-		srcRevision  string
-		wantName     string
-	}{
-		{
-			name:         "standard input",
-			resourceName: "todo-app",
-			srcRevision:  "feature/auth-implementation",
-			wantName:     "todo-app-feature-auth-implementation",
-		},
-		{
-			name:         "uppercase and dots",
-			resourceName: "MyResource",
-			srcRevision:  "v1.0.0-Beta.2",
-			wantName:     "myresource-v1-0-0-beta-2",
-		},
-		{
-			name:         "truncation to 100 chars",
-			resourceName: "this-is-an-extremely-long-resource-name-that-we-are-using-to-test-image-build-custom-resource-length",
-			srcRevision:  "some-long-git-branch-name-with-many-words-and-characters-to-trigger-length-truncation-safety-checks",
-			wantName:     "this-is-an-extremely-long-resource-name-that-we-are-using-to-test-image-build-custom-resource-length", // truncated to 100 chars
+func imageBuildTestSpec(revision string) *corev1alpha1.StackResourceBuildSpec {
+	return &corev1alpha1.StackResourceBuildSpec{
+		BuildContext:   "/",
+		DockerFilePath: "Dockerfile",
+		SourceRevision: corev1alpha1.SourceRevisionSpec{
+			Volume: &corev1alpha1.VolumeRevision{RevisionString: revision},
 		},
 	}
+}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := ImageBuildName(tt.resourceName, tt.srcRevision)
-			if len(got) > 100 {
-				t.Errorf("ImageBuildName() = %q (len %d), exceeds max 100", got, len(got))
-			}
-			if got != tt.wantName {
-				t.Errorf("ImageBuildName() = %q, want %q", got, tt.wantName)
-			}
-		})
-	}
+func TestImageBuildName(t *testing.T) {
+	t.Run("readable prefix and hash suffix", func(t *testing.T) {
+		got := ImageBuildName("todo-app", imageBuildTestSpec("feature/auth-implementation"))
+		if !strings.HasPrefix(got, "todo-app-feature-auth-implementation-") {
+			t.Errorf("ImageBuildName() = %q, want prefix %q", got, "todo-app-feature-auth-implementation-")
+		}
+		if len(got) > imageBuildNameMaxLen {
+			t.Errorf("ImageBuildName() = %q (len %d), exceeds max %d", got, len(got), imageBuildNameMaxLen)
+		}
+	})
+
+	t.Run("deterministic", func(t *testing.T) {
+		a := ImageBuildName("app", imageBuildTestSpec("rev-1"))
+		b := ImageBuildName("app", imageBuildTestSpec("rev-1"))
+		if a != b {
+			t.Errorf("not deterministic: %q != %q", a, b)
+		}
+	})
+
+	t.Run("build input change produces a new name on the same revision", func(t *testing.T) {
+		base := ImageBuildName("app", imageBuildTestSpec("rev-1"))
+		changed := imageBuildTestSpec("rev-1")
+		changed.BuildContext = "hello-stack/worker"
+		if got := ImageBuildName("app", changed); got == base {
+			t.Errorf("build context change should change the name, both = %q", got)
+		}
+	})
+
+	t.Run("revision change survives truncation of the readable revision", func(t *testing.T) {
+		longName := strings.Repeat("a", 90)
+		a := ImageBuildName(longName, imageBuildTestSpec("branch-"+strings.Repeat("x", 60)+"-sha1111"))
+		b := ImageBuildName(longName, imageBuildTestSpec("branch-"+strings.Repeat("x", 60)+"-sha2222"))
+		if a == b {
+			t.Errorf("different revisions should produce different names after truncation, both = %q", a)
+		}
+		if len(a) > imageBuildNameMaxLen {
+			t.Errorf("ImageBuildName() = %q (len %d), exceeds max %d", a, len(a), imageBuildNameMaxLen)
+		}
+	})
 }

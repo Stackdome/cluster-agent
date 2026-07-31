@@ -18,6 +18,8 @@ package v1alpha1
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"regexp"
@@ -165,15 +167,32 @@ func truncateString(s string, maxLen int) string {
 	return s
 }
 
-func ImageBuildName(resourceName string, srcRevision string) string {
+const (
+	imageBuildNameMaxLen = 100
+	buildInputsHashLen   = 8
+)
+
+// ImageBuildName derives the ImageBuild name for a StackResource's build spec.
+// The readable prefix carries the resource name and source revision; the
+// trailing hash digests the whole build spec (revision included) so any spec
+// change produces a new build even when truncation eats the readable revision.
+func ImageBuildName(resourceName string, buildSpec *corev1alpha1.StackResourceBuildSpec) string {
 	cleanName := SanitizeDNSLabel(resourceName, "app")
-	cleanRev := SanitizeDNSLabel(srcRevision, "rev")
-	res := fmt.Sprintf("%s-%s", cleanName, cleanRev)
-	if len(res) > 100 {
-		res = res[:100]
-		res = strings.TrimSuffix(res, "-")
+	cleanRev := SanitizeDNSLabel(buildSpec.SourceRevision.GetSourceRevisionString(), "rev")
+	name := fmt.Sprintf("%s-%s", cleanName, cleanRev)
+	if maxLen := imageBuildNameMaxLen - buildInputsHashLen - 1; len(name) > maxLen {
+		name = strings.TrimSuffix(name[:maxLen], "-")
 	}
-	return res
+	return name + "-" + buildInputsHash(buildSpec)
+}
+
+func buildInputsHash(buildSpec *corev1alpha1.StackResourceBuildSpec) string {
+	raw, err := json.Marshal(buildSpec)
+	if err != nil {
+		raw = []byte(fmt.Sprintf("%#v", buildSpec))
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])[:buildInputsHashLen]
 }
 
 const (
