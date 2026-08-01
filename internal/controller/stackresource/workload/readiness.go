@@ -230,9 +230,9 @@ func firstDialablePodIP(pods []corev1.Pod) (string, bool) {
 // Converged goes False with Available: "fully converged" next to "not
 // available" is a mixed signal. The chain keeps running; conditions carry the
 // verdict.
-func (r *Reconciler) reportPortNotListening(resource *v1alpha1.StackResource) {
+func (r *Reconciler) reportPortNotListening(ctx context.Context, resource *v1alpha1.StackResource) {
 	msg := resource.Status.LastFailureDetails[0].LastTerminationMessage
 	r.Status.SetCondition(resource, v1alpha1.StackResourceWorkloadAvailable, false, "PortNotListening", msg)
-	r.Status.SetCondition(resource, v1alpha1.StackResourceConverged, false, "PortNotListening", msg)
-	r.Status.ReportNotReady(resource, "PortNotListening", msg)
+	r.Status.SetCondition(resource, v1alpha1.StackResourceWorkloadConverged, false, "PortNotListening", msg)
+	r.Status.ReportNotReady(ctx, resource, "PortNotListening", msg)
 }

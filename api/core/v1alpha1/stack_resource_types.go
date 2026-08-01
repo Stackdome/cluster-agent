@@ -29,16 +29,26 @@ const (
 
 type StackResourceStatusCondition string
 
+// StackResourceDomainCondition is a condition a sub-reconciler owns and
+// writes directly — a firsthand fact, one writer per condition type.
+type StackResourceDomainCondition string
+
 const (
-	StackResourceStatusAvailable   StackResourceStatusCondition = "Available"
-	StackResourceTLSConfigured     StackResourceStatusCondition = "TLSConfigured"
-	StackResourceDependenciesReady StackResourceStatusCondition = "DependenciesReady"
-	StackResourceBuildReady        StackResourceStatusCondition = "BuildReady"
-	StackResourcePreDeployComplete StackResourceStatusCondition = "PreDeployComplete"
-	StackResourceWorkloadAvailable StackResourceStatusCondition = "WorkloadAvailable"
-	StackResourceIngressReady      StackResourceStatusCondition = "IngressReady"
-	StackResourceStalled           StackResourceStatusCondition = "Stalled"
-	StackResourceConverged         StackResourceStatusCondition = "Converged"
+	StackResourceTLSConfigured     StackResourceDomainCondition = "TLSConfigured"
+	StackResourceDependenciesReady StackResourceDomainCondition = "DependenciesReady"
+	StackResourceBuildReady        StackResourceDomainCondition = "BuildReady"
+	StackResourcePreDeployComplete StackResourceDomainCondition = "PreDeployComplete"
+	StackResourceWorkloadAvailable StackResourceDomainCondition = "WorkloadAvailable"
+	StackResourceWorkloadConverged StackResourceDomainCondition = "WorkloadConverged"
+	StackResourceIngressReady      StackResourceDomainCondition = "IngressReady"
+)
+
+// StackResourceStatusCondition values are summary conditions — judgments
+// across domains, written only by the status derivation step.
+const (
+	StackResourceStatusAvailable StackResourceStatusCondition = "Available"
+	StackResourceStalled         StackResourceStatusCondition = "Stalled"
+	StackResourceConverged       StackResourceStatusCondition = "Converged"
 )
 
 type WorkloadType string

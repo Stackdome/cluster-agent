@@ -266,7 +266,7 @@ var _ = Describe("jobReconciler", func() {
 			Expect(resource.Status.LastFailureDetails).To(BeNil())
 			Expect(resource.Status.LastFailureDeploymentRevision).To(BeEmpty())
 
-			convergedCond := findCondition(resource.Status.Conditions, string(v1alpha1.StackResourceConverged))
+			convergedCond := findCondition(resource.Status.Conditions, string(v1alpha1.StackResourceWorkloadConverged))
 			Expect(convergedCond).NotTo(BeNil())
 			Expect(convergedCond.Status).To(Equal(metav1.ConditionTrue))
 

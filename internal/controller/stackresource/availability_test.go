@@ -20,7 +20,13 @@ var _ = Describe("reportStackResourceNotReady", func() {
 			},
 		}
 
-		setResourceCondition(resource, v1alpha1.StackResourceConverged, true, "FullyConverged", "all good")
+		meta.SetStatusCondition(&resource.Status.Conditions, metav1.Condition{
+			Type:               string(v1alpha1.StackResourceConverged),
+			Status:             metav1.ConditionTrue,
+			ObservedGeneration: resource.Generation,
+			Reason:             "FullyConverged",
+			Message:            "all good",
+		})
 		cond := meta.FindStatusCondition(resource.Status.Conditions, string(v1alpha1.StackResourceConverged))
 		Expect(cond).NotTo(BeNil())
 		Expect(cond.Status).To(Equal(metav1.ConditionTrue))
@@ -45,7 +51,13 @@ var _ = Describe("reportStackResourceFailed", func() {
 			},
 		}
 
-		setResourceCondition(resource, v1alpha1.StackResourceConverged, true, "FullyConverged", "all good")
+		meta.SetStatusCondition(&resource.Status.Conditions, metav1.Condition{
+			Type:               string(v1alpha1.StackResourceConverged),
+			Status:             metav1.ConditionTrue,
+			ObservedGeneration: resource.Generation,
+			Reason:             "FullyConverged",
+			Message:            "all good",
+		})
 
 		reportStackResourceFailed(resource, "WorkloadTypeNotSupported", "unsupported")
 

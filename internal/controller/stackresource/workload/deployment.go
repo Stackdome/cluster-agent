@@ -43,7 +43,7 @@ func (r *Reconciler) reconcileDeployment(ctx context.Context, resource *v1alpha1
 
 	if restartAnnotationApplied {
 		resource.Status.LastRestartRequestProcessedAt = ptr.To(v1.NewTime(time.Now().UTC()))
-		r.Status.ReportNotReady(resource, "StackResourceDeploymentNotReady", "StackResource deployment restart requested")
+		r.Status.ReportNotReady(ctx, resource, "StackResourceDeploymentNotReady", "StackResource deployment restart requested")
 		return controller.ResultStop, nil
 	}
 
@@ -76,7 +76,7 @@ func (r *Reconciler) applyDeployment(ctx context.Context, resource *v1alpha1.Sta
 
 	probes, err := buildProbes(resource)
 	if err != nil {
-		r.Status.ReportFailed(resource, "InvalidSpec", err.Error())
+		r.Status.ReportFailed(ctx, resource, "InvalidSpec", err.Error())
 		return nil, false, nil
 	}
 
@@ -115,10 +115,10 @@ func (r *Reconciler) evaluateDeploymentStatus(ctx context.Context, resource *v1a
 
 	// --- Convergence condition ---
 	if converged {
-		r.Status.SetCondition(resource, v1alpha1.StackResourceConverged, true, "FullyConverged", "all replicas updated and available on the target revision")
+		r.Status.SetCondition(resource, v1alpha1.StackResourceWorkloadConverged, true, "FullyConverged", "all replicas updated and available on the target revision")
 		r.stampLastConverged(resource)
 	} else {
-		r.Status.SetCondition(resource, v1alpha1.StackResourceConverged, false, "NotConverged", convergenceMessage(deployment))
+		r.Status.SetCondition(resource, v1alpha1.StackResourceWorkloadConverged, false, "NotConverged", convergenceMessage(deployment))
 	}
 
 	revision := deployment.Annotations[deploymentRevisionAnnotation]
@@ -146,7 +146,7 @@ func (r *Reconciler) evaluateDeploymentStatus(ctx context.Context, resource *v1a
 		if len(resource.Status.LastFailureDetails) == 0 {
 			portFailed, portOutstanding := r.verifyServingPorts(ctx, resource, revision)
 			if portFailed {
-				r.reportPortNotListening(resource)
+				r.reportPortNotListening(ctx, resource)
 			} else if portOutstanding {
 				// The check answers asynchronously; come back to read it. The
 				// deferred requeue lets the rest of the chain run meanwhile.
@@ -171,7 +171,7 @@ func (r *Reconciler) evaluateDeploymentStatus(ctx context.Context, resource *v1a
 	if len(resource.Status.LastFailureDetails) == 0 {
 		r.capturePortDiagnosis(ctx, resource, revision)
 	}
-	r.Status.ReportNotReady(resource, "StackResourceDeploymentNotReady", "StackResourceDeploymentNotReady")
+	r.Status.ReportNotReady(ctx, resource, "StackResourceDeploymentNotReady", "StackResourceDeploymentNotReady")
 
 	if !controller.DeploymentRolloutSettled(deployment, deploymentGracePeriodAfterNewReplicaSetAvailable) {
 		return controller.ResultRequeueAfter(10 * time.Second)

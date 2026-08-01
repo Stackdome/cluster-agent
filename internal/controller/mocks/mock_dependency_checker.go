@@ -98,43 +98,31 @@ func (m *MockStatusReporter) EXPECT() *MockStatusReporterMockRecorder {
 }
 
 // ReportFailed mocks base method.
-func (m *MockStatusReporter) ReportFailed(r *v1alpha1.StackResource, reason, msg string) {
+func (m *MockStatusReporter) ReportFailed(ctx context.Context, r *v1alpha1.StackResource, reason, msg string) {
 	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "ReportFailed", r, reason, msg)
+	m.ctrl.Call(m, "ReportFailed", ctx, r, reason, msg)
 }
 
 // ReportFailed indicates an expected call of ReportFailed.
-func (mr *MockStatusReporterMockRecorder) ReportFailed(r, reason, msg any) *gomock.Call {
+func (mr *MockStatusReporterMockRecorder) ReportFailed(ctx, r, reason, msg any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReportFailed", reflect.TypeOf((*MockStatusReporter)(nil).ReportFailed), r, reason, msg)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReportFailed", reflect.TypeOf((*MockStatusReporter)(nil).ReportFailed), ctx, r, reason, msg)
 }
 
 // ReportNotReady mocks base method.
-func (m *MockStatusReporter) ReportNotReady(r *v1alpha1.StackResource, reason, msg string) {
+func (m *MockStatusReporter) ReportNotReady(ctx context.Context, r *v1alpha1.StackResource, reason, msg string) {
 	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "ReportNotReady", r, reason, msg)
+	m.ctrl.Call(m, "ReportNotReady", ctx, r, reason, msg)
 }
 
 // ReportNotReady indicates an expected call of ReportNotReady.
-func (mr *MockStatusReporterMockRecorder) ReportNotReady(r, reason, msg any) *gomock.Call {
+func (mr *MockStatusReporterMockRecorder) ReportNotReady(ctx, r, reason, msg any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReportNotReady", reflect.TypeOf((*MockStatusReporter)(nil).ReportNotReady), r, reason, msg)
-}
-
-// ReportReady mocks base method.
-func (m *MockStatusReporter) ReportReady(r *v1alpha1.StackResource) {
-	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "ReportReady", r)
-}
-
-// ReportReady indicates an expected call of ReportReady.
-func (mr *MockStatusReporterMockRecorder) ReportReady(r any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReportReady", reflect.TypeOf((*MockStatusReporter)(nil).ReportReady), r)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReportNotReady", reflect.TypeOf((*MockStatusReporter)(nil).ReportNotReady), ctx, r, reason, msg)
 }
 
 // SetCondition mocks base method.
-func (m *MockStatusReporter) SetCondition(r *v1alpha1.StackResource, condType v1alpha1.StackResourceStatusCondition, ready bool, reason, msg string) {
+func (m *MockStatusReporter) SetCondition(r *v1alpha1.StackResource, condType v1alpha1.StackResourceDomainCondition, ready bool, reason, msg string) {
 	m.ctrl.T.Helper()
 	m.ctrl.Call(m, "SetCondition", r, condType, ready, reason, msg)
 }

@@ -435,7 +435,7 @@ var _ = Describe("evaluateDeploymentStatus port verification", func() {
 		Expect(available.Reason).To(Equal("PortNotListening"))
 
 		// A resource nobody can reach must not also read "fully converged".
-		converged := meta.FindStatusCondition(resource.Status.Conditions, string(v1alpha1.StackResourceConverged))
+		converged := meta.FindStatusCondition(resource.Status.Conditions, string(v1alpha1.StackResourceWorkloadConverged))
 		Expect(converged).NotTo(BeNil())
 		Expect(converged.Status).To(Equal(metav1.ConditionFalse))
 		Expect(converged.Reason).To(Equal("PortNotListening"))

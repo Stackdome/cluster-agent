@@ -25,7 +25,7 @@ func (r *Reconciler) reconcileJob(ctx context.Context, resource *v1alpha1.StackR
 		if created, applyErr := r.applyJob(ctx, resource); applyErr != nil || created == nil {
 			return controller.ResultStop, applyErr
 		}
-		r.Status.ReportNotReady(resource, "JobRunning", "job created, waiting for completion")
+		r.Status.ReportNotReady(ctx, resource, "JobRunning", "job created, waiting for completion")
 		return controller.ResultRequeueAfter(5 * time.Second), nil
 	case err != nil:
 		return controller.ResultNil, err
@@ -94,7 +94,7 @@ func (r *Reconciler) evaluateJobStatus(ctx context.Context, resource *v1alpha1.S
 		resource.Status.LastRunSucceeded = ptr.To(true)
 		resource.Status.LastFailureDetails = nil
 		resource.Status.LastFailureDeploymentRevision = ""
-		r.Status.SetCondition(resource, v1alpha1.StackResourceConverged, true, "JobComplete", "job completed successfully")
+		r.Status.SetCondition(resource, v1alpha1.StackResourceWorkloadConverged, true, "JobComplete", "job completed successfully")
 		r.Status.SetCondition(resource, v1alpha1.StackResourceWorkloadAvailable, true, "JobComplete", "job completed successfully")
 		return controller.ResultContinue
 	}
@@ -103,14 +103,14 @@ func (r *Reconciler) evaluateJobStatus(ctx context.Context, resource *v1alpha1.S
 			resource.Status.LastRunTime = ptr.To(v1.Now())
 			resource.Status.LastRunSucceeded = ptr.To(false)
 			r.capturePodFailureDetailsOnce(ctx, resource, resource.Annotations[v1alpha1.RevisionAnnotation])
-			r.Status.ReportFailed(resource, "JobFailed", c.Message)
+			r.Status.ReportFailed(ctx, resource, "JobFailed", c.Message)
 			return controller.ResultStop
 		}
 	}
 	// Job still running. Capture why it is failing if a pod has already crashed
 	// (capturePodFailureDetailsOnce dedups on revision).
 	r.capturePodFailureDetailsOnce(ctx, resource, resource.Annotations[v1alpha1.RevisionAnnotation])
-	r.Status.ReportNotReady(resource, "JobRunning", "job is still running")
+	r.Status.ReportNotReady(ctx, resource, "JobRunning", "job is still running")
 
 	// Mirror the StatefulSet path: once the failure is captured, stop the active
 	// requeue loop and rely on the Job watch. Under OnFailure the kubelet restarts

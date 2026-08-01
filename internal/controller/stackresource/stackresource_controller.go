@@ -146,7 +146,7 @@ func reportStackResourceNotReady(resource *v1alpha1.StackResource, reason, msg s
 	resource.Status.StatusHash = resource.StatusHash()
 }
 
-func setResourceCondition(resource *v1alpha1.StackResource, condType v1alpha1.StackResourceStatusCondition, ready bool, reason, msg string) {
+func setResourceCondition(resource *v1alpha1.StackResource, condType v1alpha1.StackResourceDomainCondition, ready bool, reason, msg string) {
 	condStatus := metav1.ConditionFalse
 	if ready {
 		condStatus = metav1.ConditionTrue
@@ -290,14 +290,15 @@ func (w workloadSubReconciler) reconcile(ctx context.Context, r *v1alpha1.StackR
 
 type defaultStatusReporter struct{}
 
-func (defaultStatusReporter) ReportReady(r *v1alpha1.StackResource) { reportStackResourceReady(r) }
-func (defaultStatusReporter) ReportNotReady(r *v1alpha1.StackResource, reason, msg string) {
-	reportStackResourceNotReady(r, reason, msg)
+func (defaultStatusReporter) ReportNotReady(ctx context.Context, r *v1alpha1.StackResource, reason, msg string) {
+	controller.VerdictsFromContext(ctx).ReportNotReady(reason, msg)
 }
-func (defaultStatusReporter) ReportFailed(r *v1alpha1.StackResource, reason, msg string) {
-	reportStackResourceFailed(r, reason, msg)
+
+func (defaultStatusReporter) ReportFailed(ctx context.Context, r *v1alpha1.StackResource, reason, msg string) {
+	controller.VerdictsFromContext(ctx).ReportFailed(reason, msg)
 }
-func (defaultStatusReporter) SetCondition(r *v1alpha1.StackResource, t v1alpha1.StackResourceStatusCondition, ready bool, reason, msg string) {
+
+func (defaultStatusReporter) SetCondition(r *v1alpha1.StackResource, t v1alpha1.StackResourceDomainCondition, ready bool, reason, msg string) {
 	setResourceCondition(r, t, ready, reason, msg)
 }
 

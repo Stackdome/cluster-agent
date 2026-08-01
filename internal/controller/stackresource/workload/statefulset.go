@@ -25,7 +25,7 @@ func (r *Reconciler) reconcileStatefulSet(ctx context.Context, resource *v1alpha
 	}
 	if restartApplied {
 		resource.Status.LastRestartRequestProcessedAt = ptr.To(v1.NewTime(time.Now().UTC()))
-		r.Status.ReportNotReady(resource, "StackResourceStatefulSetNotReady", "StackResource statefulset restart requested")
+		r.Status.ReportNotReady(ctx, resource, "StackResourceStatefulSetNotReady", "StackResource statefulset restart requested")
 		return controller.ResultStop, nil
 	}
 	return r.evaluateStatefulSetStatus(ctx, resource, sts), nil
@@ -44,7 +44,7 @@ func (r *Reconciler) applyStatefulSet(ctx context.Context, resource *v1alpha1.St
 	needsRestart := r.requiresRestart(resource)
 	probes, err := buildProbes(resource)
 	if err != nil {
-		r.Status.ReportFailed(resource, "InvalidSpec", err.Error())
+		r.Status.ReportFailed(ctx, resource, "InvalidSpec", err.Error())
 		return nil, false, nil
 	}
 
@@ -85,7 +85,7 @@ func (r *Reconciler) evaluateStatefulSetStatus(ctx context.Context, resource *v1
 
 	if converged {
 		r.Status.SetCondition(resource, v1alpha1.StackResourceWorkloadAvailable, true, "StatefulSetAvailable", "statefulset available")
-		r.Status.SetCondition(resource, v1alpha1.StackResourceConverged, true, "FullyConverged", "statefulset pod ready on the target revision")
+		r.Status.SetCondition(resource, v1alpha1.StackResourceWorkloadConverged, true, "FullyConverged", "statefulset pod ready on the target revision")
 		r.stampLastConverged(resource)
 		resource.Status.LastFailureDetails = nil
 		resource.Status.LastFailureDeploymentRevision = ""
@@ -95,7 +95,7 @@ func (r *Reconciler) evaluateStatefulSetStatus(ctx context.Context, resource *v1
 		// silently green, so the verifier runs on this branch too.
 		portFailed, portOutstanding := r.verifyServingPorts(ctx, resource, sts.Status.UpdateRevision)
 		if portFailed {
-			r.reportPortNotListening(resource)
+			r.reportPortNotListening(ctx, resource)
 		} else if portOutstanding {
 			// The check answers asynchronously; come back to read it. The
 			// deferred requeue lets the rest of the chain run meanwhile.
@@ -104,7 +104,7 @@ func (r *Reconciler) evaluateStatefulSetStatus(ctx context.Context, resource *v1
 		return controller.ResultContinue
 	}
 
-	r.Status.SetCondition(resource, v1alpha1.StackResourceConverged, false, "NotConverged",
+	r.Status.SetCondition(resource, v1alpha1.StackResourceWorkloadConverged, false, "NotConverged",
 		fmt.Sprintf("statefulset not converged: ready=%d updated=%d available=%d", sts.Status.ReadyReplicas, sts.Status.UpdatedReplicas, sts.Status.AvailableReplicas))
 	r.capturePodFailureDetailsOnce(ctx, resource, sts.Status.UpdateRevision)
 	// A crash produces details above. If the container is running but never
@@ -114,7 +114,7 @@ func (r *Reconciler) evaluateStatefulSetStatus(ctx context.Context, resource *v1
 		r.capturePortDiagnosis(ctx, resource, sts.Status.UpdateRevision)
 	}
 	r.Status.SetCondition(resource, v1alpha1.StackResourceWorkloadAvailable, false, "StatefulSetNotAvailable", "statefulset pod not ready")
-	r.Status.ReportNotReady(resource, "StackResourceStatefulSetNotReady", "statefulset pod not yet ready")
+	r.Status.ReportNotReady(ctx, resource, "StackResourceStatefulSetNotReady", "statefulset pod not yet ready")
 
 	// StatefulSets have no ProgressDeadlineSeconds, so there is no built-in "settled"
 	// signal like the Deployment path uses. Once we've captured why the pod is failing,

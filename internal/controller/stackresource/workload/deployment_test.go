@@ -34,33 +34,7 @@ func TestWorkloadReconciler(t *testing.T) {
 // the same status mutations as the real helpers in stackresource_controller.go.
 type testStatusReporter struct{}
 
-func (testStatusReporter) ReportReady(r *v1alpha1.StackResource) {
-	r.Status.ObservedGeneration = r.Generation
-	if r.Spec.BuildSpec != nil {
-		r.Status.ImageSourceRevision = r.Spec.BuildSpec.SourceRevision.GetSourceRevisionString()
-	}
-	if rev, ok := r.Annotations[v1alpha1.RevisionAnnotation]; ok {
-		r.Status.ObservedRevision = rev
-	}
-	r.Status.Phase = v1alpha1.StackResourcePhaseReady
-	meta.SetStatusCondition(&r.Status.Conditions, metav1.Condition{
-		Type:               string(v1alpha1.StackResourceStatusAvailable),
-		Status:             metav1.ConditionTrue,
-		ObservedGeneration: r.Generation,
-		Reason:             "StackResourceAvailable",
-		Message:            "StackResource is available",
-	})
-	meta.SetStatusCondition(&r.Status.Conditions, metav1.Condition{
-		Type:               string(v1alpha1.StackResourceStalled),
-		Status:             metav1.ConditionFalse,
-		ObservedGeneration: r.Generation,
-		Reason:             "StackResourceAvailable",
-		Message:            "StackResource is available",
-	})
-	r.Status.StatusHash = r.StatusHash()
-}
-
-func (testStatusReporter) ReportNotReady(r *v1alpha1.StackResource, reason, msg string) {
+func (testStatusReporter) ReportNotReady(ctx context.Context, r *v1alpha1.StackResource, reason, msg string) {
 	objectRevision, ok := r.Annotations[v1alpha1.RevisionAnnotation]
 	if ok {
 		r.Status.ObservedRevision = objectRevision
@@ -84,7 +58,7 @@ func (testStatusReporter) ReportNotReady(r *v1alpha1.StackResource, reason, msg 
 	r.Status.StatusHash = r.StatusHash()
 }
 
-func (testStatusReporter) ReportFailed(r *v1alpha1.StackResource, reason, msg string) {
+func (testStatusReporter) ReportFailed(ctx context.Context, r *v1alpha1.StackResource, reason, msg string) {
 	r.Status.ObservedGeneration = r.Generation
 	if rev, ok := r.Annotations[v1alpha1.RevisionAnnotation]; ok {
 		r.Status.ObservedRevision = rev
@@ -114,7 +88,7 @@ func (testStatusReporter) ReportFailed(r *v1alpha1.StackResource, reason, msg st
 	r.Status.StatusHash = r.StatusHash()
 }
 
-func (testStatusReporter) SetCondition(r *v1alpha1.StackResource, condType v1alpha1.StackResourceStatusCondition, ready bool, reason, msg string) {
+func (testStatusReporter) SetCondition(r *v1alpha1.StackResource, condType v1alpha1.StackResourceDomainCondition, ready bool, reason, msg string) {
 	condStatus := metav1.ConditionFalse
 	if ready {
 		condStatus = metav1.ConditionTrue
@@ -810,7 +784,7 @@ var _ = Describe("workloadReconciler", func() {
 			Expect(workloadCond).NotTo(BeNil())
 			Expect(workloadCond.Status).To(Equal(metav1.ConditionTrue))
 
-			convergedCond := findCondition(resource.Status.Conditions, string(v1alpha1.StackResourceConverged))
+			convergedCond := findCondition(resource.Status.Conditions, string(v1alpha1.StackResourceWorkloadConverged))
 			Expect(convergedCond).NotTo(BeNil())
 			Expect(convergedCond.Status).To(Equal(metav1.ConditionFalse), "not converged: old RS pods still present")
 			Expect(convergedCond.Message).To(ContainSubstring("rollout not converged"))
@@ -848,7 +822,7 @@ var _ = Describe("workloadReconciler", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result).To(Equal(controller.ResultNil))
 
-			convergedCond := findCondition(resource.Status.Conditions, string(v1alpha1.StackResourceConverged))
+			convergedCond := findCondition(resource.Status.Conditions, string(v1alpha1.StackResourceWorkloadConverged))
 			Expect(convergedCond).NotTo(BeNil())
 			Expect(convergedCond.Status).To(Equal(metav1.ConditionFalse))
 			Expect(convergedCond.Message).To(ContainSubstring("1/1 updated"))

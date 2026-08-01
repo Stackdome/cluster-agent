@@ -247,7 +247,7 @@ var _ = Describe("statefulSetReconciler", func() {
 			Expect(resource.Status.LastFailureDetails).To(BeNil())
 			Expect(resource.Status.LastFailureDeploymentRevision).To(BeEmpty())
 
-			convergedCond := findCondition(resource.Status.Conditions, string(v1alpha1.StackResourceConverged))
+			convergedCond := findCondition(resource.Status.Conditions, string(v1alpha1.StackResourceWorkloadConverged))
 			Expect(convergedCond).NotTo(BeNil())
 			Expect(convergedCond.Status).To(Equal(metav1.ConditionTrue))
 		})
@@ -280,7 +280,7 @@ var _ = Describe("statefulSetReconciler", func() {
 			Expect(result.ResultRequeueAfter).NotTo(BeNil())
 			Expect(*result.ResultRequeueAfter).To(Equal(10 * time.Second))
 
-			convergedCond := findCondition(resource.Status.Conditions, string(v1alpha1.StackResourceConverged))
+			convergedCond := findCondition(resource.Status.Conditions, string(v1alpha1.StackResourceWorkloadConverged))
 			Expect(convergedCond).NotTo(BeNil())
 			Expect(convergedCond.Status).To(Equal(metav1.ConditionFalse))
 
