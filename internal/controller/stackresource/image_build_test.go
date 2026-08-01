@@ -7,13 +7,16 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"go.uber.org/mock/gomock"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	buildsv1alpha1 "stackdome.io/cluster-agent/api/builds/v1alpha1"
 	"stackdome.io/cluster-agent/api/core/v1alpha1"
+	"stackdome.io/cluster-agent/internal/controller"
 	"stackdome.io/cluster-agent/internal/controller/mocks"
 )
 
@@ -475,6 +478,50 @@ var _ = Describe("imageBuildReconciler.reconcile - re-used source revision", fun
 			Expect(createdBuild.Spec.Cancelled).To(BeFalse())
 			Expect(createdBuild.Spec.SourceRevision.GetSourceRevisionString()).To(Equal("reused-sha"))
 		})
+	})
+})
+
+var _ = Describe("imageBuildReconciler.reconcile - first pass creates the build", func() {
+	It("derives Pending, not Available, when the chain stops at build creation", func() {
+		mockCtrl := gomock.NewController(GinkgoT())
+		defer mockCtrl.Finish()
+		mockClient := mocks.NewMockClient(mockCtrl)
+
+		scheme := runtime.NewScheme()
+		Expect(v1alpha1.AddToScheme(scheme)).To(Succeed())
+		Expect(buildsv1alpha1.AddToScheme(scheme)).To(Succeed())
+
+		reconciler := &imageBuildReconciler{Client: mockClient, scheme: scheme, historyLimit: 5}
+		resource := newBuildTestResource("first-sha")
+		ctx, verdicts := controller.ContextWithVerdicts(context.Background())
+
+		mockClient.EXPECT().
+			List(gomock.Any(), gomock.AssignableToTypeOf(&buildsv1alpha1.ImageBuildList{}), gomock.Any(), gomock.Any()).
+			DoAndReturn(func(_ context.Context, list client.ObjectList, _ ...client.ListOption) error {
+				list.(*buildsv1alpha1.ImageBuildList).Items = []buildsv1alpha1.ImageBuild{}
+				return nil
+			})
+		mockClient.EXPECT().
+			Get(gomock.Any(), gomock.Any(), gomock.AssignableToTypeOf(&buildsv1alpha1.ImageBuild{})).
+			Return(apierrors.NewNotFound(schema.GroupResource{Resource: "imagebuilds"}, buildNameFor("first-sha")))
+		mockClient.EXPECT().
+			Create(gomock.Any(), gomock.AssignableToTypeOf(&buildsv1alpha1.ImageBuild{}), gomock.Any()).
+			Return(nil)
+
+		result, err := reconciler.reconcile(ctx, resource)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result).To(Equal(resultStop))
+
+		// The pass stops here. A resource that has never been built and has no
+		// workload must not derive as available — the Stack aggregate would
+		// count it as a healthy child.
+		deriveSummaryStatus(resource, verdicts)
+
+		Expect(resource.Status.Phase).To(Equal(v1alpha1.StackResourcePhasePending))
+		available := findCondition(resource.Status.Conditions, string(v1alpha1.StackResourceStatusAvailable))
+		Expect(available).NotTo(BeNil())
+		Expect(available.Status).To(Equal(metav1.ConditionFalse))
+		Expect(available.Reason).To(Equal("ImageBuildInProgress"))
 	})
 })
 

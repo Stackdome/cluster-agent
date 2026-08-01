@@ -182,6 +182,9 @@ var _ = Describe("jobReconciler", func() {
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result).To(Equal(controller.ResultRequeueAfter(2 * time.Second)))
+			// Old job deleted, new one not created yet: without a verdict this
+			// window derives as available off the previous run's WorkloadConverged.
+			Expect(verdicts.NotReady()).NotTo(BeNil())
 		})
 
 		It("should not delete active Job even if revision mismatches", func() {

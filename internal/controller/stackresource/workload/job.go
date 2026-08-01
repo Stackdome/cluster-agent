@@ -36,6 +36,10 @@ func (r *Reconciler) reconcileJob(ctx context.Context, resource *v1alpha1.StackR
 		if delErr := r.Client.Delete(ctx, job, client.PropagationPolicy(v1.DeletePropagationBackground)); delErr != nil && !apierrors.IsNotFound(delErr) {
 			return controller.ResultNil, delErr
 		}
+		// The old Job is gone and the new one does not exist yet. Without a
+		// verdict this window derives as available off the previous run's
+		// WorkloadConverged=True.
+		r.Status.ReportNotReady(ctx, resource, "JobRunning", "waiting for the new revision's job to be created")
 		return controller.ResultRequeueAfter(2 * time.Second), nil
 	}
 	return r.evaluateJobStatus(ctx, resource, job), nil

@@ -189,7 +189,11 @@ func (r *imageBuildReconciler) createImageBuild(ctx context.Context, resource *v
 		return resultNil, fmt.Errorf("failed to create ImageBuild: %w", err)
 	}
 
-	// Stop further reconciliation until the build completes
+	// Stop further reconciliation until the build completes. The verdict is
+	// mandatory: without it the pass ends with an empty collector and
+	// deriveSummaryStatus publishes Available=True on a resource that has
+	// never been built and has no workload.
+	reportNotReady(ctx, "ImageBuildInProgress", "Image build created; waiting for completion")
 	return resultStop, nil
 }
 
