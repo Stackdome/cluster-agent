@@ -1,6 +1,7 @@
 package stackresource
 
 import (
+	"context"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -178,5 +179,59 @@ func TestDeriveReadyNotConvergedIsDegraded(t *testing.T) {
 	}
 	if got := summaryCond(r, v1alpha1.StackResourceConverged); got.Status != metav1.ConditionFalse || got.Reason != "NotConverged" {
 		t.Fatalf("Converged = %+v, want False mirroring WorkloadConverged", got)
+	}
+}
+
+// stubSubReconciler lets the test compose an arbitrary chain.
+type stubSubReconciler struct {
+	fn func(ctx context.Context, r *v1alpha1.StackResource) (subReconcilerResult, error)
+}
+
+func (s stubSubReconciler) reconcile(ctx context.Context, r *v1alpha1.StackResource) (subReconcilerResult, error) {
+	return s.fn(ctx, r)
+}
+
+// A Failed verdict filed early in the chain must survive a later sub-reconciler
+// running its full happy path. Pre-refactor this ended
+// Available=True/Stalled=False/Phase=Degraded with the verdict erased.
+func TestFailedVerdictSurvivesFullPass(t *testing.T) {
+	r := deriveTestResource()
+	reporter := defaultStatusReporter{}
+
+	// Mirrors the workload serving branch + reportPortNotListening.
+	portFailure := stubSubReconciler{fn: func(ctx context.Context, res *v1alpha1.StackResource) (subReconcilerResult, error) {
+		reporter.SetCondition(res, v1alpha1.StackResourceWorkloadAvailable, true, "DeploymentServing", "serving")
+		reporter.SetCondition(res, v1alpha1.StackResourceWorkloadConverged, false, "PortNotListening", "port 9090 closed")
+		reporter.ReportFailed(ctx, res, "PortNotListening", "port 9090 closed")
+		return resultContinue, nil
+	}}
+	// Mirrors the svc reconciler post-refactor: manages its objects, sets its
+	// domain condition, reports nothing about the summary.
+	svcLike := stubSubReconciler{fn: func(ctx context.Context, res *v1alpha1.StackResource) (subReconcilerResult, error) {
+		reporter.SetCondition(res, v1alpha1.StackResourceIngressReady, true, "IngressConfigured", "routes configured")
+		return resultNil, nil
+	}}
+
+	rec := &StackResourceReconciler{subReconcilers: []subReconciler{portFailure, svcLike}}
+	ctx, verdicts := controller.ContextWithVerdicts(context.Background())
+	if _, err := rec.reconcile(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	deriveSummaryStatus(r, verdicts)
+
+	if r.Status.Phase != v1alpha1.StackResourcePhaseFailed {
+		t.Fatalf("Phase = %s, want Failed — a later sub-reconciler must not soften a Failed verdict", r.Status.Phase)
+	}
+	if got := summaryCond(r, v1alpha1.StackResourceStalled); got.Status != metav1.ConditionTrue || got.Reason != "PortNotListening" {
+		t.Fatalf("Stalled = %+v, want True/PortNotListening", got)
+	}
+	if got := summaryCond(r, v1alpha1.StackResourceStatusAvailable); got.Status != metav1.ConditionTrue || got.Reason != "ServingButStalled" {
+		t.Fatalf("Available = %+v, want True/ServingButStalled (serving fact preserved)", got)
+	}
+	if got := summaryCond(r, v1alpha1.StackResourceConverged); got.Status != metav1.ConditionFalse || got.Reason != "PortNotListening" {
+		t.Fatalf("Converged = %+v, want False/PortNotListening", got)
+	}
+	if got := meta.FindStatusCondition(r.Status.Conditions, string(v1alpha1.StackResourceIngressReady)); got == nil || got.Status != metav1.ConditionTrue {
+		t.Fatalf("IngressReady = %+v — later sub-reconcilers must still do their domain work", got)
 	}
 }
