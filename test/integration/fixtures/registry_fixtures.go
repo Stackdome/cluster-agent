@@ -54,4 +54,3 @@ func SimpleClusterRegistry(name, credSecretName string, port int32) *registryv1a
 		},
 	}
 }
-

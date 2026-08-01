@@ -405,7 +405,6 @@ type FixedTagPolicy struct {
 	Tag string `json:"tag"`
 }
 
-
 type RegistryCredentialsSpec struct {
 	// +optional
 	DockerConfig *DockerConfigAuth `json:"dockerConfig,omitempty"`
