@@ -613,12 +613,12 @@ var _ = Describe("Stack convergence", func() {
 			Expect(srA.Status.Phase).To(Equal(corev1alpha1.StackResourcePhaseDegraded),
 				"SR-A should be Degraded — serving traffic on old revision, new rollout not converged")
 
-			By("Verifying SR-A Available condition indicates previous revision")
+			By("Verifying SR-A Available condition indicates a serving-but-unconverged rollout")
 			availableA := meta.FindStatusCondition(srA.Status.Conditions, string(corev1alpha1.StackResourceStatusAvailable))
 			Expect(availableA).NotTo(BeNil())
 			Expect(availableA.Status).To(Equal(metav1.ConditionTrue))
-			Expect(availableA.Message).To(ContainSubstring("previous revision"),
-				"Available message should indicate serving on previous revision")
+			Expect(availableA.Message).To(ContainSubstring("current rollout not converged"),
+				"Available message should indicate the workload serves while the current rollout has not converged")
 
 			By("Verifying SR-A has LastFailureDetails populated from crashing new pods")
 			Eventually(func() []corev1alpha1.LastFailureDetail {
