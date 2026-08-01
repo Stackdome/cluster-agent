@@ -169,7 +169,7 @@ func (r *Reconciler) evaluateDeploymentStatus(ctx context.Context, resource *v1a
 	// becomes Ready, the cause is usually a port nobody is listening on, which
 	// only the port verifier can name.
 	if len(resource.Status.LastFailureDetails) == 0 {
-		r.capturePortDiagnosis(ctx, resource, revision)
+		r.capturePortDiagnosisForNotServingWorkload(ctx, resource, revision)
 	}
 	r.Status.ReportNotReady(ctx, resource, "StackResourceDeploymentNotReady", "StackResourceDeploymentNotReady")
 

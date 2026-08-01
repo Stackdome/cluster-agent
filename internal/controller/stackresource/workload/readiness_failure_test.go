@@ -49,7 +49,7 @@ var _ = Describe("readinessFailureDetail", func() {
 	})
 })
 
-var _ = Describe("capturePortDiagnosis", func() {
+var _ = Describe("capturePortDiagnosisForNotServingWorkload", func() {
 	var (
 		reconciler *Reconciler
 		resource   *v1alpha1.StackResource
@@ -85,9 +85,33 @@ var _ = Describe("capturePortDiagnosis", func() {
 		}).Should(BeTrue())
 
 		// UncachedClient is nil: a cache hit must not attempt a pod lookup.
-		reconciler.capturePortDiagnosis(context.Background(), resource, "7")
+		reconciler.capturePortDiagnosisForNotServingWorkload(context.Background(), resource, "7")
 		Expect(resource.Status.LastFailureDetails).To(HaveLen(1))
 		Expect(resource.Status.LastFailureDetails[0].Type).To(Equal(v1alpha1.FailureTypeReadinessFailure))
+	})
+
+	It("reports the dial without opening the grace window, and writes the same record every pass", func() {
+		key := portcheck.Key{Namespace: "team-a", Name: "svc-01", Revision: "7"}
+		reconciler.PortVerifier.Enqueue(key, "127.0.0.1", []int32{deadPort})
+		Eventually(func() bool {
+			_, done := reconciler.PortVerifier.Get(key)
+			return done
+		}).Should(BeTrue())
+
+		reconciler.capturePortDiagnosisForNotServingWorkload(context.Background(), resource, "7")
+		Expect(resource.Status.PortCheck.Status).To(Equal(v1alpha1.PortCheckStatusTypeFailure))
+		Expect(resource.Status.PortCheck.FailingPortNumbers).To(Equal([]int32{deadPort}))
+		// A pod that has not started listening yet must not burn the window the
+		// serving path depends on.
+		Expect(resource.Status.PortCheck.FailingSince).To(BeNil())
+
+		// Every pass must write the same record, or StatusHash changes and the hub
+		// sees a new event every reconcile with nothing different.
+		hash := resource.StatusHash()
+		for range 3 {
+			reconciler.capturePortDiagnosisForNotServingWorkload(context.Background(), resource, "7")
+			Expect(resource.StatusHash()).To(Equal(hash))
+		}
 	})
 
 	It("stays silent on a different revision, so a rollout is never judged on a stale answer", func() {
@@ -99,19 +123,19 @@ var _ = Describe("capturePortDiagnosis", func() {
 		}).Should(BeTrue())
 
 		// Revision 8 has no result yet, and with no client there is no pod to find.
-		reconciler.capturePortDiagnosis(context.Background(), resource, "8")
+		reconciler.capturePortDiagnosisForNotServingWorkload(context.Background(), resource, "8")
 		Expect(resource.Status.LastFailureDetails).To(BeEmpty())
 	})
 
 	It("does nothing for a resource that declares no ports", func() {
 		resource.Spec.Ports = nil
-		reconciler.capturePortDiagnosis(context.Background(), resource, "7")
+		reconciler.capturePortDiagnosisForNotServingWorkload(context.Background(), resource, "7")
 		Expect(resource.Status.LastFailureDetails).To(BeEmpty())
 	})
 
 	It("is disabled rather than fatal when no verifier is configured", func() {
 		bare := &Reconciler{}
-		bare.capturePortDiagnosis(context.Background(), resource, "7")
+		bare.capturePortDiagnosisForNotServingWorkload(context.Background(), resource, "7")
 		Expect(resource.Status.LastFailureDetails).To(BeEmpty())
 	})
 })
@@ -190,7 +214,7 @@ var _ = Describe("verifyServingPorts (grace-bounded condemnation)", func() {
 
 		// The not-serving path dials while the app is still booting and caches a
 		// refusal — the premature verdict the grace window exists to survive.
-		reconciler.capturePortDiagnosis(ctx, resource, "7")
+		reconciler.capturePortDiagnosisForNotServingWorkload(ctx, resource, "7")
 		Expect(waitForVerdict().AllOpen()).To(BeFalse())
 		resource.Status.LastFailureDetails = nil
 	})
@@ -220,7 +244,8 @@ var _ = Describe("verifyServingPorts (grace-bounded condemnation)", func() {
 		Expect(failed).To(BeFalse())
 		Expect(outstanding).To(BeFalse())
 		Expect(resource.Status.LastFailureDetails).To(BeEmpty())
-		Expect(resource.Status.PortCheck).To(BeNil())
+		Expect(resource.Status.PortCheck.Status).To(Equal(v1alpha1.PortCheckStatusTypeSuccess))
+		Expect(resource.Status.PortCheck.FailingSince).To(BeNil(), "a Success closes the window")
 	})
 
 	It("keeps re-verifying a closed verdict while the grace window lasts, so a slow secondary port is never condemned", func() {
@@ -257,7 +282,8 @@ var _ = Describe("verifyServingPorts (grace-bounded condemnation)", func() {
 	It("condemns a closed verdict that outlives the grace window, so a genuinely dead port is still reported", func() {
 		resource.Status.PortCheck = &v1alpha1.PortCheckStatus{
 			Revision:     "7",
-			FailingSince: metav1.NewTime(time.Now().Add(-time.Hour)),
+			Status:       v1alpha1.PortCheckStatusTypeFailure,
+			FailingSince: ptr.To(metav1.NewTime(time.Now().Add(-time.Hour))),
 		}
 
 		failed, outstanding := reconciler.verifyServingPorts(ctx, resource, "7")
@@ -272,7 +298,8 @@ var _ = Describe("verifyServingPorts (grace-bounded condemnation)", func() {
 		// starts with an empty verifier cache but inherits the status.
 		resource.Status.PortCheck = &v1alpha1.PortCheckStatus{
 			Revision:     "7",
-			FailingSince: metav1.NewTime(time.Now().Add(-time.Hour)),
+			Status:       v1alpha1.PortCheckStatusTypeFailure,
+			FailingSince: ptr.To(metav1.NewTime(time.Now().Add(-time.Hour))),
 		}
 		freshVerifier := portcheck.NewVerifierWithDefaults()
 		verifierCtx, cancel := context.WithCancel(context.Background())
@@ -294,7 +321,8 @@ var _ = Describe("verifyServingPorts (grace-bounded condemnation)", func() {
 	It("stays condemned once the window is spent, never churning back to unverified", func() {
 		resource.Status.PortCheck = &v1alpha1.PortCheckStatus{
 			Revision:     "7",
-			FailingSince: metav1.NewTime(time.Now().Add(-time.Hour)),
+			Status:       v1alpha1.PortCheckStatusTypeFailure,
+			FailingSince: ptr.To(metav1.NewTime(time.Now().Add(-time.Hour))),
 		}
 		for range 3 {
 			failed, outstanding := reconciler.verifyServingPorts(ctx, resource, "7")
@@ -310,7 +338,8 @@ var _ = Describe("verifyServingPorts (grace-bounded condemnation)", func() {
 	It("judges a new rollout fresh instead of inheriting the old revision's window", func() {
 		resource.Status.PortCheck = &v1alpha1.PortCheckStatus{
 			Revision:     "6",
-			FailingSince: metav1.NewTime(time.Now().Add(-time.Hour)),
+			Status:       v1alpha1.PortCheckStatusTypeFailure,
+			FailingSince: ptr.To(metav1.NewTime(time.Now().Add(-time.Hour))),
 		}
 
 		failed, outstanding := reconciler.verifyServingPorts(ctx, resource, "7")
@@ -330,7 +359,8 @@ var _ = Describe("verifyServingPorts (grace-bounded condemnation)", func() {
 
 		failed, _ = reconciler.verifyServingPorts(ctx, resource, "7")
 		Expect(failed).To(BeFalse())
-		Expect(resource.Status.PortCheck).To(BeNil(), "an open verdict must clear the window")
+		Expect(resource.Status.PortCheck.Status).To(Equal(v1alpha1.PortCheckStatusTypeSuccess))
+		Expect(resource.Status.PortCheck.FailingSince).To(BeNil(), "an open verdict must clear the window")
 
 		// The app dies. The verdict flips closed, and the flap must open a fresh
 		// window rather than being condemned on sight.
@@ -342,6 +372,29 @@ var _ = Describe("verifyServingPorts (grace-bounded condemnation)", func() {
 		failed, outstanding = reconciler.verifyServingPorts(ctx, resource, "7")
 		Expect(failed).To(BeFalse(), "the flap must start a fresh window, not inherit the spent one")
 		Expect(outstanding).To(BeTrue())
+	})
+
+	It("opens a fresh window when a verified-open port goes bad on the same revision", func() {
+		// A Success record carries no FailingSince. The next Failure on that same
+		// revision must open a new window rather than read through the one that
+		// isn't there.
+		resource.Status.PortCheck = &v1alpha1.PortCheckStatus{
+			Revision: "7",
+			Status:   v1alpha1.PortCheckStatusTypeSuccess,
+		}
+		reconciler.PortVerifier.Forget(key)
+
+		failed, outstanding := reconciler.verifyServingPorts(ctx, resource, "7")
+		Expect(failed).To(BeFalse())
+		Expect(outstanding).To(BeTrue())
+		Expect(waitForVerdict().AllOpen()).To(BeFalse())
+
+		failed, outstanding = reconciler.verifyServingPorts(ctx, resource, "7")
+		Expect(failed).To(BeFalse(), "a fresh window must not be spent on sight")
+		Expect(outstanding).To(BeTrue())
+		Expect(resource.Status.PortCheck.Status).To(Equal(v1alpha1.PortCheckStatusTypeFailure))
+		Expect(resource.Status.PortCheck.FailingPortNumbers).To(Equal([]int32{port}))
+		Expect(resource.Status.PortCheck.FailingSince).NotTo(BeNil())
 	})
 
 	It("does not poll when nothing is dialable, so an unanswerable check costs no reconciles", func() {
@@ -424,7 +477,7 @@ var _ = Describe("evaluateDeploymentStatus port verification", func() {
 
 		// The window runs out with the port still closed. Only now is the verdict
 		// believed.
-		resource.Status.PortCheck.FailingSince = metav1.NewTime(time.Now().Add(-time.Hour))
+		resource.Status.PortCheck.FailingSince = ptr.To(metav1.NewTime(time.Now().Add(-time.Hour)))
 		result := reconciler.evaluateDeploymentStatus(ctx, resource, deployment)
 
 		// Condemnation sets conditions but does not stop the chain: the remaining
@@ -466,7 +519,8 @@ var _ = Describe("evaluateDeploymentStatus port verification", func() {
 		awaitVerdict()
 		resource.Status.PortCheck = &v1alpha1.PortCheckStatus{
 			Revision:     "7",
-			FailingSince: metav1.NewTime(time.Now().Add(-time.Hour)),
+			Status:       v1alpha1.PortCheckStatusTypeFailure,
+			FailingSince: ptr.To(metav1.NewTime(time.Now().Add(-time.Hour))),
 		}
 
 		reconciler.evaluateDeploymentStatus(ctx, resource, deployment)
