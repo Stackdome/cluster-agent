@@ -454,8 +454,7 @@ var _ = Describe("Stack build from source", func() {
 		It("should cancel the in-progress ImageBuild when source revision is updated", func() {
 			srName := stack.Spec.ResourceNames[0]
 			sr := swr.Resources[0]
-			initialRevision := sr.Spec.BuildSpec.SourceRevision.GetSourceRevisionString()
-			firstBuildName = buildsv1alpha1.ImageBuildName(srName, initialRevision)
+			firstBuildName = buildsv1alpha1.ImageBuildName(srName, sr.Spec.BuildSpec)
 			firstBuildKey := client.ObjectKey{Name: firstBuildName, Namespace: env.TestNamespace}
 
 			By("Waiting for initial ImageBuild to be created")
@@ -479,8 +478,7 @@ var _ = Describe("Stack build from source", func() {
 				"old ImageBuild %q should have Spec.Cancelled=true", firstBuildName)
 
 			By("Verifying a new ImageBuild was created")
-			newRevision := liveSR.Spec.BuildSpec.SourceRevision.GetSourceRevisionString()
-			newBuildName := buildsv1alpha1.ImageBuildName(srName, newRevision)
+			newBuildName := buildsv1alpha1.ImageBuildName(srName, liveSR.Spec.BuildSpec)
 			newBuildKey := client.ObjectKey{Name: newBuildName, Namespace: env.TestNamespace}
 			_, err = helpers.WaitForImageBuild(ctx, c, newBuildKey, imageBuildTimeout)
 			Expect(err).NotTo(HaveOccurred())

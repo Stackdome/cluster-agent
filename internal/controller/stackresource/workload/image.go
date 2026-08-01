@@ -19,7 +19,7 @@ func (r *Reconciler) getImageBuild(ctx context.Context, resource *v1alpha1.Stack
 	existingApplicationBuild := &buildsv1alpha1.ImageBuild{}
 	if err := r.Client.Get(ctx,
 		types.NamespacedName{
-			Name:      buildsv1alpha1.ImageBuildName(resource.Name, resource.Spec.BuildSpec.SourceRevision.GetSourceRevisionString()),
+			Name:      buildsv1alpha1.ImageBuildName(resource.Name, resource.Spec.BuildSpec),
 			Namespace: resource.Namespace,
 		},
 		existingApplicationBuild,

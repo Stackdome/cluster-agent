@@ -46,6 +46,10 @@ func newBuildTestResource(sourceRevision string) *v1alpha1.StackResource {
 	}
 }
 
+func buildNameFor(sourceRevision string) string {
+	return generateImageBuildName(newBuildTestResource(sourceRevision))
+}
+
 func buildCondition(condType buildsv1alpha1.BuildStatusCondition, status metav1.ConditionStatus) metav1.Condition {
 	return metav1.Condition{
 		Type:   string(condType),
@@ -118,8 +122,8 @@ var _ = Describe("cancelStaleImageBuilds", func() {
 
 	Context("when there are stale ImageBuilds from previous revisions", func() {
 		It("cancels stale builds by setting Spec.Cancelled=true", func() {
-			currentBuildName := buildsv1alpha1.ImageBuildName("test-resource", "new-sha")
-			oldBuildName := buildsv1alpha1.ImageBuildName("test-resource", "old-sha")
+			currentBuildName := buildNameFor("new-sha")
+			oldBuildName := buildNameFor("old-sha")
 
 			builds := []buildsv1alpha1.ImageBuild{
 				{
@@ -157,7 +161,7 @@ var _ = Describe("cancelStaleImageBuilds", func() {
 		})
 
 		It("does not cancel the current build", func() {
-			currentBuildName := buildsv1alpha1.ImageBuildName("test-resource", "new-sha")
+			currentBuildName := buildNameFor("new-sha")
 
 			builds := []buildsv1alpha1.ImageBuild{
 				{
@@ -176,7 +180,7 @@ var _ = Describe("cancelStaleImageBuilds", func() {
 		})
 
 		It("skips builds not owned by this StackResource", func() {
-			oldBuildName := buildsv1alpha1.ImageBuildName("test-resource", "old-sha")
+			oldBuildName := buildNameFor("old-sha")
 
 			builds := []buildsv1alpha1.ImageBuild{
 				{
@@ -195,7 +199,7 @@ var _ = Describe("cancelStaleImageBuilds", func() {
 		})
 
 		It("skips builds already cancelled", func() {
-			oldBuildName := buildsv1alpha1.ImageBuildName("test-resource", "old-sha")
+			oldBuildName := buildNameFor("old-sha")
 
 			builds := []buildsv1alpha1.ImageBuild{
 				{
@@ -215,7 +219,7 @@ var _ = Describe("cancelStaleImageBuilds", func() {
 		})
 
 		It("does not cancel terminal builds", func() {
-			oldBuildName := buildsv1alpha1.ImageBuildName("test-resource", "old-sha")
+			oldBuildName := buildNameFor("old-sha")
 
 			builds := []buildsv1alpha1.ImageBuild{
 				{
@@ -263,9 +267,9 @@ var _ = Describe("enforceImageBuildRetention", func() {
 	It("deletes terminal builds beyond the history limit", func() {
 		now := time.Now()
 		buildNames := []string{
-			buildsv1alpha1.ImageBuildName("test-resource", "rev-newest"),
-			buildsv1alpha1.ImageBuildName("test-resource", "rev-middle"),
-			buildsv1alpha1.ImageBuildName("test-resource", "rev-oldest"),
+			buildNameFor("rev-newest"),
+			buildNameFor("rev-middle"),
+			buildNameFor("rev-oldest"),
 		}
 
 		builds := []buildsv1alpha1.ImageBuild{
@@ -319,7 +323,7 @@ var _ = Describe("enforceImageBuildRetention", func() {
 		builds := []buildsv1alpha1.ImageBuild{
 			{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:              buildsv1alpha1.ImageBuildName("test-resource", "rev-a"),
+					Name:              buildNameFor("rev-a"),
 					Namespace:         "test-ns",
 					CreationTimestamp: metav1.NewTime(now),
 					OwnerReferences:   []metav1.OwnerReference{{UID: resource.UID}},
@@ -328,7 +332,7 @@ var _ = Describe("enforceImageBuildRetention", func() {
 			},
 			{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:              buildsv1alpha1.ImageBuildName("test-resource", "rev-b"),
+					Name:              buildNameFor("rev-b"),
 					Namespace:         "test-ns",
 					CreationTimestamp: metav1.NewTime(now.Add(-1 * time.Hour)),
 					OwnerReferences:   []metav1.OwnerReference{{UID: resource.UID}},
@@ -337,7 +341,7 @@ var _ = Describe("enforceImageBuildRetention", func() {
 			},
 			{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:              buildsv1alpha1.ImageBuildName("test-resource", "rev-c"),
+					Name:              buildNameFor("rev-c"),
 					Namespace:         "test-ns",
 					CreationTimestamp: metav1.NewTime(now.Add(-2 * time.Hour)),
 					OwnerReferences:   []metav1.OwnerReference{{UID: resource.UID}},
@@ -357,7 +361,7 @@ var _ = Describe("enforceImageBuildRetention", func() {
 		builds := []buildsv1alpha1.ImageBuild{
 			{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:              buildsv1alpha1.ImageBuildName("test-resource", "rev-a"),
+					Name:              buildNameFor("rev-a"),
 					Namespace:         "test-ns",
 					CreationTimestamp: metav1.NewTime(now),
 					OwnerReferences:   []metav1.OwnerReference{{UID: resource.UID}},
@@ -366,7 +370,7 @@ var _ = Describe("enforceImageBuildRetention", func() {
 			},
 			{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:              buildsv1alpha1.ImageBuildName("test-resource", "rev-b"),
+					Name:              buildNameFor("rev-b"),
 					Namespace:         "test-ns",
 					CreationTimestamp: metav1.NewTime(now.Add(-1 * time.Hour)),
 					OwnerReferences:   []metav1.OwnerReference{{UID: resource.UID}},
@@ -375,7 +379,7 @@ var _ = Describe("enforceImageBuildRetention", func() {
 			},
 			{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:              buildsv1alpha1.ImageBuildName("test-resource", "rev-c"),
+					Name:              buildNameFor("rev-c"),
 					Namespace:         "test-ns",
 					CreationTimestamp: metav1.NewTime(now.Add(-2 * time.Hour)),
 					OwnerReferences:   []metav1.OwnerReference{{UID: types.UID("different-uid")}},
@@ -423,7 +427,7 @@ var _ = Describe("imageBuildReconciler.reconcile - re-used source revision", fun
 
 	Context("when the current ImageBuild has Spec.Cancelled=true", func() {
 		It("deletes the cancelled ImageBuild and creates a fresh one", func() {
-			imageBuildName := buildsv1alpha1.ImageBuildName("test-resource", "reused-sha")
+			imageBuildName := buildNameFor("reused-sha")
 
 			// listImageBuilds returns empty list
 			mockClient.EXPECT().
@@ -471,5 +475,25 @@ var _ = Describe("imageBuildReconciler.reconcile - re-used source revision", fun
 			Expect(createdBuild.Spec.Cancelled).To(BeFalse())
 			Expect(createdBuild.Spec.SourceRevision.GetSourceRevisionString()).To(Equal("reused-sha"))
 		})
+	})
+})
+
+var _ = Describe("generateImageBuildName", func() {
+	It("changes when the dockerfile path or build context changes on the same revision", func() {
+		resource := newBuildTestResource("same-sha")
+		original := generateImageBuildName(resource)
+
+		resource.Spec.BuildSpec.DockerFilePath = "worker/Dockerfile"
+		Expect(generateImageBuildName(resource)).NotTo(Equal(original))
+
+		resource.Spec.BuildSpec.DockerFilePath = "Dockerfile"
+		resource.Spec.BuildSpec.BuildContext = "worker"
+		Expect(generateImageBuildName(resource)).NotTo(Equal(original))
+	})
+
+	It("is stable for an unchanged build spec", func() {
+		resource := newBuildTestResource("same-sha")
+
+		Expect(generateImageBuildName(resource)).To(Equal(generateImageBuildName(newBuildTestResource("same-sha"))))
 	})
 })

@@ -164,6 +164,48 @@ var _ = Describe("GenerateImageBuildJob", func() {
 		})
 	})
 
+	Context("with a git source built from a sub directory", func() {
+		buildArgs := func(contextPath, dockerfilePath string) string {
+			params := NewBuildParamsBuilder().
+				WithJobName("worker-abc123-build").
+				WithNamespace("ns").
+				WithDestination("registry.local/team/worker:abc123").
+				WithDockerfilePath(dockerfilePath).
+				WithContextPath(contextPath).
+				WithSource(&Source{GitRepo: &GitRepoBuildSource{
+					Repo:     &corev1alpha1.GitRepoSource{RepoUrl: "https://github.com/org/repo"},
+					Revision: &corev1alpha1.GitRepoRevision{Branch: "main"},
+				}}).
+				Build()
+
+			job, err := GenerateImageBuildJob(params)
+			Expect(err).NotTo(HaveOccurred())
+
+			return strings.Join(job.Spec.Template.Spec.Containers[0].Args, " ")
+		}
+
+		It("passes the context path as --context-sub-path and re-bases the dockerfile", func() {
+			joined := buildArgs("hello-stack/worker", "hello-stack/worker/Dockerfile")
+
+			Expect(joined).To(ContainSubstring("--context-sub-path=hello-stack/worker"))
+			Expect(joined).To(ContainSubstring("--dockerfile=Dockerfile "))
+		})
+
+		It("keeps a dockerfile path that is already relative to the context path", func() {
+			joined := buildArgs("./worker", "Dockerfile.prod")
+
+			Expect(joined).To(ContainSubstring("--context-sub-path=worker"))
+			Expect(joined).To(ContainSubstring("--dockerfile=Dockerfile.prod "))
+		})
+
+		It("omits --context-sub-path when the context is the repo root", func() {
+			joined := buildArgs("/", "Dockerfile")
+
+			Expect(joined).NotTo(ContainSubstring("--context-sub-path"))
+			Expect(joined).To(ContainSubstring("--dockerfile=Dockerfile "))
+		})
+	})
+
 	Context("with insecure registry", func() {
 		It("includes insecure flags", func() {
 			params := NewBuildParamsBuilder().

@@ -193,9 +193,9 @@ func (r *imageBuildReconciler) createImageBuild(ctx context.Context, resource *v
 	return resultStop, nil
 }
 
-// generateImageBuildName creates a unique name for the ImageBuild resource
+// generateImageBuildName creates a unique name for the ImageBuild resource.
 func generateImageBuildName(resource *v1alpha1.StackResource) string {
-	return buildsv1alpha1.ImageBuildName(resource.Name, resource.Spec.BuildSpec.SourceRevision.GetSourceRevisionString())
+	return buildsv1alpha1.ImageBuildName(resource.Name, resource.Spec.BuildSpec)
 }
 
 // createImageBuildLabels creates labels for the ImageBuild resource

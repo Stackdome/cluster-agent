@@ -178,7 +178,7 @@ func (r *VolumeReconciler) getImageBuildsForResources(ctx context.Context, volum
 			}
 			return nil, fmt.Errorf("failed to get the resource '%s' in volume '%s': %w", stackresourceRef, volume.Name, err)
 		}
-		imageBuildName := buildsv1alpha1.ImageBuildName(resource.Name, resource.Spec.BuildSpec.SourceRevision.GetSourceRevisionString())
+		imageBuildName := buildsv1alpha1.ImageBuildName(resource.Name, resource.Spec.BuildSpec)
 		imageBuild := &buildsv1alpha1.ImageBuild{}
 		if err := r.Client.Get(ctx, types.NamespacedName{Name: imageBuildName, Namespace: volume.Namespace}, imageBuild); err != nil {
 			if apierrors.IsNotFound(err) {
