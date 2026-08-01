@@ -23,6 +23,12 @@ func (r *Reconciler) reconcileJob(ctx context.Context, resource *v1alpha1.StackR
 	switch {
 	case apierrors.IsNotFound(err):
 		if created, applyErr := r.applyJob(ctx, resource); applyErr != nil || created == nil {
+			if applyErr == nil {
+				// Unreachable today (applyJob returns a Job or an error), but a
+				// stop without a verdict would derive as available off the
+				// previous run's conditions if that ever changes.
+				r.Status.ReportNotReady(ctx, resource, "JobRunning", "waiting for the job to be created")
+			}
 			return controller.ResultStop, applyErr
 		}
 		r.Status.ReportNotReady(ctx, resource, "JobRunning", "job created, waiting for completion")

@@ -27,7 +27,7 @@
 | Domain | `WorkloadAvailable`, `WorkloadConverged` (new) | workload sub-reconciler | `StackResourceDomainCondition` |
 | Domain | `BuildReady` | imageBuild sub-reconciler | `StackResourceDomainCondition` |
 | Domain | `IngressReady`, `TLSConfigured` | svc sub-reconciler | `StackResourceDomainCondition` |
-| Domain | `DependenciesReady`, `PreDeployComplete` | workload sub-reconciler (gates) | `StackResourceDomainCondition` |
+| Domain | `DependenciesReady` | workload sub-reconciler (gates) | `StackResourceDomainCondition` |
 | Summary | `Available`, `Stalled`, `Converged` | `deriveSummaryStatus` only | `StackResourceStatusCondition` |
 
 ## Derivation Matrix
@@ -39,8 +39,9 @@ The complete contract of `deriveSummaryStatus`. Inputs: the pass's verdicts, plu
 | 1 | Failed | true | any | `Failed` | **True** (`ServingButStalled`, "workload serving; terminal failure: \<msg\>") | **True** (verdict reason/msg) | False (verdict reason/msg) |
 | 2 | Failed | false | any | `Failed` | False (verdict reason/msg) | **True** (verdict reason/msg) | False (verdict reason/msg) |
 | 3 | NotReady (no Failed) | any | any | `Pending` | False (verdict reason/msg) | False (verdict reason/msg) | False (verdict reason/msg) |
-| 4 | none | any | true | `Ready` | True (`StackResourceAvailable`) | False (`StackResourceAvailable`) | True (mirrors `WorkloadConverged` reason/msg) |
-| 5 | none | any | false | `Degraded` | True (`StackResourceAvailable`, "workload serving; current rollout not converged") | False (`StackResourceAvailable`) | False (mirrors `WorkloadConverged` reason/msg) |
+| 4 | none | true | true | `Ready` | True (`StackResourceAvailable`) — mirrors the `WorkloadAvailable` fact | False (same reason/msg as Available) | True (mirrors `WorkloadConverged` reason/msg) |
+| 5 | none | true | false | `Degraded` | True (`StackResourceAvailable`, "workload serving; current rollout not converged") — mirrors the `WorkloadAvailable` fact | False (same reason/msg as Available) | False (mirrors `WorkloadConverged` reason/msg) |
+| 4/5 | none | false | any | per `workloadConverged` (`Ready`/`Degraded`) | False (`WorkloadNotAvailable`, "workload is not available") — mirrors the `WorkloadAvailable` fact | False (same reason/msg as Available) | mirrors `WorkloadConverged` |
 
 Notes:
 - Failed beats NotReady when both were reported in one pass (rows 1/2 win over 3).
@@ -48,7 +49,8 @@ Notes:
 - Row 1 is the motivating bug (serving workload, dead declared secondary port): the Stack aggregate sees `Stalled=True` → child counts as stalled → Stack `Phase=Failed`; the hub distinguishes "failed and down" from "failed but serving" via `Available`.
 - A stale domain condition from a previous generation counts as false (rows 2/5, not 1/4).
 - Summary `Converged` is re-stamped at the current generation on every pass, so consumers never see a stale value.
-- **Invariant** rows 4/5 rely on: a sub-reconciler that leaves its domain not-OK must file a verdict in the same pass. "No verdicts" therefore means every gate passed and the workload reconciler ran to its serving branch. Enforced by review, pinned by the Task 5 chain test.
+- **Invariant** rows 4/5 rely on: a sub-reconciler that leaves its domain not-OK must file a verdict in the same pass. "No verdicts" therefore means every gate passed and the workload reconciler ran to its serving branch. Enforced by review, pinned by the Task 5 chain test. Rows 4/5 do not *depend* on the invariant for `Available`: with no `WorkloadAvailable=True` at the current generation the summary reports `Available=False`, it never asserts health from an empty collector.
+- `ImageSourceRevision` is stamped only in the no-verdict branch: it names the revision that is actually serving, not the revision the spec points at.
 
 ## File Structure
 
@@ -319,7 +321,7 @@ Expected: PASS. (The stackresource package still writes summary conditions via t
   - `func setSummaryCondition(resource *v1alpha1.StackResource, condType v1alpha1.StackResourceStatusCondition, status bool, reason, msg string)` — unexported, this file only.
   - `func domainConditionTrue(resource *v1alpha1.StackResource, condType v1alpha1.StackResourceDomainCondition) bool` — True at current generation.
 
-The behavior is the **Derivation Matrix** above — implement exactly those five rows. Always: stamp `ObservedGeneration`, `ObservedRevision` (from `v1alpha1.RevisionAnnotation`), `ImageSourceRevision` (when `BuildSpec != nil`), and `StatusHash` last.
+The behavior is the **Derivation Matrix** above — implement exactly those five rows. Always: stamp `ObservedGeneration`, `ObservedRevision` (from `v1alpha1.RevisionAnnotation`), and `StatusHash` last. `ImageSourceRevision` (when `BuildSpec != nil`) is stamped only in the no-verdict branch — it names the serving revision.
 
 - [ ] **Step 1: Write the failing tests** — one per matrix row plus the stale-generation guard; plain Go test (no envtest; this is pure status math):
 

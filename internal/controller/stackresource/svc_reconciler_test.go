@@ -522,18 +522,6 @@ var _ = Describe("svcReconciler.reconcile (orchestration)", func() {
 		reconciler = &svcReconciler{Client: fakeClient, Scheme: scheme}
 	})
 
-	// The svc reconciler no longer writes summary conditions — it contributes
-	// domain conditions and verdicts, and Reconcile derives the summary once
-	// per pass. Derive here to assert what the pass would publish.
-	derivedAvailable := func(resource *v1alpha1.StackResource) metav1.ConditionStatus {
-		deriveSummaryStatus(resource, verdicts)
-		cond := findCondition(resource.Status.Conditions, string(v1alpha1.StackResourceStatusAvailable))
-		if cond == nil {
-			return ""
-		}
-		return cond.Status
-	}
-
 	orchestrationResource := func(workloadType v1alpha1.WorkloadType, ports ...v1alpha1.Port) *v1alpha1.StackResource {
 		return &v1alpha1.StackResource{
 			ObjectMeta: metav1.ObjectMeta{
@@ -551,46 +539,59 @@ var _ = Describe("svcReconciler.reconcile (orchestration)", func() {
 		return err == nil
 	}
 
-	It("skips Service/Ingress for a Worker and reports available", func() {
+	// The svc reconciler contributes domain conditions and verdicts only; a
+	// clean pass must file neither verdict, so the derivation is left free to
+	// follow the workload's facts.
+	expectNoVerdicts := func() {
+		Expect(verdicts.NotReady()).To(BeNil())
+		Expect(verdicts.Failed()).To(BeNil())
+	}
+
+	It("skips Service/Ingress for a Worker", func() {
 		resource := orchestrationResource(v1alpha1.WorkloadTypeWorker)
 
 		res, err := reconciler.reconcile(ctx, resource)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(res).To(Equal(resultNil))
-		Expect(derivedAvailable(resource)).To(Equal(metav1.ConditionTrue))
 		Expect(serviceExists()).To(BeFalse(), "Worker should not get a Service")
+		Expect(resource.Status.InternalAddress).To(BeNil())
+		expectNoVerdicts()
 	})
 
-	It("creates the Service and reports available in one pass (no exposed ports)", func() {
+	It("creates the Service in one pass (no exposed ports)", func() {
 		// Internal-only port: a Service is created, but no Ingress is needed. ensureService
-		// returns the just-created Service, so reconcile reaches "available" in one pass.
+		// returns the just-created Service, so reconcile publishes the internal address in
+		// one pass.
 		resource := orchestrationResource(v1alpha1.WorkloadTypeService,
 			v1alpha1.Port{Name: "http", Number: 8080, Protocol: "http", ExposeToPublic: false})
 
 		res, err := reconciler.reconcile(ctx, resource)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(res).To(Equal(resultNil))
-		Expect(derivedAvailable(resource)).To(Equal(metav1.ConditionTrue))
 		Expect(serviceExists()).To(BeTrue())
 		Expect(resource.Status.InternalAddress).NotTo(BeNil())
 		Expect(*resource.Status.InternalAddress).To(Equal("my-app"))
+		Expect(findCondition(resource.Status.Conditions, string(v1alpha1.StackResourceIngressReady))).To(BeNil(),
+			"no Ingress is created for an internal-only port")
+		expectNoVerdicts()
 
 		By("second reconcile is idempotent (Service already up to date)")
 		res, err = reconciler.reconcile(ctx, resource)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(res).To(Equal(resultNil))
-		Expect(derivedAvailable(resource)).To(Equal(metav1.ConditionTrue))
+		Expect(*resource.Status.InternalAddress).To(Equal("my-app"))
+		expectNoVerdicts()
 	})
 
-	It("creates Service+Ingress and reports available in one pass (exposed port, no TLS)", func() {
+	It("creates Service+Ingress in one pass (exposed port, no TLS)", func() {
 		resource := orchestrationResource(v1alpha1.WorkloadTypeService,
 			v1alpha1.Port{Name: "http", Number: 8080, Protocol: "http", ExposeToPublic: true, FQDN: "app.local.dev"})
 
 		res, err := reconciler.reconcile(ctx, resource)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(res).To(Equal(resultNil))
-		Expect(derivedAvailable(resource)).To(Equal(metav1.ConditionTrue))
+		expectNoVerdicts()
 
 		By("Service and Ingress both created in the same pass")
 		Expect(serviceExists()).To(BeTrue())
@@ -611,7 +612,8 @@ var _ = Describe("svcReconciler.reconcile (orchestration)", func() {
 		res, err = reconciler.reconcile(ctx, resource)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(res).To(Equal(resultNil))
-		Expect(derivedAvailable(resource)).To(Equal(metav1.ConditionTrue))
+		Expect(resource.Status.ExternalAddress).To(HaveLen(1))
+		expectNoVerdicts()
 	})
 
 	It("creates a headless Service for a StatefulService", func() {

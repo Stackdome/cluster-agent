@@ -130,6 +130,10 @@ Available rollup may stay True because the child serves. Clears automatically
 on the next rollout: new revision restarts the port check, and the ready path
 resets Stalled.
 
+Deliberate consequence: `dependsOn` gating reads `Available`, so a
+serving-but-stalled sibling no longer blocks its dependents (before the fix it
+did) — a conscious decision, serving means serving.
+
 ## Solution options
 
 **A. Guard the shared ready-reporter (small, recommended first step).**

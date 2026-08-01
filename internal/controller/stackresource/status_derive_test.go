@@ -2,6 +2,7 @@ package stackresource
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -40,8 +41,13 @@ func TestDeriveFailedWhileServing(t *testing.T) {
 	if got := summaryCond(r, v1alpha1.StackResourceStalled); got.Status != metav1.ConditionTrue || got.Reason != "PortNotListening" {
 		t.Fatalf("Stalled = %+v, want True/PortNotListening", got)
 	}
-	if got := summaryCond(r, v1alpha1.StackResourceStatusAvailable); got.Status != metav1.ConditionTrue || got.Reason != "ServingButStalled" {
+	got := summaryCond(r, v1alpha1.StackResourceStatusAvailable)
+	if got.Status != metav1.ConditionTrue || got.Reason != "ServingButStalled" {
 		t.Fatalf("Available = %+v, want True/ServingButStalled", got)
+	}
+	// The serving rollup must still carry the diagnosis, not generic text.
+	if !strings.Contains(got.Message, "terminal failure") || !strings.Contains(got.Message, "port 9090 closed") {
+		t.Fatalf("Available message = %q, want it to name the terminal failure and the verdict message", got.Message)
 	}
 	if got := summaryCond(r, v1alpha1.StackResourceConverged); got.Status != metav1.ConditionFalse || got.Reason != "PortNotListening" {
 		t.Fatalf("Converged = %+v, want False/PortNotListening", got)
@@ -179,6 +185,75 @@ func TestDeriveReadyNotConvergedIsDegraded(t *testing.T) {
 	}
 	if got := summaryCond(r, v1alpha1.StackResourceConverged); got.Status != metav1.ConditionFalse || got.Reason != "NotConverged" {
 		t.Fatalf("Converged = %+v, want False mirroring WorkloadConverged", got)
+	}
+}
+
+// Rows 4/5 guard: with no verdicts filed, Available mirrors the
+// WorkloadAvailable fact. An absent (or stale) fact is not health — the
+// summary must not invent it. Phase still follows the converged fact.
+func TestDeriveNoVerdictWithoutWorkloadAvailable(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		stale bool
+	}{
+		{name: "condition absent"},
+		{name: "condition stale", stale: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := deriveTestResource()
+			setResourceCondition(r, v1alpha1.StackResourceWorkloadConverged, true, "DeploymentConverged", "rollout settled")
+			if tc.stale {
+				setResourceCondition(r, v1alpha1.StackResourceWorkloadAvailable, true, "DeploymentServing", "serving")
+				meta.FindStatusCondition(r.Status.Conditions, string(v1alpha1.StackResourceWorkloadAvailable)).ObservedGeneration = 2
+			}
+
+			deriveSummaryStatus(r, &controller.VerdictCollector{})
+
+			if got := summaryCond(r, v1alpha1.StackResourceStatusAvailable); got.Status != metav1.ConditionFalse || got.Reason != "WorkloadNotAvailable" {
+				t.Fatalf("Available = %+v, want False/WorkloadNotAvailable", got)
+			}
+			if r.Status.Phase != v1alpha1.StackResourcePhaseReady {
+				t.Fatalf("Phase = %s, want Ready (still follows the converged fact)", r.Status.Phase)
+			}
+			if got := summaryCond(r, v1alpha1.StackResourceStalled); got.Status != metav1.ConditionFalse {
+				t.Fatalf("Stalled = %+v, want False (nothing terminal happened)", got)
+			}
+		})
+	}
+}
+
+// ImageSourceRevision names the revision that is actually serving, so a pass
+// that ends in a verdict must not stamp the revision the spec merely points at.
+func TestDeriveFailedDoesNotStampImageSourceRevision(t *testing.T) {
+	r := deriveTestResource()
+	r.Spec.BuildSpec = &v1alpha1.StackResourceBuildSpec{
+		SourceRevision: v1alpha1.SourceRevisionSpec{Volume: &v1alpha1.VolumeRevision{RevisionString: "new-rev"}},
+	}
+	r.Status.ImageSourceRevision = "serving-rev"
+	c := &controller.VerdictCollector{}
+	c.ReportFailed("BuildFailed", "image build failed terminally")
+
+	deriveSummaryStatus(r, c)
+
+	if r.Status.ImageSourceRevision != "serving-rev" {
+		t.Fatalf("ImageSourceRevision = %q, want the previously serving revision preserved", r.Status.ImageSourceRevision)
+	}
+}
+
+// The happy path does stamp it: the pass ran clean, so the spec's revision is
+// the one serving.
+func TestDeriveNoVerdictStampsImageSourceRevision(t *testing.T) {
+	r := deriveTestResource()
+	r.Spec.BuildSpec = &v1alpha1.StackResourceBuildSpec{
+		SourceRevision: v1alpha1.SourceRevisionSpec{Volume: &v1alpha1.VolumeRevision{RevisionString: "new-rev"}},
+	}
+	setResourceCondition(r, v1alpha1.StackResourceWorkloadAvailable, true, "DeploymentServing", "serving")
+	setResourceCondition(r, v1alpha1.StackResourceWorkloadConverged, true, "DeploymentConverged", "rollout settled")
+
+	deriveSummaryStatus(r, &controller.VerdictCollector{})
+
+	if r.Status.ImageSourceRevision != "new-rev" {
+		t.Fatalf("ImageSourceRevision = %q, want new-rev", r.Status.ImageSourceRevision)
 	}
 }
 

@@ -60,15 +60,6 @@ func (r *svcReconciler) reconcile(ctx context.Context, resource *v1alpha1.StackR
 	return resultNil, nil
 }
 
-func (r *svcReconciler) serviceNotReady(ctx context.Context, resource *v1alpha1.StackResource, message string) (subReconcilerResult, error) {
-	controller.LoggerFromContext(ctx).Info("workload svc not ready")
-	if resource.Spec.HasExposedPort() {
-		setResourceCondition(resource, v1alpha1.StackResourceIngressReady, false, "IngressNotReady", message)
-	}
-	reportNotReady(ctx, "ServiceNotReady", message)
-	return resultRequeue, nil
-}
-
 func buildExternalAddresses(resource *v1alpha1.StackResource, portFqdnMap map[int]string) []v1alpha1.ExternalAddress {
 	tlsPorts := make(map[int32]bool, len(resource.Spec.Ports))
 	for _, p := range resource.Spec.Ports {

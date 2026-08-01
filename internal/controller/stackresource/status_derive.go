@@ -14,17 +14,17 @@ import (
 // (Available, Stalled, Converged, Phase). Sub-reconcilers contribute domain
 // conditions (WorkloadAvailable, WorkloadConverged, BuildReady, ...) and
 // pass-scoped verdicts; this derives the summary once per pass, after the
-// whole chain has run, so chain order can never change the outcome. The full
-// contract is the Derivation Matrix in
+// whole chain has run, so chain order can never change the outcome. Summary
+// Available and Converged mirror the workload's firsthand facts
+// (WorkloadAvailable/WorkloadConverged at the current generation); an absent
+// verdict is not by itself evidence of health. The full contract is the
+// Derivation Matrix in
 // docs/superpowers/plans/2026-08-01-single-writer-status-derivation.md.
 // Mirrors stack/aggregate.go one level down.
 func deriveSummaryStatus(resource *v1alpha1.StackResource, verdicts *controller.VerdictCollector) {
 	resource.Status.ObservedGeneration = resource.Generation
 	if rev, ok := resource.Annotations[v1alpha1.RevisionAnnotation]; ok {
 		resource.Status.ObservedRevision = rev
-	}
-	if resource.Spec.BuildSpec != nil {
-		resource.Status.ImageSourceRevision = resource.Spec.BuildSpec.SourceRevision.GetSourceRevisionString()
 	}
 
 	switch {
@@ -53,6 +53,12 @@ func deriveSummaryStatus(resource *v1alpha1.StackResource, verdicts *controller.
 		setSummaryCondition(resource, v1alpha1.StackResourceStalled, false, v.Reason, v.Message)
 
 	default:
+		// No verdict was filed, so the chain ran to the end on this revision:
+		// the revision the spec points at is the one actually serving.
+		if resource.Spec.BuildSpec != nil {
+			resource.Status.ImageSourceRevision = resource.Spec.BuildSpec.SourceRevision.GetSourceRevisionString()
+		}
+
 		// Summary Converged mirrors the workload's firsthand fact, carrying
 		// its reason/message through.
 		wc := meta.FindStatusCondition(resource.Status.Conditions, string(v1alpha1.StackResourceWorkloadConverged))
@@ -66,15 +72,28 @@ func deriveSummaryStatus(resource *v1alpha1.StackResource, verdicts *controller.
 		}
 		setSummaryCondition(resource, v1alpha1.StackResourceConverged, converged, convergedReason, convergedMsg)
 
-		availableMsg := "StackResource is available"
 		if converged {
 			resource.Status.Phase = v1alpha1.StackResourcePhaseReady
 		} else {
 			resource.Status.Phase = v1alpha1.StackResourcePhaseDegraded
-			availableMsg = "workload serving; current rollout not converged"
 		}
-		setSummaryCondition(resource, v1alpha1.StackResourceStatusAvailable, true, "StackResourceAvailable", availableMsg)
-		setSummaryCondition(resource, v1alpha1.StackResourceStalled, false, "StackResourceAvailable", "StackResource is available")
+
+		// Available mirrors the workload's firsthand availability fact. No
+		// verdict was filed, but that is not itself evidence of health: an
+		// absent or stale WorkloadAvailable means nothing asserted the workload
+		// is serving, so the summary must not assert it either.
+		available := domainConditionTrue(resource, v1alpha1.StackResourceWorkloadAvailable)
+		availableReason, availableMsg := "WorkloadNotAvailable", "workload is not available"
+		switch {
+		case available && converged:
+			availableReason, availableMsg = "StackResourceAvailable", "StackResource is available"
+		case available:
+			availableReason, availableMsg = "StackResourceAvailable", "workload serving; current rollout not converged"
+		}
+		setSummaryCondition(resource, v1alpha1.StackResourceStatusAvailable, available, availableReason, availableMsg)
+		// Nothing terminal happened this pass, so Stalled is False regardless —
+		// carrying the same reason/message so it never shows stale success text.
+		setSummaryCondition(resource, v1alpha1.StackResourceStalled, false, availableReason, availableMsg)
 	}
 
 	resource.Status.StatusHash = resource.StatusHash()
@@ -82,7 +101,10 @@ func deriveSummaryStatus(resource *v1alpha1.StackResource, verdicts *controller.
 
 // setSummaryCondition writes a summary condition. Unexported and called only
 // by deriveSummaryStatus — sub-reconcilers cannot even name summary condition
-// types in SetCondition thanks to the StackResourceDomainCondition split.
+// types in SetCondition thanks to the StackResourceDomainCondition split. The
+// type split only guards the sanctioned helpers: a raw meta.SetStatusCondition
+// on Status.Conditions can still write a summary condition, by convention it
+// must not.
 func setSummaryCondition(resource *v1alpha1.StackResource, condType v1alpha1.StackResourceStatusCondition, status bool, reason, msg string) {
 	condStatus := metav1.ConditionFalse
 	if status {
