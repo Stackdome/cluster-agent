@@ -174,7 +174,7 @@ var _ = Describe("cronJobReconciler", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result).To(Equal(controller.ResultContinue))
 
-			convergedCond := findCondition(resource.Status.Conditions, string(v1alpha1.StackResourceConverged))
+			convergedCond := findCondition(resource.Status.Conditions, string(v1alpha1.StackResourceWorkloadConverged))
 			Expect(convergedCond).NotTo(BeNil())
 			Expect(convergedCond.Status).To(Equal(metav1.ConditionTrue))
 

@@ -20,6 +20,10 @@ func (r *Reconciler) reconcileCronJob(ctx context.Context, resource *v1alpha1.St
 		return controller.ResultNil, err
 	}
 	if cj == nil {
+		// Unreachable today (applyCronJob returns a CronJob or an error), but a
+		// stop without a verdict would derive as available off the previous
+		// pass's conditions if that ever changes.
+		r.Status.ReportNotReady(ctx, resource, "CronJobNotReady", "waiting for the cronjob to be created")
 		return controller.ResultStop, nil
 	}
 	return r.evaluateCronJobStatus(ctx, resource, cj), nil
@@ -60,7 +64,7 @@ func (r *Reconciler) applyCronJob(ctx context.Context, resource *v1alpha1.StackR
 }
 
 func (r *Reconciler) evaluateCronJobStatus(ctx context.Context, resource *v1alpha1.StackResource, cj *batchv1.CronJob) controller.SubReconcilerResult {
-	r.Status.SetCondition(resource, v1alpha1.StackResourceConverged, true, "CronJobScheduled", "cronjob installed with valid schedule")
+	r.Status.SetCondition(resource, v1alpha1.StackResourceWorkloadConverged, true, "CronJobScheduled", "cronjob installed with valid schedule")
 	r.Status.SetCondition(resource, v1alpha1.StackResourceWorkloadAvailable, true, "CronJobScheduled", "cronjob installed with valid schedule")
 	if cj.Status.LastScheduleTime != nil {
 		resource.Status.LastRunTime = cj.Status.LastScheduleTime

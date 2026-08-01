@@ -29,6 +29,7 @@ var _ = Describe("jobReconciler", func() {
 		reconciler   *Reconciler
 		resource     *v1alpha1.StackResource
 		ctx          context.Context
+		verdicts     *controller.VerdictCollector
 		scheme       *runtime.Scheme
 	)
 
@@ -37,7 +38,7 @@ var _ = Describe("jobReconciler", func() {
 		mockClient = mocks.NewMockClient(mockCtrl)
 		mockUncached = mocks.NewMockClient(mockCtrl)
 		mockDepCheck = mocks.NewMockDependencyChecker(mockCtrl)
-		ctx = context.Background()
+		ctx, verdicts = testCtx()
 
 		scheme = runtime.NewScheme()
 		Expect(v1alpha1.AddToScheme(scheme)).To(Succeed())
@@ -181,6 +182,9 @@ var _ = Describe("jobReconciler", func() {
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result).To(Equal(controller.ResultRequeueAfter(2 * time.Second)))
+			// Old job deleted, new one not created yet: without a verdict this
+			// window derives as available off the previous run's WorkloadConverged.
+			Expect(verdicts.NotReady()).NotTo(BeNil())
 		})
 
 		It("should not delete active Job even if revision mismatches", func() {
@@ -217,7 +221,7 @@ var _ = Describe("jobReconciler", func() {
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result).To(Equal(controller.ResultRequeueAfter(10 * time.Second)))
-			Expect(resource.Status.Phase).To(Equal(v1alpha1.StackResourcePhasePending))
+			Expect(verdicts.NotReady()).NotTo(BeNil(), "a not-ready verdict is what derivation turns into Phase=Pending")
 		})
 	})
 
@@ -266,7 +270,7 @@ var _ = Describe("jobReconciler", func() {
 			Expect(resource.Status.LastFailureDetails).To(BeNil())
 			Expect(resource.Status.LastFailureDeploymentRevision).To(BeEmpty())
 
-			convergedCond := findCondition(resource.Status.Conditions, string(v1alpha1.StackResourceConverged))
+			convergedCond := findCondition(resource.Status.Conditions, string(v1alpha1.StackResourceWorkloadConverged))
 			Expect(convergedCond).NotTo(BeNil())
 			Expect(convergedCond.Status).To(Equal(metav1.ConditionTrue))
 
@@ -321,7 +325,7 @@ var _ = Describe("jobReconciler", func() {
 			Expect(resource.Status.LastFailureDetails[0].ContainerName).To(Equal("test-resource"))
 			Expect(resource.Status.LastFailureDetails[0].LastTerminationExitCode).NotTo(BeNil())
 			Expect(*resource.Status.LastFailureDetails[0].LastTerminationExitCode).To(Equal(int32(1)))
-			Expect(resource.Status.Phase).To(Equal(v1alpha1.StackResourcePhaseFailed))
+			Expect(verdicts.Failed()).NotTo(BeNil(), "a failed verdict is what derivation turns into Phase=Failed")
 		})
 
 		It("should handle failed Job when pods already cleaned up", func() {
@@ -365,7 +369,7 @@ var _ = Describe("jobReconciler", func() {
 			Expect(resource.Status.LastRunSucceeded).NotTo(BeNil())
 			Expect(*resource.Status.LastRunSucceeded).To(BeFalse())
 			Expect(resource.Status.LastFailureDetails).To(BeNil())
-			Expect(resource.Status.Phase).To(Equal(v1alpha1.StackResourcePhaseFailed))
+			Expect(verdicts.Failed()).NotTo(BeNil(), "a failed verdict is what derivation turns into Phase=Failed")
 		})
 	})
 
@@ -401,7 +405,7 @@ var _ = Describe("jobReconciler", func() {
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result).To(Equal(controller.ResultRequeueAfter(10 * time.Second)))
-			Expect(resource.Status.Phase).To(Equal(v1alpha1.StackResourcePhasePending))
+			Expect(verdicts.NotReady()).NotTo(BeNil(), "a not-ready verdict is what derivation turns into Phase=Pending")
 		})
 
 		It("should capture intermediate failures while running", func() {

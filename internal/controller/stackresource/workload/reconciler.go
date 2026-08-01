@@ -21,10 +21,13 @@ type DependencyChecker interface {
 }
 
 type StatusReporter interface {
-	ReportReady(r *v1alpha1.StackResource)
-	ReportNotReady(r *v1alpha1.StackResource, reason, msg string)
-	ReportFailed(r *v1alpha1.StackResource, reason, msg string)
-	SetCondition(r *v1alpha1.StackResource, condType v1alpha1.StackResourceStatusCondition, ready bool, reason, msg string)
+	// ReportNotReady records a retriable not-ready verdict for this pass.
+	ReportNotReady(ctx context.Context, r *v1alpha1.StackResource, reason, msg string)
+	// ReportFailed records a terminal failure verdict for this pass.
+	ReportFailed(ctx context.Context, r *v1alpha1.StackResource, reason, msg string)
+	// SetCondition writes a domain condition immediately. Summary conditions
+	// are not representable here — that is the point.
+	SetCondition(r *v1alpha1.StackResource, condType v1alpha1.StackResourceDomainCondition, ready bool, reason, msg string)
 }
 
 type Reconciler struct {
@@ -76,7 +79,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, resource *v1alpha1.StackReso
 	}
 	if !canRun {
 		r.Status.SetCondition(resource, v1alpha1.StackResourceDependenciesReady, false, "DependenciesNotReady", message)
-		r.Status.ReportNotReady(resource, "DependenciesNotReady", message)
+		r.Status.ReportNotReady(ctx, resource, "DependenciesNotReady", message)
 		return controller.ResultRequeueAfter(DefaultRequeueTime), nil
 	}
 
@@ -87,7 +90,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, resource *v1alpha1.StackReso
 	}
 	if !volumeMountsReady {
 		r.Status.SetCondition(resource, v1alpha1.StackResourceDependenciesReady, false, "VolumeMountsNotReady", message)
-		r.Status.ReportNotReady(resource, "VolumeMountsNotReady", message)
+		r.Status.ReportNotReady(ctx, resource, "VolumeMountsNotReady", message)
 		return controller.ResultRequeueAfter(DefaultRequeueTime), nil
 	}
 
@@ -101,7 +104,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, resource *v1alpha1.StackReso
 		}
 		if !imageBuildComplete(currentApplicationBuild) {
 			r.Status.SetCondition(resource, v1alpha1.StackResourceBuildReady, false, "BuildNotReady", "application build is not yet ready")
-			r.Status.ReportNotReady(resource, "ApplicationBuildNotYetReady", "Application build is not yet ready")
+			r.Status.ReportNotReady(ctx, resource, "ApplicationBuildNotYetReady", "Application build is not yet ready")
 			return controller.ResultStop, nil
 		}
 		r.Status.SetCondition(resource, v1alpha1.StackResourceBuildReady, true, "BuildReady", "application build complete")

@@ -86,6 +86,7 @@ var _ = Describe("statefulSetReconciler", func() {
 		reconciler   *Reconciler
 		resource     *v1alpha1.StackResource
 		ctx          context.Context
+		verdicts     *controller.VerdictCollector
 		scheme       *runtime.Scheme
 	)
 
@@ -94,7 +95,7 @@ var _ = Describe("statefulSetReconciler", func() {
 		mockClient = mocks.NewMockClient(mockCtrl)
 		mockUncached = mocks.NewMockClient(mockCtrl)
 		mockDepCheck = mocks.NewMockDependencyChecker(mockCtrl)
-		ctx = context.Background()
+		ctx, verdicts = testCtx()
 
 		scheme = runtime.NewScheme()
 		Expect(v1alpha1.AddToScheme(scheme)).To(Succeed())
@@ -247,7 +248,7 @@ var _ = Describe("statefulSetReconciler", func() {
 			Expect(resource.Status.LastFailureDetails).To(BeNil())
 			Expect(resource.Status.LastFailureDeploymentRevision).To(BeEmpty())
 
-			convergedCond := findCondition(resource.Status.Conditions, string(v1alpha1.StackResourceConverged))
+			convergedCond := findCondition(resource.Status.Conditions, string(v1alpha1.StackResourceWorkloadConverged))
 			Expect(convergedCond).NotTo(BeNil())
 			Expect(convergedCond.Status).To(Equal(metav1.ConditionTrue))
 		})
@@ -280,7 +281,7 @@ var _ = Describe("statefulSetReconciler", func() {
 			Expect(result.ResultRequeueAfter).NotTo(BeNil())
 			Expect(*result.ResultRequeueAfter).To(Equal(10 * time.Second))
 
-			convergedCond := findCondition(resource.Status.Conditions, string(v1alpha1.StackResourceConverged))
+			convergedCond := findCondition(resource.Status.Conditions, string(v1alpha1.StackResourceWorkloadConverged))
 			Expect(convergedCond).NotTo(BeNil())
 			Expect(convergedCond.Status).To(Equal(metav1.ConditionFalse))
 
@@ -288,7 +289,7 @@ var _ = Describe("statefulSetReconciler", func() {
 			Expect(workloadCond).NotTo(BeNil())
 			Expect(workloadCond.Status).To(Equal(metav1.ConditionFalse))
 
-			Expect(resource.Status.Phase).To(Equal(v1alpha1.StackResourcePhasePending))
+			Expect(verdicts.NotReady()).NotTo(BeNil(), "a not-ready verdict is what derivation turns into Phase=Pending")
 		})
 
 		It("should capture failure details from crashing pods", func() {

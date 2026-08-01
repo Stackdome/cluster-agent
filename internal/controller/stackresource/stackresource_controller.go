@@ -66,6 +66,7 @@ func (r *StackResourceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, err
 	}
 	originalStatus := stackResource.Status.DeepCopy()
+	ctx, verdicts := controller.ContextWithVerdicts(ctx)
 
 	res, err := r.reconcile(ctx, stackResource)
 	if err != nil {
@@ -76,6 +77,8 @@ func (r *StackResourceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, err
 	}
 	stackResource.Status.CurrentBuild = applicationBuildStatus
+
+	deriveSummaryStatus(stackResource, verdicts)
 
 	if !equality.Semantic.DeepEqual(originalStatus, &stackResource.Status) {
 		logger.Info("updating stack resource status")
@@ -111,42 +114,18 @@ func (r *StackResourceReconciler) reconcile(ctx context.Context, resource *v1alp
 	return ctrl.Result{}, nil
 }
 
-func reportStackResourceNotReady(resource *v1alpha1.StackResource, reason, msg string) {
-	objectRevision, ok := resource.Annotations[v1alpha1.RevisionAnnotation]
-	if ok {
-		resource.Status.ObservedRevision = objectRevision
-	}
-	resource.Status.ObservedGeneration = resource.Generation
-	resource.Status.Phase = v1alpha1.StackResourcePhasePending
-	meta.SetStatusCondition(&resource.Status.Conditions, metav1.Condition{
-		Type:               string(v1alpha1.StackResourceStatusAvailable),
-		Status:             metav1.ConditionFalse,
-		ObservedGeneration: resource.Generation,
-		Reason:             reason,
-		Message:            msg,
-	})
-	meta.SetStatusCondition(&resource.Status.Conditions, metav1.Condition{
-		Type:               string(v1alpha1.StackResourceConverged),
-		Status:             metav1.ConditionFalse,
-		ObservedGeneration: resource.Generation,
-		Reason:             reason,
-		Message:            msg,
-	})
-	// Not-ready is retriable, so Stalled stays False — but its reason and
-	// message must describe the current state. Leaving them untouched keeps
-	// the success text written by reportStackResourceReady on an object that
-	// is visibly failing.
-	meta.SetStatusCondition(&resource.Status.Conditions, metav1.Condition{
-		Type:               string(v1alpha1.StackResourceStalled),
-		Status:             metav1.ConditionFalse,
-		ObservedGeneration: resource.Generation,
-		Reason:             reason,
-		Message:            msg,
-	})
-	resource.Status.StatusHash = resource.StatusHash()
+// reportNotReady records a retriable not-ready verdict for this pass.
+// deriveSummaryStatus turns verdicts into the summary conditions.
+func reportNotReady(ctx context.Context, reason, msg string) {
+	controller.VerdictsFromContext(ctx).ReportNotReady(reason, msg)
 }
 
-func setResourceCondition(resource *v1alpha1.StackResource, condType v1alpha1.StackResourceStatusCondition, ready bool, reason, msg string) {
+// reportFailed records a terminal failure verdict for this pass.
+func reportFailed(ctx context.Context, reason, msg string) {
+	controller.VerdictsFromContext(ctx).ReportFailed(reason, msg)
+}
+
+func setResourceCondition(resource *v1alpha1.StackResource, condType v1alpha1.StackResourceDomainCondition, ready bool, reason, msg string) {
 	condStatus := metav1.ConditionFalse
 	if ready {
 		condStatus = metav1.ConditionTrue
@@ -158,82 +137,6 @@ func setResourceCondition(resource *v1alpha1.StackResource, condType v1alpha1.St
 		Reason:             reason,
 		Message:            msg,
 	})
-}
-
-func reportStackResourceFailed(resource *v1alpha1.StackResource, reason, msg string) {
-	resource.Status.ObservedGeneration = resource.Generation
-	if rev, ok := resource.Annotations[v1alpha1.RevisionAnnotation]; ok {
-		resource.Status.ObservedRevision = rev
-	}
-	resource.Status.Phase = v1alpha1.StackResourcePhaseFailed
-	meta.SetStatusCondition(&resource.Status.Conditions, metav1.Condition{
-		Type:               string(v1alpha1.StackResourceStatusAvailable),
-		Status:             metav1.ConditionFalse,
-		ObservedGeneration: resource.Generation,
-		Reason:             reason,
-		Message:            msg,
-	})
-	// Terminal failure: mark Stalled so the Stack controller can distinguish
-	// retriable (Pending) from non-retriable (Failed) children.
-	meta.SetStatusCondition(&resource.Status.Conditions, metav1.Condition{
-		Type:               string(v1alpha1.StackResourceStalled),
-		Status:             metav1.ConditionTrue,
-		ObservedGeneration: resource.Generation,
-		Reason:             reason,
-		Message:            msg,
-	})
-	meta.SetStatusCondition(&resource.Status.Conditions, metav1.Condition{
-		Type:               string(v1alpha1.StackResourceConverged),
-		Status:             metav1.ConditionFalse,
-		ObservedGeneration: resource.Generation,
-		Reason:             reason,
-		Message:            msg,
-	})
-	resource.Status.StatusHash = resource.StatusHash()
-}
-
-func reportStackResourceReady(resource *v1alpha1.StackResource) {
-	resource.Status.ObservedGeneration = resource.Generation
-	if resource.Spec.BuildSpec != nil {
-		resource.Status.ImageSourceRevision = resource.Spec.BuildSpec.SourceRevision.GetSourceRevisionString()
-	}
-	if rev, ok := resource.Annotations[v1alpha1.RevisionAnnotation]; ok {
-		resource.Status.ObservedRevision = rev
-	}
-
-	notConverged := !isResourceConverged(resource)
-
-	if notConverged {
-		resource.Status.Phase = v1alpha1.StackResourcePhaseDegraded
-	} else {
-		resource.Status.Phase = v1alpha1.StackResourcePhaseReady
-	}
-
-	availableMsg := "StackResource is available"
-	if notConverged {
-		availableMsg = "available on previous revision; current rollout not converged"
-	}
-
-	meta.SetStatusCondition(&resource.Status.Conditions, metav1.Condition{
-		Type:               string(v1alpha1.StackResourceStatusAvailable),
-		Status:             metav1.ConditionTrue,
-		ObservedGeneration: resource.Generation,
-		Reason:             "StackResourceAvailable",
-		Message:            availableMsg,
-	})
-	meta.SetStatusCondition(&resource.Status.Conditions, metav1.Condition{
-		Type:               string(v1alpha1.StackResourceStalled),
-		Status:             metav1.ConditionFalse,
-		ObservedGeneration: resource.Generation,
-		Reason:             "StackResourceAvailable",
-		Message:            "StackResource is available",
-	})
-	resource.Status.StatusHash = resource.StatusHash()
-}
-
-func isResourceConverged(resource *v1alpha1.StackResource) bool {
-	cond := meta.FindStatusCondition(resource.Status.Conditions, string(v1alpha1.StackResourceConverged))
-	return cond != nil && cond.Status == metav1.ConditionTrue && cond.ObservedGeneration == resource.Generation
 }
 
 func (r *StackResourceReconciler) getImageBuildStatus(ctx context.Context, resource *v1alpha1.StackResource) (*v1alpha1.BuildStatus, error) {
@@ -290,14 +193,15 @@ func (w workloadSubReconciler) reconcile(ctx context.Context, r *v1alpha1.StackR
 
 type defaultStatusReporter struct{}
 
-func (defaultStatusReporter) ReportReady(r *v1alpha1.StackResource) { reportStackResourceReady(r) }
-func (defaultStatusReporter) ReportNotReady(r *v1alpha1.StackResource, reason, msg string) {
-	reportStackResourceNotReady(r, reason, msg)
+func (defaultStatusReporter) ReportNotReady(ctx context.Context, r *v1alpha1.StackResource, reason, msg string) {
+	reportNotReady(ctx, reason, msg)
 }
-func (defaultStatusReporter) ReportFailed(r *v1alpha1.StackResource, reason, msg string) {
-	reportStackResourceFailed(r, reason, msg)
+
+func (defaultStatusReporter) ReportFailed(ctx context.Context, r *v1alpha1.StackResource, reason, msg string) {
+	reportFailed(ctx, reason, msg)
 }
-func (defaultStatusReporter) SetCondition(r *v1alpha1.StackResource, t v1alpha1.StackResourceStatusCondition, ready bool, reason, msg string) {
+
+func (defaultStatusReporter) SetCondition(r *v1alpha1.StackResource, t v1alpha1.StackResourceDomainCondition, ready bool, reason, msg string) {
 	setResourceCondition(r, t, ready, reason, msg)
 }
 

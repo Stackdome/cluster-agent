@@ -53,7 +53,7 @@ func (r *registryAuthReconciler) reconcileDockerConfigAuth(
 		Namespace: stackResource.Namespace,
 	}, secret); err != nil {
 		if errors.IsNotFound(err) {
-			reportStackResourceNotReady(stackResource, "DockerConfigJsonSecretNotFound", "Docker credentials secret not found")
+			reportNotReady(ctx, "DockerConfigJsonSecretNotFound", "Docker credentials secret not found")
 			return resultStop, nil
 		}
 		return resultNil, fmt.Errorf("failed to get docker config json secret: %w", err)
@@ -85,7 +85,7 @@ func (r *registryAuthReconciler) reconcileCredentials(
 	case repoSpec.Auth.Basic != nil:
 		resolved, err := registry.ResolveImageRepository(ctx, r.client, sr.Namespace, repoSpec, sr.Spec.BuildSpec.SourceRevision.GetSourceRevisionString())
 		if err != nil {
-			reportStackResourceNotReady(sr, "RepositoryResolveFailed", fmt.Sprintf("failed to resolve image repository: %v", err))
+			reportNotReady(ctx, "RepositoryResolveFailed", fmt.Sprintf("failed to resolve image repository: %v", err))
 			return resultStop, nil
 		}
 		return r.synthesizeFromBasic(ctx, sr, repoSpec.Auth.Basic, resolved.AuthURL)
@@ -104,7 +104,7 @@ func (r *registryAuthReconciler) synthesizeFromBasic(ctx context.Context, sr *co
 	src := &corev1.Secret{}
 	if err := r.client.Get(ctx, client.ObjectKey{Name: basic.SecretRef.Name, Namespace: sr.Namespace}, src); err != nil {
 		if errors.IsNotFound(err) {
-			reportStackResourceNotReady(sr, "RegistryCredentialsMissing", "image repository credentials secret not found")
+			reportNotReady(ctx, "RegistryCredentialsMissing", "image repository credentials secret not found")
 			return resultStop, nil
 		}
 		return resultNil, err

@@ -276,6 +276,7 @@ func (r *ImageBuildReconciler) reconcileImageBuildWithVolumeSource(ctx context.C
 	resolved, err := r.resolveDestination(ctx, buildConfig)
 	if errors.Is(err, registry.ErrRegistryNotReady) {
 		logger.Info(fmt.Sprintf("registry not ready for image build %s, requeueing", buildConfig.Name))
+		reportImageBuildStatus(buildConfig, buildsv1alpha1.BuildAvailable, metav1.ConditionFalse, "RegistryNotReady")
 		return ctrl.Result{RequeueAfter: registryNotReadyRequeueDelay}, nil
 	}
 	if err != nil {
@@ -344,6 +345,7 @@ func (r *ImageBuildReconciler) reconcileImageBuildWithGitSource(ctx context.Cont
 	resolved, err := r.resolveDestination(ctx, buildConfig)
 	if errors.Is(err, registry.ErrRegistryNotReady) {
 		logger.Info(fmt.Sprintf("registry not ready for image build %s, requeueing", buildConfig.Name))
+		reportImageBuildStatus(buildConfig, buildsv1alpha1.BuildAvailable, metav1.ConditionFalse, "RegistryNotReady")
 		return ctrl.Result{RequeueAfter: registryNotReadyRequeueDelay}, nil
 	}
 	if err != nil {
