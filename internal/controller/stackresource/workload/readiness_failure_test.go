@@ -362,6 +362,7 @@ var _ = Describe("evaluateDeploymentStatus port verification", func() {
 		key        portcheck.Key
 		port       int32
 		ctx        context.Context
+		verdicts   *controller.VerdictCollector
 	)
 
 	awaitVerdict := func() {
@@ -372,7 +373,7 @@ var _ = Describe("evaluateDeploymentStatus port verification", func() {
 	}
 
 	BeforeEach(func() {
-		ctx = context.Background()
+		ctx, verdicts = testCtx()
 
 		listener, err := net.Listen("tcp", "127.0.0.1:0")
 		Expect(err).NotTo(HaveOccurred())
@@ -411,7 +412,7 @@ var _ = Describe("evaluateDeploymentStatus port verification", func() {
 		}
 	})
 
-	It("drives Converged False alongside Available once a closed verdict outlives the window, and keeps the chain running", func() {
+	It("drives Converged False and a Failed verdict once a closed verdict outlives the window, and keeps the chain running", func() {
 		// Pass 1 schedules the check, pass 2 reads the refusal and — still inside
 		// the window — re-dials rather than judging the resource. Both requeue.
 		Expect(reconciler.evaluateDeploymentStatus(ctx, resource, deployment)).
@@ -429,16 +430,23 @@ var _ = Describe("evaluateDeploymentStatus port verification", func() {
 		// Condemnation sets conditions but does not stop the chain: the remaining
 		// sub-reconcilers (Service, ...) still run.
 		Expect(result).To(Equal(controller.ResultContinue))
+
+		// WorkloadAvailable keeps its firsthand truth: the primary port is
+		// serving. Only a declared secondary port is closed.
 		available := meta.FindStatusCondition(resource.Status.Conditions, string(v1alpha1.StackResourceWorkloadAvailable))
 		Expect(available).NotTo(BeNil())
-		Expect(available.Status).To(Equal(metav1.ConditionFalse))
-		Expect(available.Reason).To(Equal("PortNotListening"))
+		Expect(available.Status).To(Equal(metav1.ConditionTrue))
 
-		// A resource nobody can reach must not also read "fully converged".
+		// A resource with a dead declared port must not read "fully converged".
 		converged := meta.FindStatusCondition(resource.Status.Conditions, string(v1alpha1.StackResourceWorkloadConverged))
 		Expect(converged).NotTo(BeNil())
 		Expect(converged.Status).To(Equal(metav1.ConditionFalse))
 		Expect(converged.Reason).To(Equal("PortNotListening"))
+
+		// Terminal per revision: derivation turns this into Phase=Failed /
+		// Stalled=True / Available=True("ServingButStalled").
+		Expect(verdicts.Failed()).NotTo(BeNil())
+		Expect(verdicts.Failed().Reason).To(Equal("PortNotListening"))
 	})
 
 	It("keeps a captured crash detail instead of overwriting it with a port verdict", func() {

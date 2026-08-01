@@ -149,6 +149,22 @@ func TestDeriveReadyConverged(t *testing.T) {
 	}
 }
 
+// Rows 4/5 guard: a WorkloadConverged=True left over from a PREVIOUS
+// generation must not lend its reason to the summary — the current rollout
+// has simply not reported yet.
+func TestDeriveStaleWorkloadConvergedReasonNotMirrored(t *testing.T) {
+	r := deriveTestResource()
+	setResourceCondition(r, v1alpha1.StackResourceWorkloadConverged, true, "DeploymentConverged", "rollout settled")
+	meta.FindStatusCondition(r.Status.Conditions, string(v1alpha1.StackResourceWorkloadConverged)).ObservedGeneration = 2
+
+	deriveSummaryStatus(r, &controller.VerdictCollector{})
+
+	got := summaryCond(r, v1alpha1.StackResourceConverged)
+	if got.Status != metav1.ConditionFalse || got.Reason != "WorkloadNotConverged" {
+		t.Fatalf("Converged = %+v, want False/WorkloadNotConverged for a stale condition", got)
+	}
+}
+
 // Matrix row 5: no verdicts, workload not converged.
 func TestDeriveReadyNotConvergedIsDegraded(t *testing.T) {
 	r := deriveTestResource()

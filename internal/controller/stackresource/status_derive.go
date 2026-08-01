@@ -58,7 +58,10 @@ func deriveSummaryStatus(resource *v1alpha1.StackResource, verdicts *controller.
 		wc := meta.FindStatusCondition(resource.Status.Conditions, string(v1alpha1.StackResourceWorkloadConverged))
 		converged := domainConditionTrue(resource, v1alpha1.StackResourceWorkloadConverged)
 		convergedReason, convergedMsg := "WorkloadNotConverged", "workload has not converged"
-		if wc != nil {
+		// Only mirror a condition written for the current generation: a stale
+		// one describes a rollout that no longer exists, and its reason must
+		// not leak into the summary.
+		if wc != nil && wc.ObservedGeneration == resource.Generation {
 			convergedReason, convergedMsg = wc.Reason, wc.Message
 		}
 		setSummaryCondition(resource, v1alpha1.StackResourceConverged, converged, convergedReason, convergedMsg)

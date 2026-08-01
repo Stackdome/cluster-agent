@@ -34,7 +34,6 @@ func (r *svcReconciler) reconcile(ctx context.Context, resource *v1alpha1.StackR
 	// Worker, Job, and CronJob workloads don't need a Service or Ingress.
 	switch resource.Spec.WorkloadType {
 	case v1alpha1.WorkloadTypeWorker, v1alpha1.WorkloadTypeJob, v1alpha1.WorkloadTypeCronJob:
-		reportStackResourceReady(resource)
 		return resultNil, nil
 	}
 
@@ -46,7 +45,6 @@ func (r *svcReconciler) reconcile(ctx context.Context, resource *v1alpha1.StackR
 	resource.Status.InternalAddress = &svc.Name
 
 	if !resource.Spec.HasExposedPort() {
-		reportStackResourceReady(resource)
 		return resultNil, nil
 	}
 
@@ -59,7 +57,6 @@ func (r *svcReconciler) reconcile(ctx context.Context, resource *v1alpha1.StackR
 	// An Ingress has no async readiness, so publish the public routes in this same pass.
 	resource.Status.ExternalAddress = buildExternalAddresses(resource, portFqdnMap)
 	setResourceCondition(resource, v1alpha1.StackResourceIngressReady, true, "IngressConfigured", "ingress routes configured for public ports")
-	reportStackResourceReady(resource)
 	return resultNil, nil
 }
 
@@ -68,7 +65,7 @@ func (r *svcReconciler) serviceNotReady(ctx context.Context, resource *v1alpha1.
 	if resource.Spec.HasExposedPort() {
 		setResourceCondition(resource, v1alpha1.StackResourceIngressReady, false, "IngressNotReady", message)
 	}
-	reportStackResourceNotReady(resource, "ServiceNotReady", message)
+	reportNotReady(ctx, "ServiceNotReady", message)
 	return resultRequeue, nil
 }
 

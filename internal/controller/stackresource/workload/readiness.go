@@ -227,12 +227,13 @@ func firstDialablePodIP(pods []corev1.Pod) (string, bool) {
 	return "", false
 }
 
-// Converged goes False with Available: "fully converged" next to "not
-// available" is a mixed signal. The chain keeps running; conditions carry the
-// verdict.
+// The workload is serving its primary port but a declared secondary port
+// stayed closed past the grace window. Terminal per revision.
+// WorkloadAvailable keeps the serving truth; the failure rides
+// WorkloadConverged and the Failed verdict, which derivation turns into
+// Phase=Failed / Stalled=True / Available=True("ServingButStalled").
 func (r *Reconciler) reportPortNotListening(ctx context.Context, resource *v1alpha1.StackResource) {
 	msg := resource.Status.LastFailureDetails[0].LastTerminationMessage
-	r.Status.SetCondition(resource, v1alpha1.StackResourceWorkloadAvailable, false, "PortNotListening", msg)
 	r.Status.SetCondition(resource, v1alpha1.StackResourceWorkloadConverged, false, "PortNotListening", msg)
-	r.Status.ReportNotReady(ctx, resource, "PortNotListening", msg)
+	r.Status.ReportFailed(ctx, resource, "PortNotListening", msg)
 }

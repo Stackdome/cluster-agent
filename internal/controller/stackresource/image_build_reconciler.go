@@ -74,7 +74,7 @@ func (r *imageBuildReconciler) reconcile(ctx context.Context, resource *v1alpha1
 
 	if imageBuildFailed(existingImageBuild) {
 		setResourceCondition(resource, v1alpha1.StackResourceBuildReady, false, "BuildFailed", "application build failed terminally")
-		reportStackResourceFailed(resource, "BuildFailed",
+		reportFailed(ctx, "BuildFailed",
 			fmt.Sprintf("ImageBuild %s reached terminal Failed phase", existingImageBuild.Name))
 		return resultStop, nil
 	}
@@ -83,7 +83,7 @@ func (r *imageBuildReconciler) reconcile(ctx context.Context, resource *v1alpha1
 		return resultNil, nil
 	}
 
-	reportStackResourceNotReady(resource, "ImageBuildInProgress", "Image build is still in progress")
+	reportNotReady(ctx, "ImageBuildInProgress", "Image build is still in progress")
 	return resultStop, nil
 }
 

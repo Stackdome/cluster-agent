@@ -30,62 +30,19 @@ func TestWorkloadReconciler(t *testing.T) {
 	RunSpecs(t, "Workload Reconciler Suite")
 }
 
-// testStatusReporter implements StatusReporter for unit tests, reproducing
-// the same status mutations as the real helpers in stackresource_controller.go.
+// testStatusReporter implements StatusReporter for unit tests exactly as
+// production does: verdicts go to the pass collector, domain conditions go on
+// the resource. Summary conditions (Available/Stalled/Converged/Phase) are
+// written only by deriveSummaryStatus, one package up — so workload tests
+// assert the verdict that was reported, not a summary the chain never wrote.
 type testStatusReporter struct{}
 
 func (testStatusReporter) ReportNotReady(ctx context.Context, r *v1alpha1.StackResource, reason, msg string) {
-	objectRevision, ok := r.Annotations[v1alpha1.RevisionAnnotation]
-	if ok {
-		r.Status.ObservedRevision = objectRevision
-	}
-	r.Status.ObservedGeneration = r.Generation
-	r.Status.Phase = v1alpha1.StackResourcePhasePending
-	meta.SetStatusCondition(&r.Status.Conditions, metav1.Condition{
-		Type:               string(v1alpha1.StackResourceStatusAvailable),
-		Status:             metav1.ConditionFalse,
-		ObservedGeneration: r.Generation,
-		Reason:             reason,
-		Message:            msg,
-	})
-	meta.SetStatusCondition(&r.Status.Conditions, metav1.Condition{
-		Type:               string(v1alpha1.StackResourceConverged),
-		Status:             metav1.ConditionFalse,
-		ObservedGeneration: r.Generation,
-		Reason:             reason,
-		Message:            msg,
-	})
-	r.Status.StatusHash = r.StatusHash()
+	controller.VerdictsFromContext(ctx).ReportNotReady(reason, msg)
 }
 
 func (testStatusReporter) ReportFailed(ctx context.Context, r *v1alpha1.StackResource, reason, msg string) {
-	r.Status.ObservedGeneration = r.Generation
-	if rev, ok := r.Annotations[v1alpha1.RevisionAnnotation]; ok {
-		r.Status.ObservedRevision = rev
-	}
-	r.Status.Phase = v1alpha1.StackResourcePhaseFailed
-	meta.SetStatusCondition(&r.Status.Conditions, metav1.Condition{
-		Type:               string(v1alpha1.StackResourceStatusAvailable),
-		Status:             metav1.ConditionFalse,
-		ObservedGeneration: r.Generation,
-		Reason:             reason,
-		Message:            msg,
-	})
-	meta.SetStatusCondition(&r.Status.Conditions, metav1.Condition{
-		Type:               string(v1alpha1.StackResourceStalled),
-		Status:             metav1.ConditionTrue,
-		ObservedGeneration: r.Generation,
-		Reason:             reason,
-		Message:            msg,
-	})
-	meta.SetStatusCondition(&r.Status.Conditions, metav1.Condition{
-		Type:               string(v1alpha1.StackResourceConverged),
-		Status:             metav1.ConditionFalse,
-		ObservedGeneration: r.Generation,
-		Reason:             reason,
-		Message:            msg,
-	})
-	r.Status.StatusHash = r.StatusHash()
+	controller.VerdictsFromContext(ctx).ReportFailed(reason, msg)
 }
 
 func (testStatusReporter) SetCondition(r *v1alpha1.StackResource, condType v1alpha1.StackResourceDomainCondition, ready bool, reason, msg string) {
@@ -100,6 +57,12 @@ func (testStatusReporter) SetCondition(r *v1alpha1.StackResource, condType v1alp
 		Reason:             reason,
 		Message:            msg,
 	})
+}
+
+// testCtx mirrors what Reconcile attaches in production: a fresh verdict
+// collector for the pass, so tests can inspect what the chain reported.
+func testCtx() (context.Context, *controller.VerdictCollector) {
+	return controller.ContextWithVerdicts(context.Background())
 }
 
 func newTestResource() *v1alpha1.StackResource {
@@ -362,6 +325,7 @@ var _ = Describe("workloadReconciler", func() {
 		reconciler   *Reconciler
 		resource     *v1alpha1.StackResource
 		ctx          context.Context
+		verdicts     *controller.VerdictCollector
 		scheme       *runtime.Scheme
 	)
 
@@ -370,7 +334,7 @@ var _ = Describe("workloadReconciler", func() {
 		mockClient = mocks.NewMockClient(mockCtrl)
 		mockUncached = mocks.NewMockClient(mockCtrl)
 		mockDepCheck = mocks.NewMockDependencyChecker(mockCtrl)
-		ctx = context.Background()
+		ctx, verdicts = testCtx()
 
 		scheme = runtime.NewScheme()
 		Expect(v1alpha1.AddToScheme(scheme)).To(Succeed())
@@ -419,7 +383,7 @@ var _ = Describe("workloadReconciler", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.ResultRequeueAfter).NotTo(BeNil())
 			Expect(*result.ResultRequeueAfter).To(Equal(DefaultRequeueTime))
-			Expect(resource.Status.Phase).To(Equal(v1alpha1.StackResourcePhasePending))
+			Expect(verdicts.NotReady()).NotTo(BeNil(), "a not-ready verdict is what derivation turns into Phase=Pending")
 		})
 
 		It("should requeue when volume mounts are not ready", func() {
@@ -433,7 +397,7 @@ var _ = Describe("workloadReconciler", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.ResultRequeueAfter).NotTo(BeNil())
 			Expect(*result.ResultRequeueAfter).To(Equal(DefaultRequeueTime))
-			Expect(resource.Status.Phase).To(Equal(v1alpha1.StackResourcePhasePending))
+			Expect(verdicts.NotReady()).NotTo(BeNil(), "a not-ready verdict is what derivation turns into Phase=Pending")
 		})
 	})
 
@@ -666,7 +630,7 @@ var _ = Describe("workloadReconciler", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.ResultRequeueAfter).NotTo(BeNil())
 			Expect(*result.ResultRequeueAfter).To(Equal(10 * time.Second))
-			Expect(resource.Status.Phase).To(Equal(v1alpha1.StackResourcePhasePending))
+			Expect(verdicts.NotReady()).NotTo(BeNil(), "a not-ready verdict is what derivation turns into Phase=Pending")
 		})
 
 		It("should capture crash details when pods are crashing", func() {
@@ -753,9 +717,8 @@ var _ = Describe("workloadReconciler", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result).To(Equal(controller.ResultStop))
 
-			cond := findCondition(resource.Status.Conditions, string(v1alpha1.StackResourceStatusAvailable))
-			Expect(cond).NotTo(BeNil())
-			Expect(cond.Reason).To(Equal("StackResourceDeploymentNotReady"))
+			Expect(verdicts.NotReady()).NotTo(BeNil())
+			Expect(verdicts.NotReady().Reason).To(Equal("StackResourceDeploymentNotReady"))
 		})
 	})
 

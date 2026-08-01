@@ -18,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"stackdome.io/cluster-agent/api/core/v1alpha1"
+	"stackdome.io/cluster-agent/internal/controller"
 	"stackdome.io/cluster-agent/internal/controller/mocks"
 )
 
@@ -472,7 +473,7 @@ var _ = Describe("buildExternalAddresses", func() {
 })
 
 var _ = Describe("address persistence", func() {
-	It("reportStackResourceNotReady should not clear addresses", func() {
+	It("a not-ready derivation should not clear addresses", func() {
 		resource := &v1alpha1.StackResource{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:       "my-app",
@@ -487,7 +488,9 @@ var _ = Describe("address persistence", func() {
 			},
 		}
 
-		reportStackResourceNotReady(resource, "DeploymentNotReady", "pods crashing")
+		verdicts := &controller.VerdictCollector{}
+		verdicts.ReportNotReady("DeploymentNotReady", "pods crashing")
+		deriveSummaryStatus(resource, verdicts)
 
 		Expect(resource.Status.Phase).To(Equal(v1alpha1.StackResourcePhasePending))
 		Expect(resource.Status.InternalAddress).NotTo(BeNil())
@@ -505,10 +508,11 @@ var _ = Describe("svcReconciler.reconcile (orchestration)", func() {
 		fakeClient client.Client
 		scheme     *runtime.Scheme
 		ctx        context.Context
+		verdicts   *controller.VerdictCollector
 	)
 
 	BeforeEach(func() {
-		ctx = context.Background()
+		ctx, verdicts = controller.ContextWithVerdicts(context.Background())
 		scheme = runtime.NewScheme()
 		Expect(v1alpha1.AddToScheme(scheme)).To(Succeed())
 		Expect(corev1.AddToScheme(scheme)).To(Succeed())
@@ -518,8 +522,11 @@ var _ = Describe("svcReconciler.reconcile (orchestration)", func() {
 		reconciler = &svcReconciler{Client: fakeClient, Scheme: scheme}
 	})
 
-	// availableStatus returns the status of the resource's Available condition, or "" if absent.
-	availableStatus := func(resource *v1alpha1.StackResource) metav1.ConditionStatus {
+	// The svc reconciler no longer writes summary conditions — it contributes
+	// domain conditions and verdicts, and Reconcile derives the summary once
+	// per pass. Derive here to assert what the pass would publish.
+	derivedAvailable := func(resource *v1alpha1.StackResource) metav1.ConditionStatus {
+		deriveSummaryStatus(resource, verdicts)
 		cond := findCondition(resource.Status.Conditions, string(v1alpha1.StackResourceStatusAvailable))
 		if cond == nil {
 			return ""
@@ -551,7 +558,7 @@ var _ = Describe("svcReconciler.reconcile (orchestration)", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(res).To(Equal(resultNil))
-		Expect(availableStatus(resource)).To(Equal(metav1.ConditionTrue))
+		Expect(derivedAvailable(resource)).To(Equal(metav1.ConditionTrue))
 		Expect(serviceExists()).To(BeFalse(), "Worker should not get a Service")
 	})
 
@@ -564,7 +571,7 @@ var _ = Describe("svcReconciler.reconcile (orchestration)", func() {
 		res, err := reconciler.reconcile(ctx, resource)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(res).To(Equal(resultNil))
-		Expect(availableStatus(resource)).To(Equal(metav1.ConditionTrue))
+		Expect(derivedAvailable(resource)).To(Equal(metav1.ConditionTrue))
 		Expect(serviceExists()).To(BeTrue())
 		Expect(resource.Status.InternalAddress).NotTo(BeNil())
 		Expect(*resource.Status.InternalAddress).To(Equal("my-app"))
@@ -573,7 +580,7 @@ var _ = Describe("svcReconciler.reconcile (orchestration)", func() {
 		res, err = reconciler.reconcile(ctx, resource)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(res).To(Equal(resultNil))
-		Expect(availableStatus(resource)).To(Equal(metav1.ConditionTrue))
+		Expect(derivedAvailable(resource)).To(Equal(metav1.ConditionTrue))
 	})
 
 	It("creates Service+Ingress and reports available in one pass (exposed port, no TLS)", func() {
@@ -583,7 +590,7 @@ var _ = Describe("svcReconciler.reconcile (orchestration)", func() {
 		res, err := reconciler.reconcile(ctx, resource)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(res).To(Equal(resultNil))
-		Expect(availableStatus(resource)).To(Equal(metav1.ConditionTrue))
+		Expect(derivedAvailable(resource)).To(Equal(metav1.ConditionTrue))
 
 		By("Service and Ingress both created in the same pass")
 		Expect(serviceExists()).To(BeTrue())
@@ -604,7 +611,7 @@ var _ = Describe("svcReconciler.reconcile (orchestration)", func() {
 		res, err = reconciler.reconcile(ctx, resource)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(res).To(Equal(resultNil))
-		Expect(availableStatus(resource)).To(Equal(metav1.ConditionTrue))
+		Expect(derivedAvailable(resource)).To(Equal(metav1.ConditionTrue))
 	})
 
 	It("creates a headless Service for a StatefulService", func() {
