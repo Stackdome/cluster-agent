@@ -191,7 +191,7 @@ var _ = Describe("reconcile with a ClusterRegistryRef destination", func() {
 	}
 
 	Context("when the registry is not Ready yet", func() {
-		It("requeues without error, creates no job, and reports no resolve failure", func() {
+		It("requeues without error, creates no job, and reports RegistryNotReady on Available", func() {
 			r := newReconciler(buildConfig, reg)
 
 			result, err := r.reconcile(context.Background(), buildConfig)
@@ -202,7 +202,10 @@ var _ = Describe("reconcile with a ClusterRegistryRef destination", func() {
 			Expect(r.Client.List(context.Background(), &jobs, client.InNamespace(ns))).To(Succeed())
 			Expect(jobs.Items).To(BeEmpty())
 
-			Expect(apimeta.FindStatusCondition(buildConfig.Status.Conditions, string(buildsv1alpha1.BuildAvailable))).To(BeNil())
+			available := apimeta.FindStatusCondition(buildConfig.Status.Conditions, string(buildsv1alpha1.BuildAvailable))
+			Expect(available).NotTo(BeNil())
+			Expect(available.Status).To(Equal(metav1.ConditionFalse))
+			Expect(available.Reason).To(Equal("RegistryNotReady"))
 		})
 	})
 
