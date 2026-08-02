@@ -91,7 +91,7 @@ func expectMiddlewareCreated(mockClient *mocks.MockClient) {
 			Expect(mw.GetNamespace()).To(Equal("test-ns"))
 			spec, _, _ := unstructured.NestedMap(mw.Object, "spec", "redirectScheme")
 			Expect(spec["scheme"]).To(Equal("https"))
-			Expect(spec["permanent"]).To(Equal(true))
+			Expect(spec["permanent"]).To(Equal(false))
 			return nil
 		})
 }
@@ -371,7 +371,7 @@ var _ = Describe("svcReconciler Ingress TLS", func() {
 			expectMiddlewareExistsWithSpec(mockClient, map[string]interface{}{
 				"redirectScheme": map[string]interface{}{
 					"scheme":    "https",
-					"permanent": true,
+					"permanent": false,
 				},
 			})
 
@@ -401,7 +401,7 @@ var _ = Describe("svcReconciler Ingress TLS", func() {
 			expectMiddlewareExistsWithSpec(mockClient, map[string]interface{}{
 				"redirectScheme": map[string]interface{}{
 					"scheme":    "http",
-					"permanent": false,
+					"permanent": true,
 				},
 			})
 
@@ -411,7 +411,7 @@ var _ = Describe("svcReconciler Ingress TLS", func() {
 					mw := obj.(*unstructured.Unstructured)
 					spec, _, _ := unstructured.NestedMap(mw.Object, "spec", "redirectScheme")
 					Expect(spec["scheme"]).To(Equal("https"))
-					Expect(spec["permanent"]).To(Equal(true))
+					Expect(spec["permanent"]).To(Equal(false))
 					return nil
 				})
 

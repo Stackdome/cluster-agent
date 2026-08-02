@@ -143,8 +143,12 @@ func buildRedirectMiddleware(namespace string) *unstructured.Unstructured {
 			},
 			"spec": map[string]interface{}{
 				"redirectScheme": map[string]interface{}{
-					"scheme":    "https",
-					"permanent": true,
+					"scheme": "https",
+					// 302, not 301: browsers cache a permanent redirect indefinitely, so a
+					// 301 outlives the certificate. If a cert later expires or renewal
+					// breaks, a cached 301 pins users on the dead HTTPS endpoint with no
+					// way back to a working HTTP one.
+					"permanent": false,
 				},
 			},
 		},
