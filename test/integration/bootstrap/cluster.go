@@ -18,6 +18,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	kindv1alpha4 "sigs.k8s.io/kind/pkg/apis/config/v1alpha4"
 
+	cmv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	cnpgv1 "github.com/cloudnative-pg/cloudnative-pg/api/v1"
 	barmancloudv1 "github.com/cloudnative-pg/plugin-barman-cloud/api/v1"
 	addonsv1alpha1 "stackdome.io/cluster-agent/api/addons/v1alpha1"
@@ -182,5 +183,6 @@ func schemeBuilder() k8sruntime.SchemeBuilder {
 		usersv1alpha1.AddToScheme,
 		cnpgv1.AddToScheme,
 		barmancloudv1.AddToScheme,
+		cmv1.AddToScheme,
 	}
 }

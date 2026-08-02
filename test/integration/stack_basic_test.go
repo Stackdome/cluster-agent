@@ -1,12 +1,14 @@
 package integration
 
 import (
+	cmv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	corev1alpha1 "stackdome.io/cluster-agent/api/core/v1alpha1"
@@ -386,6 +388,83 @@ var _ = Describe("Stack basics", func() {
 			Expect(sr.Status.ExternalAddress).To(HaveLen(1))
 			Expect(sr.Status.ExternalAddress[0].TargetPort).To(Equal(int32(80)))
 			Expect(sr.Status.ExternalAddress[0].Address).To(Equal("http://" + srName + ".example.com"))
+		})
+
+		AfterAll(func() { helpers.CleanupStack(ctx, c, stack) })
+	})
+
+	Context("TLS certificate issuance gating", Ordered, func() {
+		const issuerName = "integration-selfsigned"
+		var stack *corev1alpha1.Stack
+
+		BeforeAll(func() {
+			issuer := &cmv1.ClusterIssuer{
+				ObjectMeta: metav1.ObjectMeta{Name: issuerName},
+				Spec: cmv1.IssuerSpec{
+					IssuerConfig: cmv1.IssuerConfig{SelfSigned: &cmv1.SelfSignedIssuer{}},
+				},
+			}
+			Expect(client.IgnoreAlreadyExists(c.Create(ctx, issuer))).To(Succeed())
+
+			swr := fixtures.StackWithTLSPort("tls-stack", issuerName)
+			Expect(fixtures.CreateStackWithResources(ctx, c, swr)).To(Succeed())
+			stack = swr.Stack
+		})
+
+		It("should publish an https address and attach the redirect only after the certificate is issued", func() {
+			srName := stack.Spec.ResourceNames[0]
+			key := client.ObjectKey{Name: srName, Namespace: stack.Namespace}
+
+			sr, err := helpers.WaitForStackResourceTLSReady(ctx, c, key, readyTimeout)
+			Expect(err).NotTo(HaveOccurred())
+
+			cond := meta.FindStatusCondition(sr.Status.Conditions, string(corev1alpha1.StackResourceTLSConfigured))
+			Expect(cond.Reason).To(Equal("TLSReady"))
+
+			Expect(sr.Status.ExternalAddress).To(HaveLen(1))
+			Expect(sr.Status.ExternalAddress[0].Address).To(Equal("https://" + srName + ".example.com"))
+
+			ingress, err := helpers.GetIngressForResource(ctx, c, stack.Namespace, srName)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(ingress.Annotations).To(HaveKey("traefik.ingress.kubernetes.io/router.middlewares"))
+		})
+
+		AfterAll(func() {
+			helpers.CleanupStack(ctx, c, stack)
+			_ = c.Delete(ctx, &cmv1.ClusterIssuer{ObjectMeta: metav1.ObjectMeta{Name: issuerName}})
+		})
+	})
+
+	Context("TLS with an unresolvable ClusterIssuer", Ordered, func() {
+		var stack *corev1alpha1.Stack
+
+		BeforeAll(func() {
+			swr := fixtures.StackWithTLSPort("tls-noissuer-stack", "does-not-exist")
+			Expect(fixtures.CreateStackWithResources(ctx, c, swr)).To(Succeed())
+			stack = swr.Stack
+		})
+
+		It("should still become Available and stay reachable over http", func() {
+			srName := stack.Spec.ResourceNames[0]
+			key := client.ObjectKey{Name: srName, Namespace: stack.Namespace}
+
+			// The release must not be held hostage to a certificate that is never coming.
+			sr, err := helpers.WaitForStackResourceAvailable(ctx, c, key, readyTimeout)
+			Expect(err).NotTo(HaveOccurred())
+
+			cond := meta.FindStatusCondition(sr.Status.Conditions, string(corev1alpha1.StackResourceTLSConfigured))
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(cond.Reason).To(Equal("ClusterIssuerNotFound"))
+
+			Expect(sr.Status.ExternalAddress).To(HaveLen(1))
+			Expect(sr.Status.ExternalAddress[0].Address).To(Equal("http://" + srName + ".example.com"))
+
+			// No redirect: users would otherwise be pushed onto Traefik's self-signed
+			// default with no working certificate behind it.
+			ingress, err := helpers.GetIngressForResource(ctx, c, stack.Namespace, srName)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(ingress.Annotations).NotTo(HaveKey("traefik.ingress.kubernetes.io/router.middlewares"))
 		})
 
 		AfterAll(func() { helpers.CleanupStack(ctx, c, stack) })

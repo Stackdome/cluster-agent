@@ -42,6 +42,16 @@ func WaitForStackResourceAvailable(ctx context.Context, c client.Client, key cli
 	}, timeout)
 }
 
+// WaitForStackResourceTLSReady polls until the StackResource reports TLSConfigured=True.
+// That only happens once cert-manager has actually issued the certificate — the condition
+// no longer flips True merely because an issuer was found.
+func WaitForStackResourceTLSReady(ctx context.Context, c client.Client, key client.ObjectKey, timeout time.Duration) (*corev1alpha1.StackResource, error) {
+	return WaitFor(ctx, c, key, &corev1alpha1.StackResource{}, func(sr *corev1alpha1.StackResource) bool {
+		cond := meta.FindStatusCondition(sr.Status.Conditions, string(corev1alpha1.StackResourceTLSConfigured))
+		return cond != nil && cond.Status == metav1.ConditionTrue
+	}, timeout)
+}
+
 // WaitForStackDeleted polls until the Stack no longer exists.
 func WaitForStackDeleted(ctx context.Context, c client.Client, key client.ObjectKey, timeout time.Duration) error {
 	return WaitForDeleted(ctx, c, key, &corev1alpha1.Stack{}, timeout)
