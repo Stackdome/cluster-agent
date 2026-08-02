@@ -27,16 +27,36 @@ func Handler() http.Handler {
 	})
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
-		status, page := pageFor(strings.TrimPrefix(req.URL.Path, "/"))
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		status, body := pageFor(strings.TrimPrefix(req.URL.Path, "/"))
+		contentType := "text/html; charset=utf-8"
+		if !wantsHTML(req) {
+			contentType, body = "application/json; charset=utf-8", errorJSON(status)
+		}
+		w.Header().Set("Content-Type", contentType)
 		// These pages must never be cached: the same URL serves real content
 		// again as soon as the workload recovers.
 		w.Header().Set("Cache-Control", "no-store")
 		w.WriteHeader(status)
-		_, _ = w.Write([]byte(page))
+		_, _ = w.Write([]byte(body))
 	})
 
 	return mux
+}
+
+// wantsHTML reports whether the caller is a browser navigation. Traefik's errors
+// middleware copies the original request's headers onto the request it makes
+// here, so Accept still describes the real client. The match is on an explicit
+// text/html: axios sends "application/json, text/plain, */*", so matching */*
+// too would hand every API client an HTML body it cannot parse.
+func wantsHTML(req *http.Request) bool {
+	return strings.Contains(req.Header.Get("Accept"), "text/html")
+}
+
+// errorJSON renders the failure as the API error envelope the dashboard already
+// parses, so a 5xx Traefik swapped out reaches the UI in the shape a real API
+// error would. StatusText is ASCII from a fixed table, so %q is enough quoting.
+func errorJSON(status int) string {
+	return fmt.Sprintf(`{"type":"Error","reason":%q}`, http.StatusText(status))
 }
 
 // pageFor resolves a request path to a status code and page body. An
