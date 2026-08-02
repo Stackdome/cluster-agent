@@ -499,6 +499,43 @@ func StackWithPublicPorts(name string) *StackWithResources {
 	}
 }
 
+// StackWithTLSPort creates a Stack whose single resource exposes one public port with
+// TLS enabled, for exercising certificate issuance gating. The ClusterIssuer annotation
+// goes on the StackResource, which is where the svc reconciler reads it.
+func StackWithTLSPort(name, issuerName string) *StackWithResources {
+	resourceName := name + "-tls-app"
+	return &StackWithResources{
+		Stack: &corev1alpha1.Stack{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name,
+				Namespace: defaultNamespace,
+				Labels:    stackLabels(name),
+			},
+			Spec: corev1alpha1.StackSpec{
+				ResourceNames: []string{resourceName},
+			},
+		},
+		Resources: []*corev1alpha1.StackResource{
+			{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        resourceName,
+					Namespace:   defaultNamespace,
+					Labels:      resourceLabels(name, resourceName),
+					Annotations: map[string]string{corev1alpha1.ClusterIssuerAnnotation: issuerName},
+				},
+				Spec: corev1alpha1.StackResourceSpec{
+					ImageSpec: &corev1alpha1.ImageSpec{
+						Image: "nginx:1.25-alpine",
+					},
+					Ports: []corev1alpha1.Port{
+						{Name: "http", Number: 80, Protocol: "http", ExposeToPublic: true, FQDN: resourceName + ".example.com", TLS: true},
+					},
+				},
+			},
+		},
+	}
+}
+
 // StackWithNoPorts creates a Stack with a single resource that has no ports.
 func StackWithNoPorts(name string) *StackWithResources {
 	resourceName := name + "-noport"
