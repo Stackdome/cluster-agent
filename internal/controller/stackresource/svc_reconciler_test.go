@@ -2,14 +2,17 @@ package stackresource
 
 import (
 	"context"
+	"time"
 
 	cmv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"go.uber.org/mock/gomock"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -20,6 +23,7 @@ import (
 	"stackdome.io/cluster-agent/api/core/v1alpha1"
 	"stackdome.io/cluster-agent/internal/controller"
 	"stackdome.io/cluster-agent/internal/controller/mocks"
+	"stackdome.io/cluster-agent/pkg/ingresstls"
 )
 
 func newSvcTestResource(ports []v1alpha1.Port, annotations map[string]string) *v1alpha1.StackResource {
@@ -49,6 +53,33 @@ func expectClusterIssuerGet(mockClient *mocks.MockClient, name string, found boo
 		call.Return(nil)
 	} else {
 		call.Return(apierrors.NewNotFound(schema.GroupResource{Group: "cert-manager.io", Resource: "clusterissuers"}, name))
+	}
+}
+
+// expectCertificateGet stubs the lookup of the Certificate that cert-manager's ingress-shim
+// creates for the resource's Ingress. A nil cert stubs a NotFound.
+func expectCertificateGet(mockClient *mocks.MockClient, cert *cmv1.Certificate) {
+	call := mockClient.EXPECT().
+		Get(gomock.Any(), client.ObjectKey{Name: "my-app-tls", Namespace: "test-ns"}, gomock.AssignableToTypeOf(&cmv1.Certificate{}))
+	if cert == nil {
+		call.Return(apierrors.NewNotFound(schema.GroupResource{Group: "cert-manager.io", Resource: "certificates"}, "my-app-tls"))
+		return
+	}
+	call.DoAndReturn(func(_ context.Context, _ client.ObjectKey, obj client.Object, _ ...client.GetOption) error {
+		*obj.(*cmv1.Certificate) = *cert
+		return nil
+	})
+}
+
+func readyCertificate() *cmv1.Certificate {
+	return &cmv1.Certificate{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app-tls", Namespace: "test-ns"},
+		Status: cmv1.CertificateStatus{
+			Conditions: []cmv1.CertificateCondition{{
+				Type:   cmv1.CertificateConditionReady,
+				Status: cmmeta.ConditionTrue,
+			}},
+		},
 	}
 }
 
@@ -143,6 +174,7 @@ var _ = Describe("svcReconciler Ingress TLS", func() {
 			)
 
 			expectClusterIssuerGet(mockClient, "letsencrypt-prod", true)
+			expectCertificateGet(mockClient, readyCertificate())
 			expectIngressNotFound(mockClient)
 
 			mockClient.EXPECT().
@@ -159,7 +191,7 @@ var _ = Describe("svcReconciler Ingress TLS", func() {
 				})
 			expectMiddlewareCreated(mockClient)
 
-			portMap, err := reconciler.reconcileIngress(ctx, resource, svc)
+			portMap, _, err := reconciler.reconcileIngress(ctx, resource, svc)
 			Expect(err).NotTo(HaveOccurred())
 			// reconcileIngress returns the port→FQDN map on create too (no requeue).
 			Expect(portMap).To(HaveKeyWithValue(8080, "app.example.com"))
@@ -191,7 +223,7 @@ var _ = Describe("svcReconciler Ingress TLS", func() {
 					return nil
 				})
 
-			_, err := reconciler.reconcileIngress(ctx, resource, svc)
+			_, _, err := reconciler.reconcileIngress(ctx, resource, svc)
 			Expect(err).NotTo(HaveOccurred())
 		})
 	})
@@ -218,7 +250,7 @@ var _ = Describe("svcReconciler Ingress TLS", func() {
 					return nil
 				})
 
-			_, err := reconciler.reconcileIngress(ctx, resource, svc)
+			_, _, err := reconciler.reconcileIngress(ctx, resource, svc)
 			Expect(err).NotTo(HaveOccurred())
 			cond := findCondition(resource.Status.Conditions, string(v1alpha1.StackResourceTLSConfigured))
 			Expect(cond).NotTo(BeNil())
@@ -252,7 +284,7 @@ var _ = Describe("svcReconciler Ingress TLS", func() {
 					return nil
 				})
 
-			_, err := reconciler.reconcileIngress(ctx, resource, svc)
+			_, _, err := reconciler.reconcileIngress(ctx, resource, svc)
 			Expect(err).NotTo(HaveOccurred())
 			cond := findCondition(resource.Status.Conditions, string(v1alpha1.StackResourceTLSConfigured))
 			Expect(cond).NotTo(BeNil())
@@ -275,6 +307,7 @@ var _ = Describe("svcReconciler Ingress TLS", func() {
 			)
 
 			expectClusterIssuerGet(mockClient, "letsencrypt-prod", true)
+			expectCertificateGet(mockClient, readyCertificate())
 			expectIngressNotFound(mockClient)
 
 			mockClient.EXPECT().
@@ -294,7 +327,7 @@ var _ = Describe("svcReconciler Ingress TLS", func() {
 				})
 			expectMiddlewareCreated(mockClient)
 
-			_, err := reconciler.reconcileIngress(ctx, resource, svc)
+			_, _, err := reconciler.reconcileIngress(ctx, resource, svc)
 			Expect(err).NotTo(HaveOccurred())
 			cond := findCondition(resource.Status.Conditions, string(v1alpha1.StackResourceTLSConfigured))
 			Expect(cond).NotTo(BeNil())
@@ -314,6 +347,7 @@ var _ = Describe("svcReconciler Ingress TLS", func() {
 			)
 
 			expectClusterIssuerGet(mockClient, "letsencrypt-prod", true)
+			expectCertificateGet(mockClient, readyCertificate())
 
 			existingIngress := &networkingv1.Ingress{
 				ObjectMeta: metav1.ObjectMeta{
@@ -345,7 +379,7 @@ var _ = Describe("svcReconciler Ingress TLS", func() {
 				})
 			expectMiddlewareCreated(mockClient)
 
-			_, err := reconciler.reconcileIngress(ctx, resource, svc)
+			_, _, err := reconciler.reconcileIngress(ctx, resource, svc)
 			Expect(err).NotTo(HaveOccurred())
 		})
 	})
@@ -362,6 +396,7 @@ var _ = Describe("svcReconciler Ingress TLS", func() {
 			)
 
 			expectClusterIssuerGet(mockClient, "letsencrypt-prod", true)
+			expectCertificateGet(mockClient, readyCertificate())
 			expectIngressNotFound(mockClient)
 
 			mockClient.EXPECT().
@@ -375,7 +410,7 @@ var _ = Describe("svcReconciler Ingress TLS", func() {
 				},
 			})
 
-			_, err := reconciler.reconcileIngress(ctx, resource, svc)
+			_, _, err := reconciler.reconcileIngress(ctx, resource, svc)
 			Expect(err).NotTo(HaveOccurred())
 		})
 	})
@@ -392,6 +427,7 @@ var _ = Describe("svcReconciler Ingress TLS", func() {
 			)
 
 			expectClusterIssuerGet(mockClient, "letsencrypt-prod", true)
+			expectCertificateGet(mockClient, readyCertificate())
 			expectIngressNotFound(mockClient)
 
 			mockClient.EXPECT().
@@ -415,7 +451,7 @@ var _ = Describe("svcReconciler Ingress TLS", func() {
 					return nil
 				})
 
-			_, err := reconciler.reconcileIngress(ctx, resource, svc)
+			_, _, err := reconciler.reconcileIngress(ctx, resource, svc)
 			Expect(err).NotTo(HaveOccurred())
 		})
 	})
@@ -430,13 +466,13 @@ var _ = Describe("buildExternalAddresses", func() {
 				},
 			},
 		}
-		addresses := buildExternalAddresses(resource, map[int]string{8080: "app.local.dev"})
+		addresses := buildExternalAddresses(resource, map[int]string{8080: "app.local.dev"}, certIssuanceStageIssuing)
 		Expect(addresses).To(HaveLen(1))
 		Expect(addresses[0].Address).To(Equal("http://app.local.dev"))
 		Expect(addresses[0].TargetPort).To(Equal(int32(8080)))
 	})
 
-	It("should prefix https:// when TLS is true", func() {
+	It("should prefix https:// when TLS is true and the certificate is ready", func() {
 		resource := &v1alpha1.StackResource{
 			Spec: v1alpha1.StackResourceSpec{
 				Ports: []v1alpha1.Port{
@@ -444,9 +480,33 @@ var _ = Describe("buildExternalAddresses", func() {
 				},
 			},
 		}
-		addresses := buildExternalAddresses(resource, map[int]string{443: "app.example.com"})
+		addresses := buildExternalAddresses(resource, map[int]string{443: "app.example.com"}, certIssuanceStageReady)
 		Expect(addresses).To(HaveLen(1))
 		Expect(addresses[0].Address).To(Equal("https://app.example.com"))
+	})
+
+	It("should publish nothing for a TLS port while the certificate is still issuing", func() {
+		resource := &v1alpha1.StackResource{
+			Spec: v1alpha1.StackResourceSpec{
+				Ports: []v1alpha1.Port{
+					{Name: "http", Number: 443, Protocol: "http", ExposeToPublic: true, FQDN: "app.example.com", TLS: true},
+				},
+			},
+		}
+		Expect(buildExternalAddresses(resource, map[int]string{443: "app.example.com"}, certIssuanceStageIssuing)).To(BeEmpty())
+	})
+
+	It("should fall back to http:// when no certificate is coming, so the site stays reachable", func() {
+		resource := &v1alpha1.StackResource{
+			Spec: v1alpha1.StackResourceSpec{
+				Ports: []v1alpha1.Port{
+					{Name: "http", Number: 443, Protocol: "http", ExposeToPublic: true, FQDN: "app.example.com", TLS: true},
+				},
+			},
+		}
+		addresses := buildExternalAddresses(resource, map[int]string{443: "app.example.com"}, certIssuanceStageUnavailable)
+		Expect(addresses).To(HaveLen(1))
+		Expect(addresses[0].Address).To(Equal("http://app.example.com"))
 	})
 
 	It("should handle mixed TLS and non-TLS ports", func() {
@@ -461,7 +521,7 @@ var _ = Describe("buildExternalAddresses", func() {
 		addresses := buildExternalAddresses(resource, map[int]string{
 			8080: "app.local.dev",
 			443:  "app.example.com",
-		})
+		}, certIssuanceStageReady)
 		Expect(addresses).To(HaveLen(2))
 		addrMap := map[string]string{}
 		for _, a := range addresses {
@@ -469,6 +529,170 @@ var _ = Describe("buildExternalAddresses", func() {
 		}
 		Expect(addrMap).To(HaveKey("http://app.local.dev"))
 		Expect(addrMap).To(HaveKey("https://app.example.com"))
+	})
+})
+
+var _ = Describe("svcReconciler redirect gating", func() {
+	var (
+		mockCtrl   *gomock.Controller
+		mockClient *mocks.MockClient
+		reconciler *svcReconciler
+		ctx        context.Context
+		scheme     *runtime.Scheme
+		svc        *corev1.Service
+	)
+
+	BeforeEach(func() {
+		mockCtrl = gomock.NewController(GinkgoT())
+		mockClient = mocks.NewMockClient(mockCtrl)
+		ctx = context.Background()
+
+		scheme = runtime.NewScheme()
+		Expect(v1alpha1.AddToScheme(scheme)).To(Succeed())
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
+		Expect(networkingv1.AddToScheme(scheme)).To(Succeed())
+		Expect(cmv1.AddToScheme(scheme)).To(Succeed())
+
+		reconciler = &svcReconciler{Client: mockClient, Scheme: scheme}
+		svc = &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "my-app", Namespace: "test-ns"}}
+	})
+
+	AfterEach(func() {
+		mockCtrl.Finish()
+	})
+
+	tlsResource := func() *v1alpha1.StackResource {
+		return newSvcTestResource(
+			[]v1alpha1.Port{
+				{Name: "http", Number: 8080, Protocol: "http", ExposeToPublic: true, FQDN: "app.example.com", TLS: true},
+			},
+			map[string]string{v1alpha1.ClusterIssuerAnnotation: "letsencrypt-prod"},
+		)
+	}
+
+	tlsCondition := func(resource *v1alpha1.StackResource) *metav1.Condition {
+		return meta.FindStatusCondition(resource.Status.Conditions, string(v1alpha1.StackResourceTLSConfigured))
+	}
+
+	It("omits the Traefik middleware annotation while the certificate is issuing", func() {
+		expectIngressNotFound(mockClient)
+		expectClusterIssuerGet(mockClient, "letsencrypt-prod", true)
+		expectCertificateGet(mockClient, nil)
+
+		mockClient.EXPECT().
+			Create(gomock.Any(), gomock.AssignableToTypeOf(&networkingv1.Ingress{})).
+			DoAndReturn(func(_ context.Context, obj client.Object, _ ...client.CreateOption) error {
+				ingress := obj.(*networkingv1.Ingress)
+				// The TLS block must still go on: it is what makes cert-manager's
+				// ingress-shim create the Certificate at all.
+				Expect(ingress.Spec.TLS).To(HaveLen(1))
+				Expect(ingress.Annotations).To(HaveKey(ingresstls.CertManagerClusterIssuerAnnotation))
+				Expect(ingress.Annotations).NotTo(HaveKey(ingresstls.TraefikMiddlewaresAnnotation))
+				return nil
+			})
+		expectMiddlewareCreated(mockClient)
+
+		resource := tlsResource()
+		_, certState, err := reconciler.reconcileIngress(ctx, resource, svc)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(certState.Stage).To(Equal(certIssuanceStageIssuing))
+
+		cond := tlsCondition(resource)
+		Expect(cond).NotTo(BeNil())
+		Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+		Expect(cond.Reason).To(Equal("CertificateIssuing"))
+	})
+
+	It("adds the Traefik middleware annotation once the certificate is ready", func() {
+		expectIngressNotFound(mockClient)
+		expectClusterIssuerGet(mockClient, "letsencrypt-prod", true)
+		expectCertificateGet(mockClient, readyCertificate())
+
+		mockClient.EXPECT().
+			Create(gomock.Any(), gomock.AssignableToTypeOf(&networkingv1.Ingress{})).
+			DoAndReturn(func(_ context.Context, obj client.Object, _ ...client.CreateOption) error {
+				ingress := obj.(*networkingv1.Ingress)
+				Expect(ingress.Annotations).To(HaveKey(ingresstls.TraefikMiddlewaresAnnotation))
+				return nil
+			})
+		expectMiddlewareCreated(mockClient)
+
+		resource := tlsResource()
+		_, certState, err := reconciler.reconcileIngress(ctx, resource, svc)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(certState.Stage).To(Equal(certIssuanceStageReady))
+
+		cond := tlsCondition(resource)
+		Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+		Expect(cond.Reason).To(Equal("TLSReady"))
+	})
+
+	It("strips a stale redirect annotation when the grace period elapses", func() {
+		stale := &networkingv1.Ingress{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "my-app-http-proxy",
+				Namespace: "test-ns",
+				Annotations: map[string]string{
+					ingresstls.CertManagerClusterIssuerAnnotation: "letsencrypt-prod",
+					ingresstls.TraefikMiddlewaresAnnotation:       "test-ns-redirect-https@kubernetescrd",
+				},
+			},
+		}
+		expectClusterIssuerGet(mockClient, "letsencrypt-prod", true)
+		expectCertificateGet(mockClient, nil)
+		mockClient.EXPECT().
+			Get(gomock.Any(), client.ObjectKey{Name: "my-app-http-proxy", Namespace: "test-ns"}, gomock.AssignableToTypeOf(&networkingv1.Ingress{})).
+			DoAndReturn(func(_ context.Context, _ client.ObjectKey, obj client.Object, _ ...client.GetOption) error {
+				*obj.(*networkingv1.Ingress) = *stale
+				return nil
+			})
+
+		mockClient.EXPECT().
+			Update(gomock.Any(), gomock.AssignableToTypeOf(&networkingv1.Ingress{})).
+			DoAndReturn(func(_ context.Context, obj client.Object, _ ...client.UpdateOption) error {
+				ingress := obj.(*networkingv1.Ingress)
+				Expect(ingress.Annotations).NotTo(HaveKey(ingresstls.TraefikMiddlewaresAnnotation))
+				return nil
+			})
+		expectMiddlewareCreated(mockClient)
+
+		// The grace clock is TLSConfigured's LastTransitionTime, so an old pending
+		// condition is what puts this resource past the deadline.
+		resource := tlsResource()
+		resource.Status.Conditions = []metav1.Condition{{
+			Type:               string(v1alpha1.StackResourceTLSConfigured),
+			Status:             metav1.ConditionFalse,
+			Reason:             "CertificateIssuing",
+			LastTransitionTime: metav1.NewTime(time.Now().Add(-2 * certGracePeriod)),
+		}}
+
+		_, certState, err := reconciler.reconcileIngress(ctx, resource, svc)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(certState.Stage).To(Equal(certIssuanceStageUnavailable))
+		Expect(tlsCondition(resource).Reason).To(Equal("CertificateTimedOut"))
+	})
+})
+
+var _ = Describe("certificateToStackResource", func() {
+	It("maps a <name>-tls Certificate back to the StackResource <name>", func() {
+		cert := &cmv1.Certificate{
+			ObjectMeta: metav1.ObjectMeta{Name: "my-app-tls", Namespace: "test-ns"},
+		}
+		requests := certificateToStackResource(context.Background(), cert)
+		Expect(requests).To(HaveLen(1))
+		Expect(requests[0].Name).To(Equal("my-app"))
+		Expect(requests[0].Namespace).To(Equal("test-ns"))
+	})
+
+	It("ignores a Certificate that does not follow the naming rule", func() {
+		cert := &cmv1.Certificate{
+			ObjectMeta: metav1.ObjectMeta{Name: "some-other-cert", Namespace: "test-ns"},
+		}
+		Expect(certificateToStackResource(context.Background(), cert)).To(BeEmpty())
+	})
+
+	It("ignores an object that is not a Certificate", func() {
+		Expect(certificateToStackResource(context.Background(), &corev1.Service{})).To(BeEmpty())
 	})
 })
 

@@ -48,19 +48,33 @@ func (r *svcReconciler) reconcile(ctx context.Context, resource *v1alpha1.StackR
 		return resultNil, nil
 	}
 
-	portFqdnMap, err := r.reconcileIngress(ctx, resource, svc)
+	portFqdnMap, certState, err := r.reconcileIngress(ctx, resource, svc)
 	if err != nil {
 		return resultNil, err
 	}
 
 	// The resource has an exposed port (checked above) and the Ingress is now reconciled.
 	// An Ingress has no async readiness, so publish the public routes in this same pass.
-	resource.Status.ExternalAddress = buildExternalAddresses(resource, portFqdnMap)
+	resource.Status.ExternalAddress = buildExternalAddresses(resource, portFqdnMap, certState.Stage)
 	setResourceCondition(resource, v1alpha1.StackResourceIngressReady, true, "IngressConfigured", "ingress routes configured for public ports")
+
+	// The Certificate watch fires on issuance, but the silent-stall case produces no
+	// Certificate event at all — nothing would wake the reconciler to notice the grace
+	// period expired. Schedule that pass explicitly. A deferred requeue does not stop the
+	// sub-reconciler chain, so the workload still reconciles normally.
+	if certState.Stage == certIssuanceStageIssuing && certState.RetryAfter > 0 {
+		return resultDeferredRequeue(certState.RetryAfter), nil
+	}
 	return resultNil, nil
 }
 
-func buildExternalAddresses(resource *v1alpha1.StackResource, portFqdnMap map[int]string) []v1alpha1.ExternalAddress {
+// buildExternalAddresses publishes the public addresses for exposed ports. A port without
+// TLS publishes http:// immediately. A port with TLS publishes nothing while the certificate
+// is still being issued — handing a user an https:// URL that serves Traefik's self-signed
+// default is what poisons their browser's security state for the origin. Once issuance
+// terminally fails or times out the port falls back to http://, so the site stays reachable
+// rather than being permanently unlinkable.
+func buildExternalAddresses(resource *v1alpha1.StackResource, portFqdnMap map[int]string, stage certIssuanceStage) []v1alpha1.ExternalAddress {
 	tlsPorts := make(map[int32]bool, len(resource.Spec.Ports))
 	for _, p := range resource.Spec.Ports {
 		if p.TLS {
@@ -71,7 +85,12 @@ func buildExternalAddresses(resource *v1alpha1.StackResource, portFqdnMap map[in
 	for port, fqdn := range portFqdnMap {
 		scheme := "http://"
 		if tlsPorts[int32(port)] {
-			scheme = "https://"
+			switch stage {
+			case certIssuanceStageReady:
+				scheme = "https://"
+			case certIssuanceStageIssuing:
+				continue
+			}
 		}
 		addresses = append(addresses, v1alpha1.ExternalAddress{
 			TargetPort: int32(port),
@@ -92,48 +111,75 @@ func (r *svcReconciler) reconcileIngress(
 	ctx context.Context,
 	resource *v1alpha1.StackResource,
 	svc *corev1.Service,
-) (map[int]string, error) {
+) (map[int]string, certStatus, error) {
 	portFqdnMap, tlsHosts := collectExposedPorts(resource)
-	annotations, tls := r.resolveIngressTLS(ctx, resource, tlsHosts)
+
+	annotations, tls, status, err := r.resolveIngressTLS(ctx, resource, tlsHosts)
+	if err != nil {
+		return nil, certStatus{}, err
+	}
 
 	desired := buildDesiredIngress(resource, buildIngressRules(portFqdnMap, svc.Name), annotations, tls)
 	if err := controllerutil.SetControllerReference(resource, desired, r.Scheme); err != nil {
-		return nil, err
+		return nil, certStatus{}, err
 	}
 
 	if err := r.applyIngress(ctx, desired, annotations); err != nil {
-		return nil, err
+		return nil, certStatus{}, err
 	}
 
 	if len(tls) > 0 {
 		if err := ingresstls.EnsureRedirectMiddleware(ctx, r.Client, resource.Namespace); err != nil {
-			return nil, err
+			return nil, certStatus{}, err
 		}
 	}
-	r.setTLSConfiguredIfEnabled(resource, annotations)
+	r.setTLSConfiguredIfEnabled(resource, annotations, status)
 
-	return portFqdnMap, nil
+	return portFqdnMap, status, nil
 }
 
-// resolveIngressTLS returns the cert-manager/Traefik annotations and TLS blocks for the
-// Ingress. It returns empty annotations and no TLS when no port requests TLS, or when a
-// port requests TLS but the ClusterIssuer cannot be resolved (recording the reason on the
-// resource's TLS condition).
+// resolveIngressTLS returns the cert-manager/Traefik annotations, the TLS blocks, and the
+// certificate stage for the Ingress. It returns empty annotations and no TLS when no port
+// requests TLS, or when a port requests TLS but the ClusterIssuer cannot be resolved
+// (recording the reason on the resource's TLS condition).
+//
+// The TLS block goes on as soon as the issuer resolves, because cert-manager's ingress-shim
+// only creates a Certificate in response to it. The Traefik redirect annotation does not:
+// while there is no valid certificate Traefik serves its self-signed default, and a user
+// redirected onto that endpoint who clicks through the browser warning has that security
+// state pinned for their whole profile. Withholding the redirect keeps them on working HTTP
+// until HTTPS is genuinely ready.
 func (r *svcReconciler) resolveIngressTLS(
 	ctx context.Context,
 	resource *v1alpha1.StackResource,
 	tlsHosts []string,
-) (map[string]string, []networkingv1.IngressTLS) {
+) (map[string]string, []networkingv1.IngressTLS, certStatus, error) {
 	if len(tlsHosts) == 0 {
-		return map[string]string{}, nil
+		return map[string]string{}, nil, certStatus{}, nil
 	}
 	logger := controller.LoggerFromContext(ctx)
 	issuerName, ok, reason, message := ingresstls.ResolveClusterIssuer(ctx, r.Client, logger, resource.Annotations)
 	if !ok {
 		setTLSCondition(resource, v1.ConditionFalse, reason, message)
-		return map[string]string{}, nil
+		// No issuer means no certificate is ever coming. Treat it as terminal so the
+		// address still publishes over HTTP rather than vanishing forever.
+		return map[string]string{}, nil, certStatus{Stage: certIssuanceStageUnavailable, Reason: reason, Message: message}, nil
 	}
-	return ingresstls.BuildTLSConfig(issuerName, tlsHosts, resource.Namespace, fmt.Sprintf("%s-tls", resource.Name))
+
+	status, err := r.certificateStatus(ctx, resource)
+	if err != nil {
+		return nil, nil, certStatus{}, err
+	}
+
+	annotations, tls := ingresstls.BuildTLSConfig(issuerName, tlsHosts, resource.Namespace, certificateNameForResource(resource.Name))
+	if status.Stage != certIssuanceStageReady {
+		// BuildTLSConfig's signature stays put so the objectstorage caller is untouched;
+		// the redirect is stripped here instead. The key is in ingresstls.ManagedAnnotations,
+		// so SyncManagedAnnotations removes it from an existing Ingress when it is absent
+		// from the desired map.
+		delete(annotations, ingresstls.TraefikMiddlewaresAnnotation)
+	}
+	return annotations, tls, status, nil
 }
 
 // buildDesiredIngress constructs the desired Ingress object. It is pure: all cluster
@@ -180,12 +226,18 @@ func (r *svcReconciler) applyIngress(
 	return nil
 }
 
-func (r *svcReconciler) setTLSConfiguredIfEnabled(resource *v1alpha1.StackResource, annotations map[string]string) {
-	issuerName := annotations[ingresstls.CertManagerClusterIssuerAnnotation]
-	if issuerName != "" {
-		setTLSCondition(resource, v1.ConditionTrue, "TLSConfigured",
-			fmt.Sprintf("Using ClusterIssuer %q", issuerName))
+// setTLSConfiguredIfEnabled writes TLSConfigured from the certificate stage. The condition
+// is True only once a certificate has actually been issued — not merely when an issuer was
+// found and the annotations were applied.
+func (r *svcReconciler) setTLSConfiguredIfEnabled(resource *v1alpha1.StackResource, annotations map[string]string, status certStatus) {
+	if annotations[ingresstls.CertManagerClusterIssuerAnnotation] == "" {
+		return
 	}
+	condStatus := v1.ConditionFalse
+	if status.Stage == certIssuanceStageReady {
+		condStatus = v1.ConditionTrue
+	}
+	setTLSCondition(resource, condStatus, status.Reason, status.Message)
 }
 
 // --- Service reconciliation ---

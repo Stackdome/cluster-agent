@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	cmv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -267,6 +268,7 @@ func (r *StackResourceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&buildsv1alpha1.ImageBuild{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &v1alpha1.StackResource{})).
 		Watches(&corev1.Service{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &v1alpha1.StackResource{})).
 		Watches(&networkingv1.Ingress{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &v1alpha1.StackResource{})).
+		Watches(&cmv1.Certificate{}, handler.EnqueueRequestsFromMapFunc(certificateToStackResource)).
 		Watches(&appsv1.Deployment{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &v1alpha1.StackResource{})).
 		Watches(&appsv1.StatefulSet{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &v1alpha1.StackResource{})).
 		Watches(&batchv1.Job{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &v1alpha1.StackResource{})).
