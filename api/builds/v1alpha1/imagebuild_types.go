@@ -186,10 +186,10 @@ func ImageBuildName(resourceName string, buildSpec *corev1alpha1.StackResourceBu
 	return name + "-" + buildInputsHash(buildSpec)
 }
 
-func buildInputsHash(buildSpec *corev1alpha1.StackResourceBuildSpec) string {
-	raw, err := json.Marshal(buildSpec)
+func buildInputsHash(inputs any) string {
+	raw, err := json.Marshal(inputs)
 	if err != nil {
-		raw = []byte(fmt.Sprintf("%#v", buildSpec))
+		raw = []byte(fmt.Sprintf("%#v", inputs))
 	}
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])[:buildInputsHashLen]
@@ -197,28 +197,26 @@ func buildInputsHash(buildSpec *corev1alpha1.StackResourceBuildSpec) string {
 
 const (
 	buildJobSuffix       = "-build"
-	shortRevisionLen     = 8
 	maxLabelValueLen     = 63
-	maxResourceNameInJob = maxLabelValueLen - shortRevisionLen - len(buildJobSuffix) - 1 // 48
+	maxResourceNameInJob = maxLabelValueLen - buildInputsHashLen - len(buildJobSuffix) - 1 // 48
 )
 
-func BuildJobName(resourceName string, sourceRevision string) string {
-	cleanName := SanitizeDNSLabel(resourceName, "app")
+// BuildJobName derives the build Job name from every spec input that changes the
+// produced image — source revision, Dockerfile path, context path, repository and
+// build args — so a spec change gets its own Job instead of adopting a completed
+// one from an earlier build.
+func (w *ImageBuild) BuildJobName() string {
+	cleanName := SanitizeDNSLabel(w.Spec.ResourceName, "app")
 
 	if len(cleanName) > maxResourceNameInJob {
 		cleanName = cleanName[:maxResourceNameInJob]
 		cleanName = strings.TrimSuffix(cleanName, "-")
 	}
 
-	var cleanRev string
-	if sourceRevision == "" {
-		cleanRev = "rev"
-	} else {
-		hash := sha256.Sum256([]byte(sourceRevision))
-		cleanRev = fmt.Sprintf("%x", hash)[:shortRevisionLen]
-	}
+	inputs := w.Spec
+	inputs.Cancelled = false // cancelling deletes the Job; not a build input
 
-	return fmt.Sprintf("%s-%s%s", cleanName, cleanRev, buildJobSuffix)
+	return fmt.Sprintf("%s-%s%s", cleanName, buildInputsHash(inputs), buildJobSuffix)
 }
 
 func (w *ImageBuild) ShortBuildSrcRevisionFromStatus() string {

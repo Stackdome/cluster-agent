@@ -263,7 +263,7 @@ func (r *ImageBuildReconciler) reconcileImageBuildWithVolumeSource(ctx context.C
 	}
 
 	sourceRevision := buildConfig.Spec.SourceRevision.GetSourceRevisionString()
-	jobName := buildsv1alpha1.BuildJobName(buildConfig.Spec.ResourceName, sourceRevision)
+	jobName := buildConfig.BuildJobName()
 	buildSource := &imagebuilder.Source{
 		Volume: &imagebuilder.VolumeSource{
 			PvcName: volumeRef.Status.PvcName,
@@ -334,7 +334,7 @@ func (r *ImageBuildReconciler) reconcileImageBuildWithGitSource(ctx context.Cont
 	}
 
 	sourceRevision := buildConfig.Spec.SourceRevision.GetSourceRevisionString()
-	jobName := buildsv1alpha1.BuildJobName(buildConfig.Spec.ResourceName, sourceRevision)
+	jobName := buildConfig.BuildJobName()
 	buildSource := &imagebuilder.Source{
 		GitRepo: &imagebuilder.GitRepoBuildSource{
 			Repo:     buildConfig.Spec.BuildContext.ContextSource.Git.DeepCopy(),

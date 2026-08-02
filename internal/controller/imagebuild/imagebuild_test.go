@@ -224,7 +224,7 @@ var _ = Describe("reconcile with a ClusterRegistryRef destination", func() {
 			Expect(result.RequeueAfter).To(BeZero())
 
 			job := &batchv1.Job{}
-			jobName := buildsv1alpha1.BuildJobName(resourceName, commit)
+			jobName := buildConfig.BuildJobName()
 			Expect(r.Client.Get(context.Background(), types.NamespacedName{Name: jobName, Namespace: ns}, job)).To(Succeed())
 		})
 	})
