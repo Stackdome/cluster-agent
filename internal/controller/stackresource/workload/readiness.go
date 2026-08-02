@@ -8,6 +8,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"stackdome.io/cluster-agent/api/core/v1alpha1"
@@ -96,17 +97,26 @@ func (r *Reconciler) verifyServingPorts(ctx context.Context, resource *v1alpha1.
 		}
 	}
 	if result.AllOpen() {
-		resource.Status.PortCheck = nil
+		resource.Status.PortCheck = &v1alpha1.PortCheckStatus{
+			Revision: revision,
+			Status:   v1alpha1.PortCheckStatusTypeSuccess,
+		}
 		return false, false
 	}
 
-	pc := resource.Status.PortCheck
-	if pc == nil || pc.Revision != revision {
-		resource.Status.PortCheck = &v1alpha1.PortCheckStatus{Revision: revision, FailingSince: metav1.Now()}
-		pc = resource.Status.PortCheck
+	graceWindowOpenedAt := graceWindowStart(resource.Status.PortCheck, revision)
+	if graceWindowOpenedAt == nil {
+		graceWindowOpenedAt = ptr.To(metav1.Now())
 	}
+	resource.Status.PortCheck = &v1alpha1.PortCheckStatus{
+		Revision:           revision,
+		Status:             v1alpha1.PortCheckStatusTypeFailure,
+		FailingPortNumbers: result.ClosedPorts(),
+		FailingSince:       graceWindowOpenedAt,
+	}
+
 	// Still in the grace window, requeue the port check.
-	if time.Since(pc.FailingSince.Time) < r.portCheckGrace() {
+	if time.Since(graceWindowOpenedAt.Time) < r.portCheckGrace() {
 		r.PortVerifier.Forget(key)
 		r.schedulePortCheck(ctx, resource, key)
 		return false, true
@@ -119,9 +129,25 @@ func (r *Reconciler) verifyServingPorts(ctx context.Context, resource *v1alpha1.
 	return true, false
 }
 
-// capturePortDiagnosis records a PortNotListening detail for a workload that
+// graceWindowStart returns when the grace window for this revision opened, or
+// nil if none is open. A Success record has no FailingSince, so a port that
+// goes bad after verifying open gets a full window again.
+func graceWindowStart(pc *v1alpha1.PortCheckStatus, revision string) *metav1.Time {
+	if pc == nil || pc.Revision != revision {
+		return nil
+	}
+	return pc.FailingSince
+}
+
+// capturePortDiagnosisForNotServingWorkload records a PortNotListening detail for a workload that
 // is not serving. Provisional: verifyServingPorts re-verifies once serving.
-func (r *Reconciler) capturePortDiagnosis(ctx context.Context, resource *v1alpha1.StackResource, revision string) {
+//
+// It reports what the dial said but never opens the grace window: a pod that
+// has not started listening yet must not burn it, or the serving path would
+// condemn on its first refusal. Writing the same record on every pass also
+// keeps StatusHash stable, so a not-serving workload does not look like it is
+// changing every reconcile.
+func (r *Reconciler) capturePortDiagnosisForNotServingWorkload(ctx context.Context, resource *v1alpha1.StackResource, revision string) {
 	if !r.portVerificationApplies(resource) {
 		return
 	}
@@ -132,7 +158,16 @@ func (r *Reconciler) capturePortDiagnosis(ctx context.Context, resource *v1alpha
 		return
 	}
 	if result.AllOpen() {
+		resource.Status.PortCheck = &v1alpha1.PortCheckStatus{
+			Revision: revision,
+			Status:   v1alpha1.PortCheckStatusTypeSuccess,
+		}
 		return
+	}
+	resource.Status.PortCheck = &v1alpha1.PortCheckStatus{
+		Revision:           revision,
+		Status:             v1alpha1.PortCheckStatusTypeFailure,
+		FailingPortNumbers: result.ClosedPorts(),
 	}
 	resource.Status.LastFailureDetails = []v1alpha1.LastFailureDetail{
 		readinessFailureDetail(resource.Name, result),
