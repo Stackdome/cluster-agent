@@ -97,7 +97,7 @@ func main() {
 	flag.IntVar(&imageBuildHistoryLimit, "image-build-history-limit", 5,
 		"Number of completed/cancelled ImageBuilds to retain per StackResource.")
 	flag.DurationVar(&portCheckGrace, "port-check-grace", workload.DefaultPortCheckGrace,
-		"How long a closed-port verdict on a serving StackResource is re-verified before it is believed and the resource is marked unavailable.")
+		"How long a closed-port verdict on a StackResource is re-verified before it is believed and the resource is reported failed.")
 	opts := zap.Options{
 		Development: true,
 	}

@@ -40,9 +40,8 @@ type Reconciler struct {
 	// declared. It is optional: a nil verifier disables the check rather than
 	// failing the reconcile, so tests and reduced deployments still work.
 	PortVerifier *portcheck.Verifier
-	// PortCheckGrace bounds how long a closed-port verdict on a serving
-	// workload is re-verified before it is believed. Zero means
-	// DefaultPortCheckGrace.
+	// PortCheckGrace bounds how long a closed-port verdict is re-verified
+	// before it is believed. Zero means DefaultPortCheckGrace.
 	PortCheckGrace time.Duration
 }
 

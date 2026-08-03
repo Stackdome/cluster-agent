@@ -503,11 +503,9 @@ type PortCheckStatus struct {
 	// ascending. Empty when Status is Success.
 	// +optional
 	FailingPortNumbers []int32 `json:"failingPortNumbers,omitempty"`
-	// FailingSince is when the grace window opened, and is set only while one
-	// is open: the first refusal seen while the workload was serving. A
-	// Success clears it, so a port that goes bad after verifying open gets a
-	// full window again. The not-serving path never sets it — a pod that has
-	// not started yet must not burn the window.
+	// FailingSince is when the grace window opened: the first refusal from a
+	// running pod on this revision, serving or not. A Success clears it, so a
+	// port that goes bad after verifying open gets a full window again.
 	// +optional
 	FailingSince *metav1.Time `json:"failingSince,omitempty"`
 }
