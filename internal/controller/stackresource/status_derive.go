@@ -219,10 +219,9 @@ func failureDetail(resource *v1alpha1.StackResource, failureType string) *v1alph
 }
 
 // portDialMessage names the declared ports the last dial proved closed.
+// Never called with an empty list: a Failure PortCheck always carries the
+// closed ports.
 func portDialMessage(ports []int32) string {
-	if len(ports) == 0 {
-		return "declared ports not accepting connections"
-	}
 	strs := make([]string, len(ports))
 	for i, p := range ports {
 		strs[i] = strconv.Itoa(int(p))
