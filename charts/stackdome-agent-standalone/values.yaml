@@ -45,6 +45,7 @@ metrics:
     labels: {}
 
 # Traefik error-page wiring (Service, Middleware, catch-all IngressRoute).
-# Requires the Traefik CRDs; disable in clusters without them.
+# Off for now. Requires the Traefik CRDs; when enabling, also point both Traefik
+# entrypoint middlewares at `<release-namespace>-stackdome-errors@kubernetescrd`.
 errorPages:
-  enabled: true
+  enabled: false
