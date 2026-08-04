@@ -391,26 +391,6 @@ func TestSummaryDeployingWithPortDial(t *testing.T) {
 	}
 }
 
-func TestSummaryDeployingReadinessFallback(t *testing.T) {
-	r := deriveTestResource()
-	r.Status.LastFailureDetails = []v1alpha1.LastFailureDetail{{
-		Type:                   v1alpha1.FailureTypeReadinessFailure,
-		LastTerminationReason:  "Unhealthy",
-		LastTerminationMessage: "readiness probe failed",
-	}}
-	c := &controller.VerdictCollector{}
-	c.ReportNotReady("StackResourceDeploymentNotReady", "deployment is not ready")
-
-	s := summaryOf(t, r, c)
-
-	if s.State != v1alpha1.SummaryStateDeploying || s.Reason != "Unhealthy" {
-		t.Fatalf("want Deploying/Unhealthy, got %s/%s", s.State, s.Reason)
-	}
-	if s.Message != "readiness probe failed" {
-		t.Fatalf("Message = %q, want the kubelet detail", s.Message)
-	}
-}
-
 func TestSummaryDeployingVerdictFallback(t *testing.T) {
 	r := deriveTestResource()
 	c := &controller.VerdictCollector{}

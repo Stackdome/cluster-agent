@@ -190,16 +190,13 @@ func summarize(resource *v1alpha1.StackResource, verdicts *controller.VerdictCol
 }
 
 // deployingDetail picks the most specific diagnosis of why the new pods are
-// not ready: the last port dial, else the kubelet readiness detail, else the
-// verdict (nil on the no-verdict path — fall back to WorkloadConverged).
+// not ready: the last port dial, else the verdict (nil on the no-verdict
+// path — fall back to WorkloadConverged). No readiness-detail branch: a
+// readiness_failure entry is only ever written together with a Failed
+// verdict, which never reaches the Deploying path.
 func deployingDetail(resource *v1alpha1.StackResource, v *controller.Verdict) (reason, message string) {
 	if pc := resource.Status.PortCheck; pc != nil && pc.Status == v1alpha1.PortCheckStatusTypeFailure {
 		return v1alpha1.ReasonPortNotListening, portDialMessage(pc.FailingPortNumbers)
-	}
-	if resource.Status.PortCheck == nil {
-		if d := failureDetail(resource, v1alpha1.FailureTypeReadinessFailure); d != nil {
-			return d.LastTerminationReason, d.LastTerminationMessage
-		}
 	}
 	if v != nil {
 		return v.Reason, v.Message
