@@ -68,7 +68,9 @@ func captureLastFailureDetails(ctx context.Context, uncachedClient client.Client
 	allContainerStatuses = append(allContainerStatuses, crashingPod.Status.ContainerStatuses...)
 	for _, cs := range allContainerStatuses {
 		if controller.IsCrashState(cs) {
-			details = append(details, controller.BuildLastFailureDetail(cs))
+			d := controller.BuildLastFailureDetail(cs)
+			d.ReleaseID = resource.Annotations[v1alpha1.ReleaseIDAnnotation]
+			details = append(details, d)
 		}
 	}
 
@@ -94,6 +96,9 @@ func (r *Reconciler) capturePodFailureDetailsOnce(ctx context.Context, resource 
 	details, err := capturePodFailureDetails(ctx, r.UncachedClient, resource)
 	if err != nil {
 		controller.LoggerFromContext(ctx).Error(err, "failed to capture pod failure details")
+	}
+	for i := range details {
+		details[i].ReleaseID = resource.Annotations[v1alpha1.ReleaseIDAnnotation]
 	}
 	resource.Status.LastFailureDetails = details
 	if len(details) > 0 {

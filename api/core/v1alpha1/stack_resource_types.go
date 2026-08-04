@@ -524,7 +524,13 @@ type LastFailureDetail struct {
 	// preserving the behaviour of agents and hubs predating this field.
 	// +kubebuilder:validation:Enum=runtime_crash;readiness_failure
 	// +optional
-	Type                    string `json:"type,omitempty"`
+	Type string `json:"type,omitempty"`
+	// ReleaseID is the release whose rollout the failure was observed on
+	// (from the resource's release-id annotation), so the hub can drop a
+	// previous release's failure instead of putting it on the current
+	// release's timeline. Empty on details written before this field existed.
+	// +optional
+	ReleaseID               string `json:"releaseId,omitempty"`
 	ContainerName           string `json:"containerName,omitempty"`
 	RestartCount            int32  `json:"restartCount,omitempty"`
 	LastTerminationReason   string `json:"lastTerminationReason,omitempty"`
