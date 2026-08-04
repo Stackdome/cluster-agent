@@ -5,6 +5,8 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	corev1alpha1 "stackdome.io/cluster-agent/api/core/v1alpha1"
@@ -68,6 +70,22 @@ var _ = Describe("StackResource port readiness", Ordered, func() {
 		Expect(detail.LastTerminationReason).To(Equal("PortNotListening"))
 		Expect(detail.LastTerminationMessage).To(ContainSubstring("80"),
 			"the failure message should name the port that nobody is listening on")
+	})
+
+	// A pod that never passes its readiness probe produces no further workload
+	// events, so this used to sit Pending forever with the diagnosis buried in
+	// LastFailureDetails and nothing telling the hub the resource had failed.
+	It("reports the resource failed instead of leaving it pending", func() {
+		sr, err := helpers.WaitFor(ctx, c, brokenKey, &corev1alpha1.StackResource{},
+			func(sr *corev1alpha1.StackResource) bool {
+				return sr.Status.Phase == corev1alpha1.StackResourcePhaseFailed
+			}, fieldChangeTimeout)
+		Expect(err).NotTo(HaveOccurred())
+
+		stalled := meta.FindStatusCondition(sr.Status.Conditions, string(corev1alpha1.StackResourceStalled))
+		Expect(stalled).NotTo(BeNil())
+		Expect(stalled.Status).To(Equal(metav1.ConditionTrue))
+		Expect(stalled.Reason).To(Equal("PortNotListening"))
 	})
 
 	// Guards the gate against blocking healthy workloads: nginx declares and

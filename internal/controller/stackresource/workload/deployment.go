@@ -133,25 +133,11 @@ func (r *Reconciler) evaluateDeploymentStatus(ctx context.Context, resource *v1a
 			r.captureFailureDetailsOnce(ctx, resource, revision)
 		}
 
-		// Serving means the primary port passed its kubelet probe; the remaining
-		// declared ports are only covered here. This is best effort: an
-		// unverified result reports outstanding and the resource proceeds, so a
-		// secondary port can read Available until a verdict outlives its grace
-		// window. The primary port has no such window — a dead primary never
-		// reaches this branch, because the kubelet probe keeps the deployment
-		// from serving.
-		//
-		// A crash detail captured just above is the more specific diagnosis and
-		// must not be overwritten by a port verdict.
-		if len(resource.Status.LastFailureDetails) == 0 {
-			portFailed, portOutstanding := r.verifyServingPorts(ctx, resource, revision)
-			if portFailed {
-				r.reportPortNotListening(ctx, resource)
-			} else if portOutstanding {
-				// The check answers asynchronously; come back to read it. The
-				// deferred requeue lets the rest of the chain run meanwhile.
-				return controller.ResultDeferredRequeue(portCheckRequeueInterval)
-			}
+		// The kubelet probe covers the primary port, so a dead primary never
+		// reaches this branch. Only the other declared ports are still in doubt.
+		if requeueAfter := r.checkPorts(ctx, resource, revision, true); requeueAfter > 0 {
+			// The deferred requeue lets the rest of the chain run meanwhile.
+			return controller.ResultDeferredRequeue(requeueAfter)
 		}
 
 		if !converged && len(resource.Status.LastFailureDetails) == 0 &&
@@ -165,16 +151,18 @@ func (r *Reconciler) evaluateDeploymentStatus(ctx context.Context, resource *v1a
 	controller.LoggerFromContext(ctx).Info("deployment not serving")
 	r.Status.SetCondition(resource, v1alpha1.StackResourceWorkloadAvailable, false, "DeploymentNotAvailable", "deployment is not yet available")
 	r.captureFailureDetailsOnce(ctx, resource, revision)
-	// A crash produces details above. If the container is running but never
-	// becomes Ready, the cause is usually a port nobody is listening on, which
-	// only the port verifier can name.
-	if len(resource.Status.LastFailureDetails) == 0 {
-		r.capturePortDiagnosisForNotServingWorkload(ctx, resource, revision)
-	}
+	// A crash produces details above. A container that runs but never turns
+	// Ready is usually a port nobody listens on, which only the verifier names.
+	portRequeueAfter := r.checkPorts(ctx, resource, revision, false)
 	r.Status.ReportNotReady(ctx, resource, "StackResourceDeploymentNotReady", "StackResourceDeploymentNotReady")
 
 	if !controller.DeploymentRolloutSettled(deployment, deploymentGracePeriodAfterNewReplicaSetAvailable) {
 		return controller.ResultRequeueAfter(10 * time.Second)
+	}
+	// A refused port is nobody's event: without this the grace clock would
+	// never run out and the resource would sit Pending forever.
+	if portRequeueAfter > 0 {
+		return controller.ResultRequeueAfter(portRequeueAfter)
 	}
 	return controller.ResultStop
 }

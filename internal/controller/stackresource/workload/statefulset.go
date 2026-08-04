@@ -90,16 +90,11 @@ func (r *Reconciler) evaluateStatefulSetStatus(ctx context.Context, resource *v1
 		resource.Status.LastFailureDetails = nil
 		resource.Status.LastFailureDeploymentRevision = ""
 
-		// Converged means the pod passed its kubelet probe, which guards only the
-		// primary port. A secondary port nobody listens on would otherwise stay
-		// silently green, so the verifier runs on this branch too.
-		portFailed, needsRequeue := r.verifyServingPorts(ctx, resource, sts.Status.UpdateRevision)
-		if portFailed {
-			r.reportPortNotListening(ctx, resource)
-		} else if needsRequeue {
-			// The check answers asynchronously; come back to read it. The
-			// deferred requeue lets the rest of the chain run meanwhile.
-			return controller.ResultDeferredRequeue(portCheckRequeueInterval)
+		// The kubelet probe guards only the primary port, so a secondary port
+		// nobody listens on would otherwise stay silently green.
+		if requeueAfter := r.checkPorts(ctx, resource, sts.Status.UpdateRevision, true); requeueAfter > 0 {
+			// The deferred requeue lets the rest of the chain run meanwhile.
+			return controller.ResultDeferredRequeue(requeueAfter)
 		}
 		return controller.ResultContinue
 	}
@@ -107,12 +102,9 @@ func (r *Reconciler) evaluateStatefulSetStatus(ctx context.Context, resource *v1
 	r.Status.SetCondition(resource, v1alpha1.StackResourceWorkloadConverged, false, "NotConverged",
 		fmt.Sprintf("statefulset not converged: ready=%d updated=%d available=%d", sts.Status.ReadyReplicas, sts.Status.UpdatedReplicas, sts.Status.AvailableReplicas))
 	r.capturePodFailureDetailsOnce(ctx, resource, sts.Status.UpdateRevision)
-	// A crash produces details above. If the container is running but never
-	// becomes Ready, the cause is usually a port nobody is listening on, which
-	// only the port verifier can name.
-	if len(resource.Status.LastFailureDetails) == 0 {
-		r.capturePortDiagnosisForNotServingWorkload(ctx, resource, sts.Status.UpdateRevision)
-	}
+	// A crash produces details above. A container that runs but never turns
+	// Ready is usually a port nobody listens on, which only the verifier names.
+	portRequeueAfter := r.checkPorts(ctx, resource, sts.Status.UpdateRevision, false)
 	r.Status.SetCondition(resource, v1alpha1.StackResourceWorkloadAvailable, false, "StatefulSetNotAvailable", "statefulset pod not ready")
 	r.Status.ReportNotReady(ctx, resource, "StackResourceStatefulSetNotReady", "statefulset pod not yet ready")
 
@@ -129,6 +121,13 @@ func (r *Reconciler) evaluateStatefulSetStatus(ctx context.Context, resource *v1
 	// indefinitely. The Deployment path bounds that via ProgressDeadlineSeconds; a
 	// StatefulSet equivalent would need a per-revision "rollout started" timestamp on
 	// status and our own deadline. Accepted for now.
+	//
+	// A running grace clock outranks the stop: a refused port is nobody's
+	// event, so without this the clock would never run out and the resource
+	// would sit Pending forever.
+	if portRequeueAfter > 0 {
+		return controller.ResultRequeueAfter(portRequeueAfter)
+	}
 	if len(resource.Status.LastFailureDetails) > 0 {
 		return controller.ResultStop
 	}

@@ -173,7 +173,9 @@ func buildOperatorDeployment(image string) *appsv1.Deployment {
 							Name:            "manager",
 							Image:           image,
 							ImagePullPolicy: corev1.PullIfNotPresent,
-							Args:            []string{"--leader-elect"},
+							// A short port-check grace keeps the readiness specs
+							// inside fieldChangeTimeout.
+							Args: []string{"--leader-elect", "--port-check-grace=20s"},
 							LivenessProbe: &corev1.Probe{
 								ProbeHandler: corev1.ProbeHandler{
 									HTTPGet: &corev1.HTTPGetAction{

@@ -2,6 +2,7 @@ package workload
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/samber/lo"
@@ -17,44 +18,21 @@ import (
 )
 
 const (
-	// DefaultPortCheckGrace is how long a closed-port verdict on a serving
-	// workload is re-verified before it is believed.
+	// DefaultPortCheckGrace is how long a closed port keeps being re-dialed
+	// before the verdict is believed.
 	DefaultPortCheckGrace = 3 * time.Minute
 
-	portCheckRequeueInterval = 10 * time.Second
+	// portCheckRequeueInterval paces the passes that walk the grace window.
+	portCheckRequeueInterval = 30 * time.Second
+
+	// A port that failed on a serving workload is polled, because nothing else
+	// watches it. The wait doubles per retry, between these two bounds.
+	minPortRetryInterval = 1 * time.Minute
+	maxPortRetryInterval = 10 * time.Minute
 )
 
-// ContainerName must match the resource name or the hub's
-// MapLastFailureDetails drops the detail.
-func readinessFailureDetail(resourceName string, result portcheck.Result) v1alpha1.LastFailureDetail {
-	return v1alpha1.LastFailureDetail{
-		Type:                   v1alpha1.FailureTypeReadinessFailure,
-		ContainerName:          resourceName,
-		LastTerminationReason:  "PortNotListening",
-		LastTerminationMessage: result.Message(),
-	}
-}
-
 func declaredPortNumbers(resource *v1alpha1.StackResource) []int32 {
-	ports := make([]int32, 0, len(resource.Spec.Ports))
-	for _, p := range resource.Spec.Ports {
-		ports = append(ports, p.Number)
-	}
-	return ports
-}
-
-// Keyed by revision so a rollout invalidates the previous answer.
-func portCheckKey(resource *v1alpha1.StackResource, revision string) portcheck.Key {
-	return portcheck.Key{
-		Namespace: resource.Namespace,
-		Name:      resource.Name,
-		Revision:  revision,
-	}
-}
-
-// A nil verifier disables the check (unit tests, reduced deployments).
-func (r *Reconciler) portVerificationApplies(resource *v1alpha1.StackResource) bool {
-	return r.PortVerifier != nil && len(resource.Spec.Ports) > 0
+	return lo.Map(resource.Spec.Ports, func(p v1alpha1.Port, _ int) int32 { return p.Number })
 }
 
 func (r *Reconciler) portCheckGrace() time.Duration {
@@ -64,125 +42,168 @@ func (r *Reconciler) portCheckGrace() time.Duration {
 	return r.PortCheckGrace
 }
 
-// verifyServingPorts checks the declared ports of a workload whose kubelet
-// probe has passed. Never dials inline.
+// checkPorts runs the port verdict for one status branch and returns how long
+// to wait before the next pass, zero when nothing is worth waiting for. Only a
+// failed serving workload asks to come back:
 //
-// failed: a closed verdict outlived the grace window; failure detail is on
-// status, caller should mark the resource unavailable. shouldRequeue: no
-// answer yet, caller should requeue to read it.
-//
-// The grace window (Status.PortCheck.FailingSince) starts at the first closed
-// verdict seen while serving, per revision, and survives operator restarts.
-// Inside the window closed verdicts are discarded and redialed, so a refusal
-// cached during boot never condemns the app and a slow secondary port gets
-// time to bind.
-func (r *Reconciler) verifyServingPorts(ctx context.Context, resource *v1alpha1.StackResource, revision string) (failed, shouldRequeue bool) {
-	if !r.portVerificationApplies(resource) {
+//   - serving: the pod is Ready, so nothing will announce a port that opens
+//     later. Polling is the only way back.
+//   - not serving: a pod that turns Ready fires a workload event, which brings
+//     the reconcile back for free.
+func (r *Reconciler) checkPorts(
+	ctx context.Context, resource *v1alpha1.StackResource, revision string, serving bool) time.Duration {
+	// A crash detail is the more specific diagnosis, so it wins. Drop the stale
+	// verdict too, or the hub reports a port failure for a crashing container.
+	if !portDiagnosisAllowed(resource) {
 		resource.Status.PortCheck = nil
-		return false, false
+		return 0
 	}
-	key := portCheckKey(resource, revision)
+	failed, requeueAfter := r.verifyPorts(ctx, resource, revision)
+	if !failed {
+		// Safe to clear: the guard proved any detail here is our own.
+		resource.Status.LastFailureDetails = nil
+		return requeueAfter
+	}
+	r.reportPortNotListening(ctx, resource, recordPortFailure(resource))
+	if serving {
+		// A dial is already in flight, so read it before falling back to the
+		// slow poll — otherwise every answer is a whole interval stale.
+		if requeueAfter > 0 {
+			return requeueAfter
+		}
+		return portRetryAfter(resource.Status.PortCheck, r.portCheckGrace())
+	}
+	return 0
+}
 
-	result, done := r.PortVerifier.Get(key)
-	if !done {
-		// Requeue only if an answer can arrive: dial admitted or in flight.
-		if r.schedulePortCheck(ctx, resource, key) || r.PortVerifier.Pending(key) {
-			return false, true
-		}
-		// A dial can land between Get and Enqueue: Enqueue then refuses and
-		// Pending is already clear. Re-read so that verdict is processed now
-		// instead of sitting cached until the next resync.
-		if result, done = r.PortVerifier.Get(key); !done {
-			return false, false
-		}
+// verifyPorts decides whether a workload declared a port nobody listens on.
+// Serving and not-serving workloads run the same check — same mistake either
+// way. Never dials inline: it reads what the verifier has answered and lines up
+// the next dial.
+func (r *Reconciler) verifyPorts(ctx context.Context, resource *v1alpha1.StackResource, revision string) (failed bool, requeueAfter time.Duration) {
+	// A nil verifier disables the check (unit tests, reduced deployments).
+	if r.PortVerifier == nil || len(resource.Spec.Ports) == 0 {
+		resource.Status.PortCheck = nil
+		return false, 0
 	}
+	// Keyed by revision so a rollout invalidates the previous answer.
+	key := portcheck.Key{Namespace: resource.Namespace, Name: resource.Name, Revision: revision}
+
+	result, answered := r.PortVerifier.Get(key)
+	if !answered {
+		podsFound, accepted := r.schedulePortCheck(ctx, resource, key)
+		// No answer yet: repeat the verdict on status so the phase does not flip
+		// while the dial is in flight.
+		failed := portAlreadyFailed(resource.Status.PortCheck, revision, r.portCheckGrace())
+		if accepted || podsFound {
+			return failed, portCheckRequeueInterval
+		}
+		return failed, 0
+	}
+
 	if result.AllOpen() {
 		resource.Status.PortCheck = &v1alpha1.PortCheckStatus{
 			Revision: revision,
 			Status:   v1alpha1.PortCheckStatusTypeSuccess,
 		}
-		return false, false
+		return false, 0
 	}
 
-	graceWindowOpenedAt := graceWindowStart(resource.Status.PortCheck, revision)
-	if graceWindowOpenedAt == nil {
-		graceWindowOpenedAt = ptr.To(metav1.Now())
+	clockStartedAt := graceClockStart(resource.Status.PortCheck, revision)
+	if clockStartedAt == nil {
+		clockStartedAt = ptr.To(metav1.Now())
 	}
 	resource.Status.PortCheck = &v1alpha1.PortCheckStatus{
 		Revision:           revision,
 		Status:             v1alpha1.PortCheckStatusTypeFailure,
 		FailingPortNumbers: result.ClosedPorts(),
-		FailingSince:       graceWindowOpenedAt,
+		FailingSince:       clockStartedAt,
 	}
+	// Drop the answer just judged. Enqueue refuses while one is stored, so the
+	// next pass cannot schedule a fresh dial until this is gone.
+	r.PortVerifier.Forget(key)
 
-	// Still in the grace window, requeue the port check.
-	if time.Since(graceWindowOpenedAt.Time) < r.portCheckGrace() {
-		r.PortVerifier.Forget(key)
-		r.schedulePortCheck(ctx, resource, key)
-		return false, true
+	if time.Since(clockStartedAt.Time) < r.portCheckGrace() {
+		return false, portCheckRequeueInterval
 	}
-	// Terminal per revision: keep the cached verdict so a dead port doesn't
-	// poll forever. A new rollout starts fresh.
-	resource.Status.LastFailureDetails = []v1alpha1.LastFailureDetail{
-		readinessFailureDetail(resource.Name, result),
-	}
-	return true, false
+	return true, 0
 }
 
-// graceWindowStart returns when the grace window for this revision opened, or
-// nil if none is open. A Success record has no FailingSince, so a port that
-// goes bad after verifying open gets a full window again.
-func graceWindowStart(pc *v1alpha1.PortCheckStatus, revision string) *metav1.Time {
+// portRetryAfter says how long to wait before dialing a failed port again.
+// Waiting the length of the outage doubles the wait on every retry, so no
+// attempt counter is needed on status:
+//
+//	1m, 1m, 2m, 4m, 8m, 10m, 10m...
+func portRetryAfter(pc *v1alpha1.PortCheckStatus, grace time.Duration) time.Duration {
+	if pc == nil || pc.FailingSince == nil {
+		return minPortRetryInterval
+	}
+	deadFor := time.Since(pc.FailingSince.Time) - grace
+	return min(max(deadFor, minPortRetryInterval), maxPortRetryInterval)
+}
+
+// portAlreadyFailed reports whether status already holds a failed verdict for
+// this revision whose grace period has run out.
+func portAlreadyFailed(pc *v1alpha1.PortCheckStatus, revision string, grace time.Duration) bool {
+	clockStartedAt := graceClockStart(pc, revision)
+	return clockStartedAt != nil &&
+		len(pc.FailingPortNumbers) > 0 &&
+		time.Since(clockStartedAt.Time) >= grace
+}
+
+// recordPortFailure renders the verdict on status into the detail the hub
+// shows.
+//
+//   - Rendered from status, not from the dial, so a repeated verdict reads
+//     exactly like a fresh one.
+//   - ContainerName must be the resource name or the hub's
+//     MapLastFailureDetails drops the detail.
+func recordPortFailure(resource *v1alpha1.StackResource) string {
+	failing := resource.Status.PortCheck.FailingPortNumbers
+	dial := portcheck.Result{Ports: lo.Map(resource.Spec.Ports,
+		func(p v1alpha1.Port, _ int) portcheck.PortResult {
+			return portcheck.PortResult{Port: p.Number, Open: !slices.Contains(failing, p.Number)}
+		})}
+	msg := dial.Message()
+	resource.Status.LastFailureDetails = []v1alpha1.LastFailureDetail{{
+		Type:                   v1alpha1.FailureTypeReadinessFailure,
+		ContainerName:          resource.Name,
+		LastTerminationReason:  "PortNotListening",
+		LastTerminationMessage: msg,
+	}}
+	return msg
+}
+
+// graceClockStart returns when the clock for this revision started, or nil if
+// it is not running. A Success record has no FailingSince, so a port that goes
+// bad after proving itself open gets a full grace period again.
+func graceClockStart(pc *v1alpha1.PortCheckStatus, revision string) *metav1.Time {
 	if pc == nil || pc.Revision != revision {
 		return nil
 	}
 	return pc.FailingSince
 }
 
-// capturePortDiagnosisForNotServingWorkload records a PortNotListening detail for a workload that
-// is not serving. Provisional: verifyServingPorts re-verifies once serving.
-//
-// It reports what the dial said but never opens the grace window: a pod that
-// has not started listening yet must not burn it, or the serving path would
-// condemn on its first refusal. Writing the same record on every pass also
-// keeps StatusHash stable, so a not-serving workload does not look like it is
-// changing every reconcile.
-func (r *Reconciler) capturePortDiagnosisForNotServingWorkload(ctx context.Context, resource *v1alpha1.StackResource, revision string) {
-	if !r.portVerificationApplies(resource) {
-		return
-	}
-	key := portCheckKey(resource, revision)
-	result, done := r.PortVerifier.Get(key)
-	if !done {
-		r.schedulePortCheck(ctx, resource, key)
-		return
-	}
-	if result.AllOpen() {
-		resource.Status.PortCheck = &v1alpha1.PortCheckStatus{
-			Revision: revision,
-			Status:   v1alpha1.PortCheckStatusTypeSuccess,
-		}
-		return
-	}
-	resource.Status.PortCheck = &v1alpha1.PortCheckStatus{
-		Revision:           revision,
-		Status:             v1alpha1.PortCheckStatusTypeFailure,
-		FailingPortNumbers: result.ClosedPorts(),
-	}
-	resource.Status.LastFailureDetails = []v1alpha1.LastFailureDetail{
-		readinessFailureDetail(resource.Name, result),
-	}
+// portDiagnosisAllowed reports whether the port verdict may own
+// LastFailureDetails. A crash detail is the more specific diagnosis and keeps it.
+func portDiagnosisAllowed(resource *v1alpha1.StackResource) bool {
+	details := resource.Status.LastFailureDetails
+	return len(details) == 0 || details[0].Type == v1alpha1.FailureTypeReadinessFailure
 }
 
-// schedulePortCheck queues a check and reports whether a dial was admitted.
-// On refusal (no dialable pod, in flight, queue full) the caller's requeue is
-// the retry.
-func (r *Reconciler) schedulePortCheck(ctx context.Context, resource *v1alpha1.StackResource, key portcheck.Key) bool {
+// schedulePortCheck queues a dial and reports whether an answer is coming —
+// this dial was admitted, or one for this resource is already in flight. False
+// means no pod is running to dial, so there is nothing to come back for.
+func (r *Reconciler) schedulePortCheck(
+	ctx context.Context, resource *v1alpha1.StackResource, key portcheck.Key) (
+	podFound,
+	accepted bool,
+) {
 	podIP, found := r.representativePodIP(ctx, resource, key.Revision)
 	if !found {
-		return false
+		return false, false
 	}
-	return r.PortVerifier.Enqueue(key, podIP, declaredPortNumbers(resource))
+	return true, r.PortVerifier.Enqueue(key, podIP, declaredPortNumbers(resource)) || r.PortVerifier.Pending(key)
 }
 
 func (r *Reconciler) representativePodIP(
@@ -262,13 +283,13 @@ func firstDialablePodIP(pods []corev1.Pod) (string, bool) {
 	return "", false
 }
 
-// The workload is serving its primary port but a declared secondary port
-// stayed closed past the grace window. Terminal per revision.
-// WorkloadAvailable keeps the serving truth; the failure rides
-// WorkloadConverged and the Failed verdict, which derivation turns into
-// Phase=Failed / Stalled=True / Available=True("ServingButStalled").
-func (r *Reconciler) reportPortNotListening(ctx context.Context, resource *v1alpha1.StackResource) {
-	msg := resource.Status.LastFailureDetails[0].LastTerminationMessage
+// reportPortNotListening states the verdict: a declared port stayed closed
+// past the grace period. The failure rides WorkloadConverged and the Failed
+// verdict, never WorkloadAvailable — each branch already recorded whether the
+// workload serves. Derivation turns a serving workload into Phase=Failed /
+// Stalled=True / Available=True("ServingButStalled"), and a non-serving one
+// into Phase=Failed / Stalled=True / Available=False.
+func (r *Reconciler) reportPortNotListening(ctx context.Context, resource *v1alpha1.StackResource, msg string) {
 	r.Status.SetCondition(resource, v1alpha1.StackResourceWorkloadConverged, false, "PortNotListening", msg)
 	r.Status.ReportFailed(ctx, resource, "PortNotListening", msg)
 }
