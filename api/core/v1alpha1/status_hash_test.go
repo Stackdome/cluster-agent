@@ -42,6 +42,17 @@ func TestStackResourceStatusHashChangesOnPhaseChange(t *testing.T) {
 	}
 }
 
+func TestStackResourceStatusHashChangesOnSummaryChange(t *testing.T) {
+	a := &StackResource{Status: StackResourceStatus{
+		Summary: &StackResourceStatusSummary{State: SummaryStateDeploying, ObservedGeneration: 1},
+	}}
+	b := a.DeepCopy()
+	b.Status.Summary.State = SummaryStateReady
+	if a.StatusHash() == b.StatusHash() {
+		t.Fatal("summary change must change the status hash")
+	}
+}
+
 func TestStackStatusHashDoesNotMutateReceiver(t *testing.T) {
 	s := &Stack{Status: StackStatus{Conditions: conditionsFixture()}}
 	_ = s.StatusHash()

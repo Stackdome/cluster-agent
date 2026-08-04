@@ -257,6 +257,227 @@ func TestDeriveNoVerdictStampsImageSourceRevision(t *testing.T) {
 	}
 }
 
+// summaryOf derives and returns the rolled-up summary, failing if none was written.
+func summaryOf(t *testing.T, r *v1alpha1.StackResource, c *controller.VerdictCollector) *v1alpha1.StackResourceStatusSummary {
+	t.Helper()
+	deriveSummaryStatus(r, c)
+	if r.Status.Summary == nil {
+		t.Fatal("summary not written")
+	}
+	return r.Status.Summary
+}
+
+func crashDetail() v1alpha1.LastFailureDetail {
+	return v1alpha1.LastFailureDetail{
+		Type:                   v1alpha1.FailureTypeRuntimeCrash,
+		LastTerminationReason:  "CrashLoopBackOff",
+		LastTerminationMessage: "back-off restarting",
+	}
+}
+
+func TestSummaryBuildInProgress(t *testing.T) {
+	r := deriveTestResource()
+	setResourceCondition(r, v1alpha1.StackResourceBuildReady, false, "BuildNotReady", "application build is not yet ready")
+	c := &controller.VerdictCollector{}
+	c.ReportNotReady("ImageBuildInProgress", "Image build is still in progress")
+
+	s := summaryOf(t, r, c)
+
+	if s.State != v1alpha1.SummaryStateBuilding || s.Reason != "BuildNotReady" {
+		t.Fatalf("want Building/BuildNotReady, got %s/%s", s.State, s.Reason)
+	}
+	if s.ObservedGeneration != r.Generation {
+		t.Fatalf("want gen %d, got %d", r.Generation, s.ObservedGeneration)
+	}
+}
+
+func TestSummaryFailedVerdict(t *testing.T) {
+	r := deriveTestResource()
+	c := &controller.VerdictCollector{}
+	c.ReportFailed("InvalidSpec", "bad spec")
+
+	s := summaryOf(t, r, c)
+
+	if s.State != v1alpha1.SummaryStateFailed || s.Reason != "InvalidSpec" || s.Message != "bad spec" {
+		t.Fatalf("want Failed/InvalidSpec/bad spec, got %s/%s/%s", s.State, s.Reason, s.Message)
+	}
+	if s.ObservedGeneration != r.Generation {
+		t.Fatalf("want gen %d, got %d", r.Generation, s.ObservedGeneration)
+	}
+}
+
+// A failed build is reported plainly; suppressing the duplicate is the hub's job.
+func TestSummaryBuildFailedVerdict(t *testing.T) {
+	r := deriveTestResource()
+	setResourceCondition(r, v1alpha1.StackResourceBuildReady, false, v1alpha1.ReasonBuildFailed, "application build failed terminally")
+	c := &controller.VerdictCollector{}
+	c.ReportFailed(v1alpha1.ReasonBuildFailed, "ImageBuild x failed")
+
+	s := summaryOf(t, r, c)
+
+	if s.State != v1alpha1.SummaryStateFailed || s.Reason != v1alpha1.ReasonBuildFailed {
+		t.Fatalf("want Failed/%s, got %s/%s", v1alpha1.ReasonBuildFailed, s.State, s.Reason)
+	}
+	if s.Message != "ImageBuild x failed" {
+		t.Fatalf("Message = %q, want the verdict message", s.Message)
+	}
+}
+
+func TestSummaryWaitingOnDependencies(t *testing.T) {
+	r := deriveTestResource()
+	setResourceCondition(r, v1alpha1.StackResourceDependenciesReady, false, "DependenciesNotReady", "waiting for mysql")
+	c := &controller.VerdictCollector{}
+	c.ReportNotReady("DependenciesNotReady", "waiting for mysql")
+
+	s := summaryOf(t, r, c)
+
+	if s.State != v1alpha1.SummaryStateWaiting || s.Reason != "DependenciesNotReady" {
+		t.Fatalf("want Waiting/DependenciesNotReady, got %s/%s", s.State, s.Reason)
+	}
+	if s.Message != "waiting for mysql" {
+		t.Fatalf("Message = %q, want the condition message", s.Message)
+	}
+}
+
+func TestSummaryRuntimeCrash(t *testing.T) {
+	r := deriveTestResource()
+	r.Status.LastFailureDetails = []v1alpha1.LastFailureDetail{crashDetail()}
+	c := &controller.VerdictCollector{}
+	c.ReportNotReady("StackResourceDeploymentNotReady", "deployment is not ready")
+
+	s := summaryOf(t, r, c)
+
+	if s.State != v1alpha1.SummaryStateFailed || s.Reason != "CrashLoopBackOff" {
+		t.Fatalf("want Failed/CrashLoopBackOff, got %s/%s", s.State, s.Reason)
+	}
+	if s.Message != "back-off restarting" {
+		t.Fatalf("Message = %q, want the termination message", s.Message)
+	}
+}
+
+// The build gate ran first, so the workload never rolled this pass: the crash
+// entry belongs to the previous revision.
+func TestSummaryBuildOutranksStaleCrash(t *testing.T) {
+	r := deriveTestResource()
+	r.Status.LastFailureDetails = []v1alpha1.LastFailureDetail{crashDetail()}
+	setResourceCondition(r, v1alpha1.StackResourceBuildReady, false, "BuildNotReady", "building")
+	c := &controller.VerdictCollector{}
+	c.ReportNotReady("ImageBuildInProgress", "Image build is still in progress")
+
+	s := summaryOf(t, r, c)
+
+	if s.State != v1alpha1.SummaryStateBuilding || s.Reason != "BuildNotReady" {
+		t.Fatalf("want Building/BuildNotReady, got %s/%s", s.State, s.Reason)
+	}
+}
+
+func TestSummaryDeployingWithPortDial(t *testing.T) {
+	r := deriveTestResource()
+	r.Status.PortCheck = &v1alpha1.PortCheckStatus{
+		Revision:           "rev-3",
+		Status:             v1alpha1.PortCheckStatusTypeFailure,
+		FailingPortNumbers: []int32{80},
+	}
+	c := &controller.VerdictCollector{}
+	c.ReportNotReady("StackResourceDeploymentNotReady", "deployment is not ready")
+
+	s := summaryOf(t, r, c)
+
+	if s.State != v1alpha1.SummaryStateDeploying || s.Reason != v1alpha1.ReasonPortNotListening {
+		t.Fatalf("want Deploying/%s, got %s/%s", v1alpha1.ReasonPortNotListening, s.State, s.Reason)
+	}
+	if s.Message != "port 80 not accepting connections" {
+		t.Fatalf("Message = %q, want the port-dial diagnosis", s.Message)
+	}
+}
+
+func TestSummaryDeployingVerdictFallback(t *testing.T) {
+	r := deriveTestResource()
+	c := &controller.VerdictCollector{}
+	c.ReportNotReady("JobRunning", "job created, waiting for completion")
+
+	s := summaryOf(t, r, c)
+
+	if s.State != v1alpha1.SummaryStateDeploying || s.Reason != "JobRunning" {
+		t.Fatalf("want Deploying/JobRunning, got %s/%s", s.State, s.Reason)
+	}
+	if s.Message != "job created, waiting for completion" {
+		t.Fatalf("Message = %q, want the verdict message", s.Message)
+	}
+}
+
+func TestSummaryPreviousRevisionSuffix(t *testing.T) {
+	r := deriveTestResource()
+	setResourceCondition(r, v1alpha1.StackResourceWorkloadAvailable, true, "DeploymentServing", "serving")
+	r.Status.PortCheck = &v1alpha1.PortCheckStatus{
+		Revision:           "rev-3",
+		Status:             v1alpha1.PortCheckStatusTypeFailure,
+		FailingPortNumbers: []int32{80},
+	}
+	c := &controller.VerdictCollector{}
+	c.ReportNotReady("StackResourceDeploymentNotReady", "deployment is not ready")
+
+	s := summaryOf(t, r, c)
+
+	if s.State != v1alpha1.SummaryStateDeploying {
+		t.Fatalf("State = %s, want Deploying", s.State)
+	}
+	if s.Message != "port 80 not accepting connections (previous revision still serving traffic)" {
+		t.Fatalf("Message = %q, want the port-dial diagnosis plus the serving suffix", s.Message)
+	}
+}
+
+func TestSummaryReady(t *testing.T) {
+	r := deriveTestResource()
+	setResourceCondition(r, v1alpha1.StackResourceWorkloadConverged, true, "FullyConverged", "all replicas updated")
+	setResourceCondition(r, v1alpha1.StackResourceWorkloadAvailable, true, "DeploymentServing", "serving")
+
+	s := summaryOf(t, r, &controller.VerdictCollector{})
+
+	if s.State != v1alpha1.SummaryStateReady || s.Reason != "FullyConverged" {
+		t.Fatalf("want Ready/FullyConverged, got %s/%s", s.State, s.Reason)
+	}
+	if s.Message != "all replicas updated" {
+		t.Fatalf("Message = %q, want the converged message", s.Message)
+	}
+}
+
+// Converged without a serving fact is not Ready: nothing asserted traffic flows.
+func TestSummaryConvergedWithoutAvailableIsDeploying(t *testing.T) {
+	r := deriveTestResource()
+	setResourceCondition(r, v1alpha1.StackResourceWorkloadConverged, true, "FullyConverged", "all replicas updated")
+
+	s := summaryOf(t, r, &controller.VerdictCollector{})
+
+	if s.State != v1alpha1.SummaryStateDeploying {
+		t.Fatalf("State = %s, want Deploying (never Ready without WorkloadAvailable)", s.State)
+	}
+	if s.Reason != "FullyConverged" {
+		t.Fatalf("Reason = %s, want FullyConverged from the WorkloadConverged fallback", s.Reason)
+	}
+}
+
+// A BuildReady=False from a previous generation describes a rollout that no
+// longer exists, so it must not produce Building.
+func TestSummaryStaleConditionsIgnored(t *testing.T) {
+	r := deriveTestResource()
+	meta.SetStatusCondition(&r.Status.Conditions, metav1.Condition{
+		Type:               string(v1alpha1.StackResourceBuildReady),
+		Status:             metav1.ConditionFalse,
+		ObservedGeneration: r.Generation - 1,
+		Reason:             "BuildNotReady",
+		Message:            "application build is not yet ready",
+	})
+	c := &controller.VerdictCollector{}
+	c.ReportNotReady("StackResourceDeploymentNotReady", "deployment is not ready")
+
+	s := summaryOf(t, r, c)
+
+	if s.State != v1alpha1.SummaryStateDeploying {
+		t.Fatalf("State = %s, want Deploying (a stale condition must not produce Building)", s.State)
+	}
+}
+
 // stubSubReconciler lets the test compose an arbitrary chain.
 type stubSubReconciler struct {
 	fn func(ctx context.Context, r *v1alpha1.StackResource) (subReconcilerResult, error)

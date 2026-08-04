@@ -1005,6 +1005,33 @@ spec:
                 type: integer
               statusHash:
                 type: string
+              summary:
+                description: Summary is the agent's rolled-up verdict, written every
+                  pass.
+                properties:
+                  message:
+                    type: string
+                  observedGeneration:
+                    description: ObservedGeneration is the generation this verdict
+                      was derived for.
+                    format: int64
+                    type: integer
+                  reason:
+                    type: string
+                  state:
+                    description: StackResourceSummaryState is the state half of the
+                      summary verdict.
+                    enum:
+                    - Waiting
+                    - Building
+                    - Deploying
+                    - Ready
+                    - Failed
+                    type: string
+                required:
+                - observedGeneration
+                - state
+                type: object
               updatedReplicas:
                 format: int32
                 type: integer

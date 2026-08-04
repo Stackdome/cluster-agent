@@ -2,6 +2,8 @@ package stackresource
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -11,7 +13,8 @@ import (
 )
 
 // deriveSummaryStatus is the ONLY writer of the summary status (Available,
-// Stalled, Converged, Phase). Mirrors stack/aggregate.go one level down.
+// Stalled, Converged, Phase, Summary). Mirrors stack/aggregate.go one level
+// down.
 //
 //   - Sub-reconcilers contribute domain conditions (WorkloadAvailable,
 //     WorkloadConverged, BuildReady, ...) and pass-scoped verdicts. This runs
@@ -33,6 +36,7 @@ func deriveSummaryStatus(resource *v1alpha1.StackResource, verdicts *controller.
 		deriveNoVerdict(resource)
 	}
 
+	resource.Status.Summary = summarize(resource, verdicts)
 	resource.Status.StatusHash = resource.StatusHash()
 }
 
@@ -70,7 +74,7 @@ func deriveNoVerdict(resource *v1alpha1.StackResource) {
 		resource.Status.ImageSourceRevision = resource.Spec.BuildSpec.SourceRevision.GetSourceRevisionString()
 	}
 
-	converged, convergedReason, convergedMsg := domainCondition(resource,
+	converged, convergedReason, convergedMsg := domainConditionText(resource,
 		v1alpha1.StackResourceWorkloadConverged, "WorkloadNotConverged", "workload has not converged")
 	setSummaryCondition(resource, v1alpha1.StackResourceConverged, converged, convergedReason, convergedMsg)
 
@@ -113,11 +117,11 @@ func setSummaryCondition(resource *v1alpha1.StackResource, condType v1alpha1.Sta
 	})
 }
 
-// domainCondition reads a domain condition and the text it carried. A condition
-// from an older generation describes a rollout that no longer exists, so it
-// reads as false with the fallback text — neither its status nor its reason may
-// leak into the summary.
-func domainCondition(resource *v1alpha1.StackResource, condType v1alpha1.StackResourceDomainCondition,
+// domainConditionText reads a domain condition and the text it carried. A
+// condition from an older generation describes a rollout that no longer exists,
+// so it reads as false with the fallback text — neither its status nor its
+// reason may leak into the summary.
+func domainConditionText(resource *v1alpha1.StackResource, condType v1alpha1.StackResourceDomainCondition,
 	falseReason, falseMsg string) (bool, string, string) {
 	c := meta.FindStatusCondition(resource.Status.Conditions, string(condType))
 	if c == nil || c.ObservedGeneration != resource.Generation {
@@ -126,10 +130,119 @@ func domainCondition(resource *v1alpha1.StackResource, condType v1alpha1.StackRe
 	return c.Status == metav1.ConditionTrue, c.Reason, c.Message
 }
 
+// domainCondition returns the domain condition only when it has the given
+// status at the current generation; nil otherwise.
+func domainCondition(resource *v1alpha1.StackResource, condType v1alpha1.StackResourceDomainCondition, status metav1.ConditionStatus) *metav1.Condition {
+	c := meta.FindStatusCondition(resource.Status.Conditions, string(condType))
+	if c == nil || c.Status != status || c.ObservedGeneration != resource.Generation {
+		return nil
+	}
+	return c
+}
+
 // domainConditionTrue reports whether a domain condition is True at the current
 // generation. A stale True counts as false: it must not soften a Failed verdict
 // or promote Ready.
 func domainConditionTrue(resource *v1alpha1.StackResource, condType v1alpha1.StackResourceDomainCondition) bool {
-	isTrue, _, _ := domainCondition(resource, condType, "", "")
-	return isTrue
+	return domainCondition(resource, condType, metav1.ConditionTrue) != nil
+}
+
+// summarize rolls the pass up into one verdict.
+func summarize(resource *v1alpha1.StackResource, verdicts *controller.VerdictCollector) *v1alpha1.StackResourceStatusSummary {
+	state, reason, message := classify(resource, verdicts)
+	if state == v1alpha1.SummaryStateDeploying {
+		message = appendServingNote(resource, message)
+	}
+	return &v1alpha1.StackResourceStatusSummary{
+		State:              state,
+		Reason:             reason,
+		Message:            message,
+		ObservedGeneration: resource.Generation,
+	}
+}
+
+// classify maps the pass to one state. First case wins: terminal failure,
+// build in progress, waiting on dependencies, runtime crash, landed rollout,
+// else deploying. Build/deps outrank the crash detail: when those gates fail
+// the workload reconciler never ran this pass, so a crash entry is a previous
+// revision's leftover.
+func classify(resource *v1alpha1.StackResource, verdicts *controller.VerdictCollector) (v1alpha1.StackResourceSummaryState, string, string) {
+	notReady := verdicts.NotReady()
+	buildNotReady := domainCondition(resource, v1alpha1.StackResourceBuildReady, metav1.ConditionFalse)
+	depsNotReady := domainCondition(resource, v1alpha1.StackResourceDependenciesReady, metav1.ConditionFalse)
+	crash := failureDetail(resource, v1alpha1.FailureTypeRuntimeCrash)
+	converged := domainCondition(resource, v1alpha1.StackResourceWorkloadConverged, metav1.ConditionTrue)
+
+	switch {
+	case verdicts.Failed() != nil:
+		v := verdicts.Failed()
+		return v1alpha1.SummaryStateFailed, v.Reason, v.Message
+	case notReady != nil && buildNotReady != nil:
+		return v1alpha1.SummaryStateBuilding, buildNotReady.Reason, buildNotReady.Message
+	case notReady != nil && depsNotReady != nil:
+		return v1alpha1.SummaryStateWaiting, depsNotReady.Reason, depsNotReady.Message
+	case notReady != nil && crash != nil:
+		return v1alpha1.SummaryStateFailed, crash.LastTerminationReason, crash.LastTerminationMessage
+	case notReady == nil && converged != nil && domainConditionTrue(resource, v1alpha1.StackResourceWorkloadAvailable):
+		return v1alpha1.SummaryStateReady, converged.Reason, converged.Message
+	default:
+		reason, message := deployingDetail(resource, notReady)
+		return v1alpha1.SummaryStateDeploying, reason, message
+	}
+}
+
+// appendServingNote marks a deploying message when the previous revision still
+// holds traffic — without it, "not ready yet" reads as an outage.
+func appendServingNote(resource *v1alpha1.StackResource, message string) string {
+	if !domainConditionTrue(resource, v1alpha1.StackResourceWorkloadAvailable) {
+		return message
+	}
+	if message == "" {
+		return "previous revision still serving traffic"
+	}
+	return message + " (previous revision still serving traffic)"
+}
+
+// deployingDetail picks the most specific diagnosis of why the new pods are
+// not ready: the last port dial, else the verdict (nil on the no-verdict
+// path — fall back to WorkloadConverged). No readiness-detail branch: a
+// readiness_failure entry is only ever written together with a Failed
+// verdict, which never reaches the Deploying path.
+func deployingDetail(resource *v1alpha1.StackResource, v *controller.Verdict) (reason, message string) {
+	if pc := resource.Status.PortCheck; pc != nil && pc.Status == v1alpha1.PortCheckStatusTypeFailure {
+		return v1alpha1.ReasonPortNotListening, portDialMessage(pc.FailingPortNumbers)
+	}
+	if v != nil {
+		return v.Reason, v.Message
+	}
+	_, reason, message = domainConditionText(resource,
+		v1alpha1.StackResourceWorkloadConverged, "WorkloadNotConverged", "workload has not converged")
+	return reason, message
+}
+
+// failureDetail returns the first failure entry of the given classification
+// that carries any detail.
+func failureDetail(resource *v1alpha1.StackResource, failureType string) *v1alpha1.LastFailureDetail {
+	for i := range resource.Status.LastFailureDetails {
+		d := &resource.Status.LastFailureDetails[i]
+		if d.Type == failureType && (d.LastTerminationReason != "" || d.LastTerminationMessage != "") {
+			return d
+		}
+	}
+	return nil
+}
+
+// portDialMessage names the declared ports the last dial proved closed.
+// Never called with an empty list: a Failure PortCheck always carries the
+// closed ports.
+func portDialMessage(ports []int32) string {
+	strs := make([]string, len(ports))
+	for i, p := range ports {
+		strs[i] = strconv.Itoa(int(p))
+	}
+	noun := "port"
+	if len(ports) > 1 {
+		noun = "ports"
+	}
+	return fmt.Sprintf("%s %s not accepting connections", noun, strings.Join(strs, ", "))
 }

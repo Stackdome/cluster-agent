@@ -168,7 +168,7 @@ func recordPortFailure(resource *v1alpha1.StackResource) string {
 	resource.Status.LastFailureDetails = []v1alpha1.LastFailureDetail{{
 		Type:                   v1alpha1.FailureTypeReadinessFailure,
 		ContainerName:          resource.Name,
-		LastTerminationReason:  "PortNotListening",
+		LastTerminationReason:  v1alpha1.ReasonPortNotListening,
 		LastTerminationMessage: msg,
 	}}
 	return msg
@@ -290,6 +290,6 @@ func firstDialablePodIP(pods []corev1.Pod) (string, bool) {
 // Stalled=True / Available=True("ServingButStalled"), and a non-serving one
 // into Phase=Failed / Stalled=True / Available=False.
 func (r *Reconciler) reportPortNotListening(ctx context.Context, resource *v1alpha1.StackResource, msg string) {
-	r.Status.SetCondition(resource, v1alpha1.StackResourceWorkloadConverged, false, "PortNotListening", msg)
-	r.Status.ReportFailed(ctx, resource, "PortNotListening", msg)
+	r.Status.SetCondition(resource, v1alpha1.StackResourceWorkloadConverged, false, v1alpha1.ReasonPortNotListening, msg)
+	r.Status.ReportFailed(ctx, resource, v1alpha1.ReasonPortNotListening, msg)
 }

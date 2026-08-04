@@ -169,7 +169,10 @@ func sanitizeTerminationMessage(msg string) string {
 }
 
 func BuildLastFailureDetail(cs corev1.ContainerStatus) corev1alpha1.LastFailureDetail {
+	// Every caller gates on IsCrashState, so the classification is fixed here.
+	// Readers match Type exactly and never re-default an empty one.
 	detail := corev1alpha1.LastFailureDetail{
+		Type:          corev1alpha1.FailureTypeRuntimeCrash,
 		ContainerName: cs.Name,
 		RestartCount:  cs.RestartCount,
 	}

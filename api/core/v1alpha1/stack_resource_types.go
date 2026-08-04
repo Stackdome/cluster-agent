@@ -478,6 +478,9 @@ type StackResourceStatus struct {
 	// memory) also keeps the grace window intact across operator restarts.
 	// +optional
 	PortCheck *PortCheckStatus `json:"portCheck,omitempty"`
+	// Summary is the agent's rolled-up verdict, written every pass.
+	// +optional
+	Summary *StackResourceStatusSummary `json:"summary,omitempty"`
 }
 
 type PortCheckStatusType string
@@ -527,6 +530,37 @@ type LastFailureDetail struct {
 	LastTerminationReason   string `json:"lastTerminationReason,omitempty"`
 	LastTerminationMessage  string `json:"lastTerminationMessage,omitempty"`
 	LastTerminationExitCode *int32 `json:"lastTerminationExitCode,omitempty"`
+}
+
+// StackResourceSummaryState is the state half of the summary verdict.
+type StackResourceSummaryState string
+
+const (
+	SummaryStateWaiting   StackResourceSummaryState = "Waiting"
+	SummaryStateBuilding  StackResourceSummaryState = "Building"
+	SummaryStateDeploying StackResourceSummaryState = "Deploying"
+	SummaryStateReady     StackResourceSummaryState = "Ready"
+	SummaryStateFailed    StackResourceSummaryState = "Failed"
+)
+
+// Reasons the hub branches on. Exported so consumers never mirror literals.
+const (
+	ReasonBuildFailed      = "BuildFailed"
+	ReasonPortNotListening = "PortNotListening"
+)
+
+// StackResourceStatusSummary is the agent's rolled-up verdict for the
+// resource: what it is doing right now and why. Single writer: the status
+// derivation. The hub maps it 1:1 to release timeline events.
+type StackResourceStatusSummary struct {
+	// +kubebuilder:validation:Enum=Waiting;Building;Deploying;Ready;Failed
+	State StackResourceSummaryState `json:"state"`
+	// +optional
+	Reason string `json:"reason,omitempty"`
+	// +optional
+	Message string `json:"message,omitempty"`
+	// ObservedGeneration is the generation this verdict was derived for.
+	ObservedGeneration int64 `json:"observedGeneration"`
 }
 
 // +kubebuilder:object:root=true
