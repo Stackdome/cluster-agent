@@ -21,6 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	buildsv1alpha1 "stackdome.io/cluster-agent/api/builds/v1alpha1"
+	"stackdome.io/cluster-agent/api/core/v1alpha1"
 	stackv1alpha1 "stackdome.io/cluster-agent/api/core/v1alpha1"
 	registryv1alpha1 "stackdome.io/cluster-agent/api/registry/v1alpha1"
 	storagev1alpha1 "stackdome.io/cluster-agent/api/storage/v1alpha1"
@@ -413,6 +414,7 @@ func (r *ImageBuildReconciler) reconcileBuildJob(ctx context.Context, buildConfi
 		if err != nil {
 			logger.Error(err, fmt.Sprintf("failed to capture build failure detail for job %s", existingJob.Name))
 		} else if buildFailureDetail != nil {
+			buildFailureDetail.ReleaseID = buildConfig.Annotations[v1alpha1.ReleaseIDAnnotation]
 			buildConfig.Status.LastBuildFailureDetail = buildFailureDetail
 		}
 		reportImageBuildStatus(buildConfig, buildsv1alpha1.BuildFailed, metav1.ConditionTrue, "BuildJobFailed")

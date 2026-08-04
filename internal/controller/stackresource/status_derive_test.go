@@ -373,6 +373,7 @@ func TestSummaryBuildOutranksStaleCrash(t *testing.T) {
 
 func TestSummaryDeployingWithPortDial(t *testing.T) {
 	r := deriveTestResource()
+	r.Spec.Ports = []v1alpha1.Port{{Number: 80}}
 	r.Status.PortCheck = &v1alpha1.PortCheckStatus{
 		Revision:           "rev-3",
 		Status:             v1alpha1.PortCheckStatusTypeFailure,
@@ -388,6 +389,29 @@ func TestSummaryDeployingWithPortDial(t *testing.T) {
 	}
 	if s.Message != "port 80 not accepting connections" {
 		t.Fatalf("Message = %q, want the port-dial diagnosis", s.Message)
+	}
+}
+
+// A stored dial can belong to the previous revision. A port the spec no
+// longer declares must not surface — the new release removed it.
+func TestSummaryIgnoresDialForRemovedPort(t *testing.T) {
+	r := deriveTestResource()
+	r.Spec.Ports = []v1alpha1.Port{{Number: 3000}}
+	r.Status.PortCheck = &v1alpha1.PortCheckStatus{
+		Revision:           "rev-2",
+		Status:             v1alpha1.PortCheckStatusTypeFailure,
+		FailingPortNumbers: []int32{80},
+	}
+	c := &controller.VerdictCollector{}
+	c.ReportNotReady("StackResourceDeploymentNotReady", "deployment is not ready")
+
+	s := summaryOf(t, r, c)
+
+	if s.State != v1alpha1.SummaryStateDeploying || s.Reason != "StackResourceDeploymentNotReady" {
+		t.Fatalf("want Deploying/StackResourceDeploymentNotReady, got %s/%s", s.State, s.Reason)
+	}
+	if s.Message != "deployment is not ready" {
+		t.Fatalf("Message = %q, want the verdict message, not the stale dial", s.Message)
 	}
 }
 
@@ -408,6 +432,7 @@ func TestSummaryDeployingVerdictFallback(t *testing.T) {
 
 func TestSummaryPreviousRevisionSuffix(t *testing.T) {
 	r := deriveTestResource()
+	r.Spec.Ports = []v1alpha1.Port{{Number: 80}}
 	setResourceCondition(r, v1alpha1.StackResourceWorkloadAvailable, true, "DeploymentServing", "serving")
 	r.Status.PortCheck = &v1alpha1.PortCheckStatus{
 		Revision:           "rev-3",

@@ -934,6 +934,13 @@ spec:
                       type: string
                     lastTerminationReason:
                       type: string
+                    releaseId:
+                      description: |-
+                        ReleaseID is the release whose rollout the failure was observed on
+                        (from the resource's release-id annotation), so the hub can drop a
+                        previous release's failure instead of putting it on the current
+                        release's timeline. Empty on details written before this field existed.
+                      type: string
                     restartCount:
                       format: int32
                       type: integer

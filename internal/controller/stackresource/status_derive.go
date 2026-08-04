@@ -209,8 +209,8 @@ func appendServingNote(resource *v1alpha1.StackResource, message string) string 
 // readiness_failure entry is only ever written together with a Failed
 // verdict, which never reaches the Deploying path.
 func deployingDetail(resource *v1alpha1.StackResource, v *controller.Verdict) (reason, message string) {
-	if pc := resource.Status.PortCheck; pc != nil && pc.Status == v1alpha1.PortCheckStatusTypeFailure {
-		return v1alpha1.ReasonPortNotListening, portDialMessage(pc.FailingPortNumbers)
+	if ports := declaredFailingPorts(resource); len(ports) > 0 {
+		return v1alpha1.ReasonPortNotListening, portDialMessage(ports)
 	}
 	if v != nil {
 		return v.Reason, v.Message
@@ -218,6 +218,28 @@ func deployingDetail(resource *v1alpha1.StackResource, v *controller.Verdict) (r
 	_, reason, message = domainConditionText(resource,
 		v1alpha1.StackResourceWorkloadConverged, "WorkloadNotConverged", "workload has not converged")
 	return reason, message
+}
+
+// declaredFailingPorts returns the failing dialed ports the spec still
+// declares. The stored dial can be a previous revision's (the checker only
+// re-dials once the new pods run), so ports removed from the spec are dropped
+// — without this a release that removes a port inherits its failing dial.
+func declaredFailingPorts(resource *v1alpha1.StackResource) []int32 {
+	pc := resource.Status.PortCheck
+	if pc == nil || pc.Status != v1alpha1.PortCheckStatusTypeFailure {
+		return nil
+	}
+	declared := make(map[int32]bool, len(resource.Spec.Ports))
+	for _, p := range resource.Spec.Ports {
+		declared[p.Number] = true
+	}
+	var failing []int32
+	for _, n := range pc.FailingPortNumbers {
+		if declared[n] {
+			failing = append(failing, n)
+		}
+	}
+	return failing
 }
 
 // failureDetail returns the first failure entry of the given classification
