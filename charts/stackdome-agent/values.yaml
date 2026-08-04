@@ -1,4 +1,6 @@
 stackdome-agent-standalone:
+  errorPages:
+    enabled: false
   image:
     repository: quay.io/stackdome/cluster-agent/cluster-agent-manager
     tag: ""
@@ -22,26 +24,13 @@ cloudnative-pg:
 
 traefik:
   enabled: true
-  # Applies the branded error-page middleware to every router on both
-  # entrypoints, so no generated Ingress carries the annotation and the rule
-  # exists in exactly one place per cluster.
-  #
-  # The reference follows Traefik's provider naming convention
-  # (`<namespace>-<name>@kubernetescrd`) and must match the namespace the chart
-  # creates the `stackdome-errors` Middleware in — i.e. the release namespace.
-  # Helm does not template values.yaml, so this cannot be derived from
-  # `.Release.Namespace`; installing the agent outside `stackdome-control-plane`
-  # requires overriding these two values to match. A mismatch is not a missing
-  # error page — Traefik fails every router whose middleware does not resolve —
-  # so templates/validate-error-page-middleware.yaml refuses to render rather
-  # than let the install take the cluster's ingress down.
-  ports:
-    web:
-      middlewares:
-        - stackdome-control-plane-stackdome-errors@kubernetescrd
-    websecure:
-      middlewares:
-        - stackdome-control-plane-stackdome-errors@kubernetescrd
+  # Branded error pages are off for now (stackdome-agent-standalone.errorPages.enabled),
+  # so no entrypoint middleware is applied. To turn them back on, enable the
+  # subchart flag and set both entrypoint middleware references to
+  # `<release-namespace>-stackdome-errors@kubernetescrd`. The reference must match
+  # the release namespace; templates/validate-error-page-middleware.yaml enforces
+  # that, because a middleware that does not resolve fails every router on the
+  # entrypoint.
 
 plugin-barman-cloud:
   enabled: true
