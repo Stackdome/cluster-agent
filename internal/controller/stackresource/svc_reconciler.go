@@ -58,12 +58,20 @@ func (r *svcReconciler) reconcile(ctx context.Context, resource *v1alpha1.StackR
 	resource.Status.ExternalAddress = buildExternalAddresses(resource, portFqdnMap, certState.Stage)
 	setResourceCondition(resource, v1alpha1.StackResourceIngressReady, true, "IngressConfigured", "ingress routes configured for public ports")
 
+	// While the certificate is still issuing a TLS port publishes no address, and the hub
+	// reads Converged as "the public URLs are final" — so hold convergence back until
+	// issuance is terminal (issued, failed, or the grace period elapsed). The grace period
+	// bounds this: a certificate that never resolves cannot wedge the resource.
+	//
 	// The Certificate watch fires on issuance, but the silent-stall case produces no
 	// Certificate event at all — nothing would wake the reconciler to notice the grace
 	// period expired. Schedule that pass explicitly. A deferred requeue does not stop the
 	// sub-reconciler chain, so the workload still reconciles normally.
-	if certState.Stage == certIssuanceStageIssuing && certState.RetryAfter > 0 {
-		return resultDeferredRequeue(certState.RetryAfter), nil
+	if certState.Stage == certIssuanceStageIssuing {
+		reportNotReady(ctx, certState.Reason, certState.Message)
+		if certState.RetryAfter > 0 {
+			return resultDeferredRequeue(certState.RetryAfter), nil
+		}
 	}
 	return resultNil, nil
 }
