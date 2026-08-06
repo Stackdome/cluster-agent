@@ -17,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -79,6 +80,17 @@ func readyCertificate() *cmv1.Certificate {
 				Type:   cmv1.CertificateConditionReady,
 				Status: cmmeta.ConditionTrue,
 			}},
+		},
+	}
+}
+
+// failedCertificate is a Certificate cert-manager has given up on for now:
+// FailedIssuanceAttempts is its own count of continuous failures.
+func failedCertificate() *cmv1.Certificate {
+	return &cmv1.Certificate{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app-tls", Namespace: "test-ns"},
+		Status: cmv1.CertificateStatus{
+			FailedIssuanceAttempts: ptr.To(3),
 		},
 	}
 }
@@ -670,6 +682,164 @@ var _ = Describe("svcReconciler redirect gating", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(certState.Stage).To(Equal(certIssuanceStageUnavailable))
 		Expect(tlsCondition(resource).Reason).To(Equal("CertificateTimedOut"))
+	})
+})
+
+var _ = Describe("svcReconciler convergence gating on TLS issuance", func() {
+	var (
+		mockCtrl   *gomock.Controller
+		mockClient *mocks.MockClient
+		reconciler *svcReconciler
+		ctx        context.Context
+		verdicts   *controller.VerdictCollector
+		scheme     *runtime.Scheme
+	)
+
+	BeforeEach(func() {
+		mockCtrl = gomock.NewController(GinkgoT())
+		mockClient = mocks.NewMockClient(mockCtrl)
+		ctx, verdicts = controller.ContextWithVerdicts(context.Background())
+
+		scheme = runtime.NewScheme()
+		Expect(v1alpha1.AddToScheme(scheme)).To(Succeed())
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
+		Expect(networkingv1.AddToScheme(scheme)).To(Succeed())
+		Expect(cmv1.AddToScheme(scheme)).To(Succeed())
+
+		reconciler = &svcReconciler{Client: mockClient, Scheme: scheme}
+	})
+
+	AfterEach(func() {
+		mockCtrl.Finish()
+	})
+
+	expectServiceCreated := func() {
+		mockClient.EXPECT().
+			Get(gomock.Any(), client.ObjectKey{Name: "my-app", Namespace: "test-ns"}, gomock.AssignableToTypeOf(&corev1.Service{})).
+			Return(apierrors.NewNotFound(schema.GroupResource{Resource: "services"}, "my-app"))
+		mockClient.EXPECT().
+			Create(gomock.Any(), gomock.AssignableToTypeOf(&corev1.Service{})).
+			Return(nil)
+	}
+
+	expectIngressCreated := func() {
+		expectIngressNotFound(mockClient)
+		mockClient.EXPECT().
+			Create(gomock.Any(), gomock.AssignableToTypeOf(&networkingv1.Ingress{})).
+			Return(nil)
+	}
+
+	// tlsResource is a public port with TLS: the only shape the gate applies to.
+	tlsResource := func() *v1alpha1.StackResource {
+		resource := newSvcTestResource(
+			[]v1alpha1.Port{
+				{Name: "http", Number: 8080, Protocol: "http", ExposeToPublic: true, FQDN: "app.example.com", TLS: true},
+			},
+			map[string]string{v1alpha1.ClusterIssuerAnnotation: "letsencrypt-prod"},
+		)
+		resource.Generation = 1
+		// The workload itself has rolled out: without the TLS gate the summary
+		// would mirror this and report Converged=True with no published URL.
+		resource.Status.Conditions = []metav1.Condition{{
+			Type:               string(v1alpha1.StackResourceWorkloadConverged),
+			Status:             metav1.ConditionTrue,
+			ObservedGeneration: 1,
+			Reason:             "WorkloadConverged",
+			Message:            "rollout complete",
+		}}
+		return resource
+	}
+
+	convergedCondition := func(resource *v1alpha1.StackResource) *metav1.Condition {
+		deriveSummaryStatus(resource, verdicts)
+		return findCondition(resource.Status.Conditions, string(v1alpha1.StackResourceConverged))
+	}
+
+	It("stays not converged while the certificate is still issuing inside the grace period", func() {
+		expectServiceCreated()
+		expectClusterIssuerGet(mockClient, "letsencrypt-prod", true)
+		expectCertificateGet(mockClient, nil)
+		expectIngressCreated()
+		expectMiddlewareCreated(mockClient)
+
+		resource := tlsResource()
+		res, err := reconciler.reconcile(ctx, resource)
+		Expect(err).NotTo(HaveOccurred())
+
+		By("scheduling the pass that will see the grace period expire")
+		Expect(res.DeferredRequeueAfter).NotTo(BeNil())
+		Expect(*res.DeferredRequeueAfter).To(BeNumerically(">", 0))
+		Expect(*res.DeferredRequeueAfter).To(BeNumerically("<=", certGracePeriod))
+
+		By("publishing no address for the TLS port")
+		Expect(resource.Status.ExternalAddress).To(BeEmpty())
+
+		By("gating Converged even though the workload converged")
+		Expect(verdicts.NotReady()).NotTo(BeNil())
+		cond := convergedCondition(resource)
+		Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+		Expect(cond.Reason).To(Equal("CertificateIssuing"))
+	})
+
+	It("converges with an https address once the certificate is issued", func() {
+		expectServiceCreated()
+		expectClusterIssuerGet(mockClient, "letsencrypt-prod", true)
+		expectCertificateGet(mockClient, readyCertificate())
+		expectIngressCreated()
+		expectMiddlewareCreated(mockClient)
+
+		resource := tlsResource()
+		res, err := reconciler.reconcile(ctx, resource)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(res).To(Equal(resultNil))
+		Expect(verdicts.NotReady()).To(BeNil())
+
+		Expect(resource.Status.ExternalAddress).To(HaveLen(1))
+		Expect(resource.Status.ExternalAddress[0].Address).To(Equal("https://app.example.com"))
+		Expect(convergedCondition(resource).Status).To(Equal(metav1.ConditionTrue))
+	})
+
+	It("converges with an http address when issuance terminally fails", func() {
+		expectServiceCreated()
+		expectClusterIssuerGet(mockClient, "letsencrypt-prod", true)
+		expectCertificateGet(mockClient, failedCertificate())
+		expectIngressCreated()
+		expectMiddlewareCreated(mockClient)
+
+		resource := tlsResource()
+		res, err := reconciler.reconcile(ctx, resource)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(res).To(Equal(resultNil))
+		Expect(verdicts.NotReady()).To(BeNil())
+
+		Expect(resource.Status.ExternalAddress).To(HaveLen(1))
+		Expect(resource.Status.ExternalAddress[0].Address).To(Equal("http://app.example.com"))
+		Expect(convergedCondition(resource).Status).To(Equal(metav1.ConditionTrue))
+	})
+
+	It("converges with an http address once the grace period expires", func() {
+		expectServiceCreated()
+		expectClusterIssuerGet(mockClient, "letsencrypt-prod", true)
+		expectCertificateGet(mockClient, nil)
+		expectIngressCreated()
+		expectMiddlewareCreated(mockClient)
+
+		resource := tlsResource()
+		resource.Status.Conditions = append(resource.Status.Conditions, metav1.Condition{
+			Type:               string(v1alpha1.StackResourceTLSConfigured),
+			Status:             metav1.ConditionFalse,
+			Reason:             "CertificateIssuing",
+			LastTransitionTime: metav1.NewTime(time.Now().Add(-2 * certGracePeriod)),
+		})
+
+		res, err := reconciler.reconcile(ctx, resource)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(res).To(Equal(resultNil))
+		Expect(verdicts.NotReady()).To(BeNil())
+
+		Expect(resource.Status.ExternalAddress).To(HaveLen(1))
+		Expect(resource.Status.ExternalAddress[0].Address).To(Equal("http://app.example.com"))
+		Expect(convergedCondition(resource).Status).To(Equal(metav1.ConditionTrue))
 	})
 })
 
