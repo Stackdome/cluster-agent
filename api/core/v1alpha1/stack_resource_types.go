@@ -195,11 +195,13 @@ type Port struct {
 	FQDN string `json:"fqdn,omitempty"`
 	// +optional
 	TLS bool `json:"tls,omitempty"`
-	// TLSSecretRef optionally points at a pre-provisioned TLS secret
-	// ("<namespace>/<name>") whose cert covers FQDN. When set, the ingress
-	// references a replicated copy of this secret instead of asking
-	// cert-manager for a per-host certificate.
+	// TLSSecretRef names a pre-provisioned TLS Secret in the configured platform
+	// TLS namespace. Its certificate must cover FQDN. When set, the ingress uses
+	// a copy of this Secret instead of asking cert-manager for a certificate.
 	// +optional
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
 	TLSSecretRef string `json:"tlsSecretRef,omitempty"`
 }
 
@@ -462,10 +464,10 @@ type CertManagerTLSStatus struct {
 }
 
 // ReferencedTLSSecretStatus records controller state for a TLS Secret copied
-// from another namespace. It is not a user-facing condition: it scopes the
+// from the platform TLS namespace. It is not a user-facing condition: it scopes the
 // temporary HTTPS grace period to the configured Secret reference.
 type ReferencedTLSSecretStatus struct {
-	// Reference is the configured "<namespace>/<name>" TLS Secret reference.
+	// Reference is the configured TLS Secret name.
 	Reference string `json:"reference"`
 	// WaitingSince is set while the source Secret or its workload replica is
 	// unavailable, and is cleared once the replica is ready.

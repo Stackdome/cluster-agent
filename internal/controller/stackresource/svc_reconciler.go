@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -28,7 +29,8 @@ import (
 
 type svcReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme               *runtime.Scheme
+	platformTLSNamespace string
 }
 
 func ResourceSVCName(resource *v1alpha1.StackResource) string {
@@ -76,6 +78,16 @@ func (r *svcReconciler) reconcile(ctx context.Context, resource *v1alpha1.StackR
 		state.referencedTLS.Stage,
 	)
 	setResourceCondition(resource, v1alpha1.StackResourceIngressReady, true, "IngressConfigured", "ingress routes configured for public ports")
+
+	// A TLS port publishes no external address while it waits, so the same tri-state that
+	// gates URL population gates convergence — otherwise the hub sees a converged release
+	// with empty public URLs. The grace period bounds it: a path that never resolves goes
+	// tlsStageUnavailable, falls back to http://, and converges.
+	for _, state := range []tlsState{state.certManagerTLS, state.referencedTLS} {
+		if state.Stage == tlsStageWaiting {
+			reportNotReady(ctx, state.Reason, state.Message)
+		}
+	}
 
 	// TLS object watches wake us when a certificate becomes ready. A stalled issuance has
 	// no event at the grace deadline, so schedule that pass. A deferred requeue does not
@@ -514,9 +526,8 @@ type exposedPortRoutes struct {
 	referencedTLSHosts     []string
 }
 
-// collectExposedPortRoutes splits the public ports. A TLSSecretRef that is not
-// "<namespace>/<name>" is ignored, so the port falls back to the cert-manager path
-// rather than losing TLS.
+// collectExposedPortRoutes splits the public ports. An invalid TLSSecretRef is ignored,
+// so the port falls back to the cert-manager path rather than losing TLS.
 func collectExposedPortRoutes(resource *v1alpha1.StackResource) (exposedPortRoutes, error) {
 	routes := exposedPortRoutes{
 		allFQDNs:                map[int]string{},
@@ -550,13 +561,13 @@ func collectExposedPortRoutes(resource *v1alpha1.StackResource) (exposedPortRout
 	return routes, nil
 }
 
-// portReferencedTLSSecretRef is true when the port uses a "ns/name" TLSSecretRef.
+// portReferencedTLSSecretRef is true when the port uses a valid Secret name.
 // Invalid refs fall through to cert-manager instead of dropping TLS.
 func portReferencedTLSSecretRef(port v1alpha1.Port) (string, bool) {
 	if !port.TLS {
 		return "", false
 	}
-	if _, _, ok := ingresstls.SplitSecretRef(port.TLSSecretRef); !ok {
+	if len(validation.IsDNS1123Subdomain(port.TLSSecretRef)) != 0 {
 		return "", false
 	}
 	return port.TLSSecretRef, true
@@ -567,10 +578,9 @@ func buildReferencedTLSConfig(ref string, hosts []string, stage tlsStage) []netw
 	if ref == "" || stage != tlsStageReady {
 		return nil
 	}
-	_, name, _ := ingresstls.SplitSecretRef(ref)
 	return []networkingv1.IngressTLS{{
 		Hosts:      lo.Uniq(hosts),
-		SecretName: name,
+		SecretName: ref,
 	}}
 }
 

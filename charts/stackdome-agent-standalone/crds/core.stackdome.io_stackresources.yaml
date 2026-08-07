@@ -678,10 +678,12 @@ spec:
                       type: boolean
                     tlsSecretRef:
                       description: |-
-                        TLSSecretRef optionally points at a pre-provisioned TLS secret
-                        ("<namespace>/<name>") whose cert covers FQDN. When set, the ingress
-                        references a replicated copy of this secret instead of asking
-                        cert-manager for a per-host certificate.
+                        TLSSecretRef names a pre-provisioned TLS Secret in the configured platform
+                        TLS namespace. Its certificate must cover FQDN. When set, the ingress uses
+                        a copy of this Secret instead of asking cert-manager for a certificate.
+                      maxLength: 253
+                      minLength: 1
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
                       type: string
                   required:
                   - name
@@ -1031,8 +1033,7 @@ spec:
                   is configured.
                 properties:
                   reference:
-                    description: Reference is the configured "<namespace>/<name>"
-                      TLS Secret reference.
+                    description: Reference is the configured TLS Secret name.
                     type: string
                   waitingSince:
                     description: |-

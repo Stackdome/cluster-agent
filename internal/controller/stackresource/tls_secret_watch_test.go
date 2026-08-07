@@ -60,7 +60,7 @@ var _ = Describe("referenced TLS Secret watch", func() {
 		baseClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
 			referencingResource("uses-platform-wildcard", "test-ns", referencedTLSSecretRef, true),
 			referencingResource("same-reference-without-label", "test-ns", referencedTLSSecretRef, false),
-			referencingResource("uses-something-else", "test-ns", "stackdome-system/other-tls", false),
+			referencingResource("uses-something-else", "test-ns", "other-tls", false),
 		).Build()
 		recordingClient := &listRecordingClient{Client: baseClient}
 		reconciler = &StackResourceReconciler{

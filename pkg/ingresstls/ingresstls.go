@@ -3,7 +3,6 @@ package ingresstls
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	cmv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	"github.com/go-logr/logr"
@@ -80,14 +79,6 @@ func TraefikAnnotations(namespace string) map[string]string {
 		TraefikEntrypointsAnnotation: "web,websecure",
 		TraefikMiddlewaresAnnotation: fmt.Sprintf("%s-%s@kubernetescrd", namespace, RedirectMiddlewareName),
 	}
-}
-
-// SplitSecretRef splits a "<namespace>/<name>" secret reference. Anything else — no
-// slash, an empty half, or a third segment ("a/b/c") — is not a usable reference and
-// reports ok=false rather than handing the API server a name it will reject.
-func SplitSecretRef(ref string) (namespace, name string, ok bool) {
-	namespace, name, ok = strings.Cut(ref, "/")
-	return namespace, name, ok && namespace != "" && name != "" && !strings.Contains(name, "/")
 }
 
 // EnsureRedirectMiddleware creates or updates the Traefik Middleware CR for

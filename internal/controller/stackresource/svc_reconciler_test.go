@@ -790,7 +790,7 @@ var _ = Describe("svcReconciler Ingress TLS with a referenced TLS Secret", func(
 		Expect(networkingv1.AddToScheme(scheme)).To(Succeed())
 		Expect(cmv1.AddToScheme(scheme)).To(Succeed())
 
-		reconciler = &svcReconciler{Client: mockClient, Scheme: scheme}
+		reconciler = &svcReconciler{Client: mockClient, Scheme: scheme, platformTLSNamespace: sourceSecretNamespace}
 		svc = &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "my-app", Namespace: "test-ns"}}
 		created = map[string]*networkingv1.Ingress{}
 	})
@@ -849,11 +849,11 @@ var _ = Describe("svcReconciler Ingress TLS with a referenced TLS Secret", func(
 	// expectSecretReplicated stubs the source secret read plus the copy into the workload
 	// namespace that has to be in place before the Ingress names it.
 	expectSecretReplicated := func(ref string) {
-		sourceNamespace, name, _ := ingresstls.SplitSecretRef(ref)
+		name := ref
 		mockClient.EXPECT().
-			Get(gomock.Any(), client.ObjectKey{Name: name, Namespace: sourceNamespace}, gomock.AssignableToTypeOf(&corev1.Secret{})).
+			Get(gomock.Any(), client.ObjectKey{Name: name, Namespace: sourceSecretNamespace}, gomock.AssignableToTypeOf(&corev1.Secret{})).
 			DoAndReturn(func(_ context.Context, _ client.ObjectKey, obj client.Object, _ ...client.GetOption) error {
-				*obj.(*corev1.Secret) = *sourceTLSSecret(sourceNamespace, name, "cert")
+				*obj.(*corev1.Secret) = *sourceTLSSecret(sourceSecretNamespace, name, "cert")
 				return nil
 			})
 		mockClient.EXPECT().
@@ -865,17 +865,16 @@ var _ = Describe("svcReconciler Ingress TLS with a referenced TLS Secret", func(
 	}
 
 	expectSourceSecretMissing := func(ref string) {
-		sourceNamespace, name, _ := ingresstls.SplitSecretRef(ref)
 		mockClient.EXPECT().
-			Get(gomock.Any(), client.ObjectKey{Name: name, Namespace: sourceNamespace}, gomock.AssignableToTypeOf(&corev1.Secret{})).
-			Return(apierrors.NewNotFound(schema.GroupResource{Resource: "secrets"}, name))
+			Get(gomock.Any(), client.ObjectKey{Name: ref, Namespace: sourceSecretNamespace}, gomock.AssignableToTypeOf(&corev1.Secret{})).
+			Return(apierrors.NewNotFound(schema.GroupResource{Resource: "secrets"}, ref))
 	}
 
 	It("serves every referenced port from the referenced TLS Ingress and drops the main one", func() {
 		resource := newSvcTestResource(
 			[]v1alpha1.Port{
-				{Name: "http", Number: 8080, Protocol: "http", ExposeToPublic: true, FQDN: "web.stackdome.app", TLS: true, TLSSecretRef: "stackdome-system/platform-wildcard-tls"},
-				{Name: "api", Number: 9090, Protocol: "http", ExposeToPublic: true, FQDN: "api.stackdome.app", TLS: true, TLSSecretRef: "stackdome-system/platform-wildcard-tls"},
+				{Name: "http", Number: 8080, Protocol: "http", ExposeToPublic: true, FQDN: "web.stackdome.app", TLS: true, TLSSecretRef: "platform-wildcard-tls"},
+				{Name: "api", Number: 9090, Protocol: "http", ExposeToPublic: true, FQDN: "api.stackdome.app", TLS: true, TLSSecretRef: "platform-wildcard-tls"},
 			},
 			nil,
 		)
@@ -904,23 +903,23 @@ var _ = Describe("svcReconciler Ingress TLS with a referenced TLS Secret", func(
 	It("rejects conflicting referenced TLS Secret references", func() {
 		resource := newSvcTestResource(
 			[]v1alpha1.Port{
-				{Name: "api", Number: 9090, Protocol: "http", ExposeToPublic: true, FQDN: "api.stackdome.app", TLS: true, TLSSecretRef: "stackdome-system/zeta-tls"},
-				{Name: "http", Number: 8080, Protocol: "http", ExposeToPublic: true, FQDN: "web.example.com", TLS: true, TLSSecretRef: "stackdome-system/alpha-tls"},
+				{Name: "api", Number: 9090, Protocol: "http", ExposeToPublic: true, FQDN: "api.stackdome.app", TLS: true, TLSSecretRef: "zeta-tls"},
+				{Name: "http", Number: 8080, Protocol: "http", ExposeToPublic: true, FQDN: "web.example.com", TLS: true, TLSSecretRef: "alpha-tls"},
 			},
 			nil,
 		)
 
 		_, err := reconciler.reconcileIngress(ctx, resource, svc)
 		Expect(err).To(MatchError(And(
-			ContainSubstring("stackdome-system/alpha-tls"),
-			ContainSubstring("stackdome-system/zeta-tls"),
+			ContainSubstring("alpha-tls"),
+			ContainSubstring("zeta-tls"),
 		)))
 	})
 
 	It("splits a mixed resource across the two Ingresses", func() {
 		resource := newSvcTestResource(
 			[]v1alpha1.Port{
-				{Name: "http", Number: 8080, Protocol: "http", ExposeToPublic: true, FQDN: "web.stackdome.app", TLS: true, TLSSecretRef: "stackdome-system/platform-wildcard-tls"},
+				{Name: "http", Number: 8080, Protocol: "http", ExposeToPublic: true, FQDN: "web.stackdome.app", TLS: true, TLSSecretRef: "platform-wildcard-tls"},
 				{Name: "api", Number: 9090, Protocol: "http", ExposeToPublic: true, FQDN: "app.customer.com", TLS: true},
 			},
 			map[string]string{v1alpha1.ClusterIssuerAnnotation: "letsencrypt-prod"},
@@ -962,7 +961,7 @@ var _ = Describe("svcReconciler Ingress TLS with a referenced TLS Secret", func(
 	It("still serves the referenced host when the ClusterIssuer for the other one is missing", func() {
 		resource := newSvcTestResource(
 			[]v1alpha1.Port{
-				{Name: "http", Number: 8080, Protocol: "http", ExposeToPublic: true, FQDN: "web.stackdome.app", TLS: true, TLSSecretRef: "stackdome-system/platform-wildcard-tls"},
+				{Name: "http", Number: 8080, Protocol: "http", ExposeToPublic: true, FQDN: "web.stackdome.app", TLS: true, TLSSecretRef: "platform-wildcard-tls"},
 				{Name: "api", Number: 9090, Protocol: "http", ExposeToPublic: true, FQDN: "app.customer.com", TLS: true},
 			},
 			map[string]string{v1alpha1.ClusterIssuerAnnotation: "letsencrypt-prod"},
@@ -1048,7 +1047,7 @@ var _ = Describe("svcReconciler Ingress TLS with a referenced TLS Secret", func(
 		Expect(created).To(HaveKey("my-app-http-proxy"))
 	})
 
-	DescribeTable("falls back to cert-manager when the ref is not <namespace>/<name>",
+	DescribeTable("falls back to cert-manager when the ref is not a Secret name",
 		func(ref string) {
 			resource := newSvcTestResource(
 				[]v1alpha1.Port{
@@ -1074,10 +1073,9 @@ var _ = Describe("svcReconciler Ingress TLS with a referenced TLS Secret", func(
 			}}))
 			Expect(main.Annotations).To(HaveKeyWithValue(ingresstls.CertManagerClusterIssuerAnnotation, "letsencrypt-prod"))
 		},
-		Entry("no namespace", "platform-wildcard-tls"),
-		// "a/b/c" would otherwise yield the secret name "b/c", which the API server rejects.
+		Entry("a namespace", "stackdome-system/platform-wildcard-tls"),
 		Entry("an extra segment", "stackdome-system/sub/platform-wildcard-tls"),
-		Entry("an empty namespace", "/platform-wildcard-tls"),
+		Entry("a leading slash", "/platform-wildcard-tls"),
 	)
 })
 
@@ -1175,6 +1173,7 @@ var _ = Describe("svcReconciler convergence gating on TLS issuance", func() {
 
 	expectIngressCreated := func() {
 		expectIngressNotFound(mockClient)
+		allowReferencedTLSIngressCleanup(mockClient)
 		mockClient.EXPECT().
 			Create(gomock.Any(), gomock.AssignableToTypeOf(&networkingv1.Ingress{})).
 			Return(nil)
@@ -1211,7 +1210,6 @@ var _ = Describe("svcReconciler convergence gating on TLS issuance", func() {
 		expectClusterIssuerGet(mockClient, "letsencrypt-prod", true)
 		expectCertificateGet(mockClient, nil)
 		expectIngressCreated()
-		expectMiddlewareCreated(mockClient)
 
 		resource := tlsResource()
 		res, err := reconciler.reconcile(ctx, resource)
@@ -1220,7 +1218,7 @@ var _ = Describe("svcReconciler convergence gating on TLS issuance", func() {
 		By("scheduling the pass that will see the grace period expire")
 		Expect(res.DeferredRequeueAfter).NotTo(BeNil())
 		Expect(*res.DeferredRequeueAfter).To(BeNumerically(">", 0))
-		Expect(*res.DeferredRequeueAfter).To(BeNumerically("<=", certGracePeriod))
+		Expect(*res.DeferredRequeueAfter).To(BeNumerically("<=", tlsGracePeriod))
 
 		By("publishing no address for the TLS port")
 		Expect(resource.Status.ExternalAddress).To(BeEmpty())
@@ -1255,7 +1253,6 @@ var _ = Describe("svcReconciler convergence gating on TLS issuance", func() {
 		expectClusterIssuerGet(mockClient, "letsencrypt-prod", true)
 		expectCertificateGet(mockClient, failedCertificate())
 		expectIngressCreated()
-		expectMiddlewareCreated(mockClient)
 
 		resource := tlsResource()
 		res, err := reconciler.reconcile(ctx, resource)
@@ -1273,15 +1270,11 @@ var _ = Describe("svcReconciler convergence gating on TLS issuance", func() {
 		expectClusterIssuerGet(mockClient, "letsencrypt-prod", true)
 		expectCertificateGet(mockClient, nil)
 		expectIngressCreated()
-		expectMiddlewareCreated(mockClient)
 
 		resource := tlsResource()
-		resource.Status.Conditions = append(resource.Status.Conditions, metav1.Condition{
-			Type:               string(v1alpha1.StackResourceTLSConfigured),
-			Status:             metav1.ConditionFalse,
-			Reason:             "CertificateIssuing",
-			LastTransitionTime: metav1.NewTime(time.Now().Add(-2 * certGracePeriod)),
-		})
+		resource.Status.CertManagerTLS = &v1alpha1.CertManagerTLSStatus{
+			WaitingSince: &metav1.Time{Time: time.Now().Add(-2 * tlsGracePeriod)},
+		}
 
 		res, err := reconciler.reconcile(ctx, resource)
 		Expect(err).NotTo(HaveOccurred())
@@ -1364,7 +1357,7 @@ var _ = Describe("svcReconciler.reconcile (orchestration)", func() {
 		Expect(networkingv1.AddToScheme(scheme)).To(Succeed())
 
 		fakeClient = fake.NewClientBuilder().WithScheme(scheme).Build()
-		reconciler = &svcReconciler{Client: fakeClient, Scheme: scheme}
+		reconciler = &svcReconciler{Client: fakeClient, Scheme: scheme, platformTLSNamespace: sourceSecretNamespace}
 	})
 
 	orchestrationResource := func(workloadType v1alpha1.WorkloadType, ports ...v1alpha1.Port) *v1alpha1.StackResource {
@@ -1419,15 +1412,15 @@ var _ = Describe("svcReconciler.reconcile (orchestration)", func() {
 
 	It("rejects conflicting referenced TLS Secrets before writing the Service", func() {
 		resource := orchestrationResource(v1alpha1.WorkloadTypeService,
-			v1alpha1.Port{Name: "api", Number: 9090, ExposeToPublic: true, TLS: true, TLSSecretRef: "stackdome-system/zeta-tls"},
-			v1alpha1.Port{Name: "http", Number: 8080, ExposeToPublic: true, TLS: true, TLSSecretRef: "stackdome-system/alpha-tls"},
+			v1alpha1.Port{Name: "api", Number: 9090, ExposeToPublic: true, TLS: true, TLSSecretRef: "zeta-tls"},
+			v1alpha1.Port{Name: "http", Number: 8080, ExposeToPublic: true, TLS: true, TLSSecretRef: "alpha-tls"},
 		)
 
 		_, err := reconciler.reconcile(ctx, resource)
 
 		Expect(err).To(MatchError(And(
-			ContainSubstring("stackdome-system/alpha-tls"),
-			ContainSubstring("stackdome-system/zeta-tls"),
+			ContainSubstring("alpha-tls"),
+			ContainSubstring("zeta-tls"),
 		)))
 		Expect(serviceExists()).To(BeFalse())
 	})
@@ -1613,8 +1606,8 @@ var _ = Describe("svcReconciler.reconcile (orchestration)", func() {
 	})
 
 	It("starts a new grace period when the referenced TLS Secret changes", func() {
-		firstRef := "stackdome-system/first-wildcard-tls"
-		secondRef := "stackdome-system/second-wildcard-tls"
+		firstRef := "first-wildcard-tls"
+		secondRef := "second-wildcard-tls"
 		resource := orchestrationResource(v1alpha1.WorkloadTypeService,
 			v1alpha1.Port{
 				Name: "http", Number: 8080, Protocol: "http", ExposeToPublic: true,

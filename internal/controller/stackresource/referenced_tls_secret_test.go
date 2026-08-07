@@ -20,7 +20,7 @@ import (
 const (
 	sourceSecretNamespace  = "stackdome-system"
 	sourceSecretName       = "platform-wildcard-tls"
-	referencedTLSSecretRef = sourceSecretNamespace + "/" + sourceSecretName
+	referencedTLSSecretRef = sourceSecretName
 )
 
 func findTLSCondition(resource *v1alpha1.StackResource) *metav1.Condition {
@@ -39,6 +39,12 @@ func sourceTLSSecret(namespace, name, cert string) *corev1.Secret {
 	}
 }
 
+func replicaInWithClient(ctx context.Context, c client.Client, namespace, name string) *corev1.Secret {
+	replica := &corev1.Secret{}
+	Expect(c.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, replica)).To(Succeed())
+	return replica
+}
+
 var _ = Describe("svcReconciler referenced TLS Secret reconciliation", func() {
 	var (
 		ctx        context.Context
@@ -49,16 +55,14 @@ var _ = Describe("svcReconciler referenced TLS Secret reconciliation", func() {
 
 	newReconciler := func(objects ...client.Object) {
 		reconciler = &svcReconciler{
-			Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build(),
-			Scheme: scheme,
+			Client:               fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build(),
+			Scheme:               scheme,
+			platformTLSNamespace: sourceSecretNamespace,
 		}
 	}
 
 	replicaIn := func(namespace string) *corev1.Secret {
-		replica := &corev1.Secret{}
-		key := types.NamespacedName{Namespace: namespace, Name: sourceSecretName}
-		Expect(reconciler.Client.Get(ctx, key, replica)).To(Succeed())
-		return replica
+		return replicaInWithClient(ctx, reconciler.Client, namespace, sourceSecretName)
 	}
 
 	BeforeEach(func() {
@@ -85,6 +89,44 @@ var _ = Describe("svcReconciler referenced TLS Secret reconciliation", func() {
 		By("stamping the copy so it is findable and traceable to its source")
 		Expect(replica.Labels).To(HaveKeyWithValue(tlsSecretSourceLabel, sourceSecretNamespace))
 		Expect(replica.OwnerReferences).To(BeEmpty())
+	})
+
+	It("reads the source secret from the configured platform namespace", func() {
+		customNamespace := "custom-platform"
+		platformReconciler := NewStackResourceReconciler(
+			fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+				sourceTLSSecret(customNamespace, sourceSecretName, "custom"),
+			).Build(),
+			scheme,
+			nil,
+			StackResourceReconcilerOpts{PlatformTLSNamespace: customNamespace},
+		)
+
+		var serviceReconciler *svcReconciler
+		for _, sub := range platformReconciler.subReconcilers {
+			if candidate, ok := sub.(*svcReconciler); ok {
+				serviceReconciler = candidate
+				break
+			}
+		}
+		Expect(serviceReconciler).NotTo(BeNil())
+
+		status, err := serviceReconciler.reconcileReferencedTLSSecret(ctx, resource, referencedTLSSecretRef)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(status.Stage).To(Equal(tlsStageReady))
+		Expect(replicaInWithClient(ctx, serviceReconciler.Client, resource.Namespace, sourceSecretName).Data).
+			To(HaveKeyWithValue(corev1.TLSCertKey, []byte("custom")))
+	})
+
+	It("rejects a reference that includes a namespace", func() {
+		ref := "other-namespace/" + sourceSecretName
+		newReconciler(sourceTLSSecret("other-namespace", sourceSecretName, "private"))
+
+		status, err := reconciler.reconcileReferencedTLSSecret(ctx, resource, ref)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(status.Stage).To(Equal(tlsStageUnavailable))
+		Expect(status.Reason).To(Equal(reasonTLSSecretUnavailable))
 	})
 
 	It("propagates a renewed source certificate to the replica", func() {
@@ -147,8 +189,8 @@ var _ = Describe("svcReconciler referenced TLS Secret reconciliation", func() {
 
 	It("starts a fresh grace period when the referenced secret changes", func() {
 		newReconciler()
-		firstRef := "stackdome-system/first-wildcard-tls"
-		secondRef := "stackdome-system/second-wildcard-tls"
+		firstRef := "first-wildcard-tls"
+		secondRef := "second-wildcard-tls"
 
 		_, err := reconciler.reconcileReferencedTLSSecret(ctx, resource, firstRef)
 		Expect(err).NotTo(HaveOccurred())

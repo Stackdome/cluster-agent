@@ -250,8 +250,9 @@ func NewStackResourceReconciler(client client.Client, scheme *runtime.Scheme, un
 			opts.PortVerifier, opts.PortCheckGrace,
 		)},
 		&svcReconciler{
-			Client: client,
-			Scheme: scheme,
+			Client:               client,
+			Scheme:               scheme,
+			platformTLSNamespace: platformTLSNamespace,
 		},
 	}
 	w.subReconcilers = subReconcilers

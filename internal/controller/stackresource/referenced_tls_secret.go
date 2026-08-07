@@ -8,14 +8,13 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	"stackdome.io/cluster-agent/api/core/v1alpha1"
 	"stackdome.io/cluster-agent/internal/controller"
-	"stackdome.io/cluster-agent/pkg/ingresstls"
 )
 
 // tlsSecretSourceLabel marks a TLS secret this agent replicated into a workload namespace
@@ -38,16 +37,22 @@ func (r *svcReconciler) reconcileReferencedTLSSecret(
 		return tlsState{}, nil
 	}
 
-	sourceNamespace, name, ok := ingresstls.SplitSecretRef(tlsSecretRef)
-	if !ok {
+	if len(validation.IsDNS1123Subdomain(tlsSecretRef)) != 0 {
 		return tlsState{
 			Stage:   tlsStageUnavailable,
 			Reason:  reasonTLSSecretUnavailable,
-			Message: "invalid referenced TLS Secret reference",
+			Message: "invalid referenced TLS Secret name",
 		}, nil
 	}
 
-	ready, message, err := r.mirrorTLSSecret(ctx, resource, tlsSecretRef, types.NamespacedName{Namespace: sourceNamespace, Name: name})
+	sourceNamespace := r.platformTLSNamespace
+	if sourceNamespace == "" {
+		sourceNamespace = DefaultPlatformTLSNamespace
+	}
+	ready, message, err := r.mirrorTLSSecret(ctx, resource, tlsSecretRef, types.NamespacedName{
+		Namespace: sourceNamespace,
+		Name:      tlsSecretRef,
+	})
 	if err != nil {
 		return tlsState{}, err
 	}
