@@ -9,11 +9,13 @@ const (
 )
 
 const (
-	LabelManagedBy    = "app.kubernetes.io/managed-by"
-	LabelStackName    = "core.stackdome.io/stack-name"
-	LabelStackID      = "core.stackdome.io/stack-id"
-	LabelResourceName = "core.stackdome.io/resource-name"
-	LabelResourceID   = "core.stackdome.io/resource-id"
+	LabelManagedBy                 = "app.kubernetes.io/managed-by"
+	LabelStackName                 = "core.stackdome.io/stack-name"
+	LabelStackID                   = "core.stackdome.io/stack-id"
+	LabelResourceName              = "core.stackdome.io/resource-name"
+	LabelResourceID                = "core.stackdome.io/resource-id"
+	LabelUsesPlatformWildcardTLS   = "core.stackdome.io/uses-platform-wildcard-tls"
+	LabelPlatformWildcardTLSSecret = "core.stackdome.io/platform-wildcard-tls"
 
 	ManagedByStackdome = "stackdome"
 

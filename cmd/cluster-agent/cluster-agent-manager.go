@@ -81,6 +81,7 @@ func main() {
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var imageBuildHistoryLimit int
+	var platformTLSNamespace string
 	var portCheckGrace time.Duration
 	var errorPagesAddr string
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
@@ -96,6 +97,8 @@ func main() {
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
 	flag.IntVar(&imageBuildHistoryLimit, "image-build-history-limit", 5,
 		"Number of completed/cancelled ImageBuilds to retain per StackResource.")
+	flag.StringVar(&platformTLSNamespace, "platform-tls-namespace", stackresource.DefaultPlatformTLSNamespace,
+		"Namespace containing the platform wildcard TLS Secret.")
 	flag.DurationVar(&portCheckGrace, "port-check-grace", workload.DefaultPortCheckGrace,
 		"How long a closed-port verdict on a StackResource is re-verified before it is believed and the resource is reported failed.")
 	opts := zap.Options{
@@ -200,6 +203,7 @@ func main() {
 		mgr.GetClient(), mgr.GetScheme(), uncachedClient,
 		stackresource.StackResourceReconcilerOpts{
 			ImageBuildHistoryLimit: imageBuildHistoryLimit,
+			PlatformTLSNamespace:   platformTLSNamespace,
 			PortVerifier:           portVerifier,
 			PortCheckGrace:         portCheckGrace,
 		})

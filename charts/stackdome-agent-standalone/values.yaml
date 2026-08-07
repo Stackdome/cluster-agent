@@ -9,6 +9,7 @@ imagePullSecrets: []
 
 replicaCount: 1
 leaderElect: true
+platformTLSNamespace: stackdome-control-plane
 
 resources:
   limits:
