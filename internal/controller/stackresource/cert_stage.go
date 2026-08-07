@@ -9,7 +9,6 @@ import (
 	cmv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -18,43 +17,51 @@ import (
 	"stackdome.io/cluster-agent/api/core/v1alpha1"
 )
 
-// certIssuanceStage is where a resource's TLS certificate is in its lifecycle. It
-// decides three things: whether the Traefik redirect annotation goes onto the
-// Ingress, what scheme (if any) a TLS port publishes as its external address,
-// and what TLSConfigured reports.
-type certIssuanceStage string
+// tlsStage describes whether one TLS path can serve HTTPS. It controls the
+// redirect annotation, the published URL, and TLSConfigured.
+type tlsStage string
 
 const (
-	// certIssuanceStageIssuing means no certificate yet, but it is still early enough
-	// that one is plausibly on its way. Users get no URL at all — sending them
-	// to HTTPS now means the self-signed Traefik default, and a browser that
-	// accepts it pins that security state for the profile.
-	certIssuanceStageIssuing certIssuanceStage = "Issuing"
-	// certIssuanceStageReady means the certificate is issued and valid.
-	certIssuanceStageReady certIssuanceStage = "Ready"
-	// certIssuanceStageUnavailable means no certificate is coming: cert-manager recorded
-	// a failed attempt, or the grace period elapsed with nothing to show for it.
-	// Both behave identically — fall back to HTTP so the site stays reachable —
-	// and the certStatus Reason says which one it was.
-	certIssuanceStageUnavailable certIssuanceStage = "Unavailable"
+	// tlsStageNone is the zero value: this TLS path is not in use.
+	tlsStageNone tlsStage = ""
+	// tlsStageWaiting means TLS is not ready and the grace period is active.
+	// No URL is published during this period.
+	tlsStageWaiting tlsStage = "Waiting"
+	// tlsStageReady means HTTPS is ready.
+	tlsStageReady tlsStage = "Ready"
+	// tlsStageUnavailable means TLS failed or the grace period expired. The
+	// address falls back to HTTP until a later event makes TLS ready.
+	tlsStageUnavailable tlsStage = "Unavailable"
 )
 
-// certGracePeriod bounds how long a TLS port goes without any published
-// address while waiting on issuance. HTTP-01 usually completes in 10-30
-// seconds.
-//
-// ponytail: a fixed 2 minutes. DNS-01 issuance can legitimately take longer,
-// in which case the address publishes as http:// at expiry and flips to
-// https:// when the certificate lands. If that flap becomes a problem, make
-// this per-resource rather than raising it globally — a longer global grace
-// leaves HTTP-01 users with no URL at all for minutes in the stall case.
-const certGracePeriod = 2 * time.Minute
+// reasonTLSReady is used when either TLS path can serve HTTPS.
+const reasonTLSReady = "TLSReady"
 
-// certStatus is the classification result. RetryAfter is non-zero only in the
-// issuing stage and holds the time left until the grace period expires, so the
-// reconciler can schedule a pass that will see the timeout.
-type certStatus struct {
-	Stage      certIssuanceStage
+// Keep the existing reason value because the hub renders it as "TLS issuing".
+const reasonTLSWaiting = "CertificateIssuing"
+
+// tlsGracePeriod limits how long a TLS port has no published URL. After this
+// period it uses HTTP until its certificate or referenced Secret becomes ready.
+const tlsGracePeriod = 2 * time.Minute
+
+// remainingTLSGracePeriod returns how much of the TLS pending window remains.
+// A missing pending time starts a fresh full window; an expired window has no
+// remaining time.
+func remainingTLSGracePeriod(pendingSince, now time.Time) time.Duration {
+	if pendingSince.IsZero() {
+		return tlsGracePeriod
+	}
+	remaining := tlsGracePeriod - now.Sub(pendingSince)
+	if remaining <= 0 {
+		return 0
+	}
+	return remaining
+}
+
+// tlsState is the result of checking one TLS path. RetryAfter schedules the
+// reconcile that turns a stalled path into HTTP fallback.
+type tlsState struct {
+	Stage      tlsStage
 	Reason     string
 	Message    string
 	RetryAfter time.Duration
@@ -65,13 +72,13 @@ type certStatus struct {
 // first reported TLS as not-ready and starts the grace-period clock; a zero
 // value means the clock starts now. It is pure so the time arithmetic is
 // testable without a clock abstraction.
-func classifyCertificate(cert *cmv1.Certificate, pendingSince time.Time, now time.Time) certStatus {
+func classifyCertificate(cert *cmv1.Certificate, pendingSince time.Time, now time.Time) tlsState {
 	var issuingMsg string
 	if cert != nil {
 		if cond := findCertCondition(cert, cmv1.CertificateConditionReady); cond != nil && cond.Status == cmmeta.ConditionTrue {
-			return certStatus{
-				Stage:   certIssuanceStageReady,
-				Reason:  "TLSReady",
+			return tlsState{
+				Stage:   tlsStageReady,
+				Reason:  reasonTLSReady,
 				Message: orDefault(condMessage(cond), "certificate issued"),
 			}
 		}
@@ -81,66 +88,68 @@ func classifyCertificate(cert *cmv1.Certificate, pendingSince time.Time, now tim
 		// attempts, cleared on success. It survives where the Issuing condition
 		// does not — that condition is removed outright once issuance completes.
 		if n := cert.Status.FailedIssuanceAttempts; n != nil && *n > 0 {
-			return certStatus{
-				Stage:   certIssuanceStageUnavailable,
+			return tlsState{
+				Stage:   tlsStageUnavailable,
 				Reason:  "CertificateFailed",
 				Message: fmt.Sprintf("%s (%d failed attempts)", orDefault(issuingMsg, "certificate issuance failed"), *n),
 			}
 		}
 	}
 
-	// A zero pendingSince means nothing has reported TLS as pending yet, so this
-	// is the first pass. Measuring from the epoch would time out instantly.
-	elapsed := time.Duration(0)
-	if !pendingSince.IsZero() {
-		elapsed = now.Sub(pendingSince)
-	}
-
 	pendingMsg := orDefault(issuingMsg, "waiting for cert-manager to issue the certificate")
-	if elapsed >= certGracePeriod {
-		return certStatus{
-			Stage:   certIssuanceStageUnavailable,
+	remaining := remainingTLSGracePeriod(pendingSince, now)
+	if remaining == 0 {
+		return tlsState{
+			Stage:   tlsStageUnavailable,
 			Reason:  "CertificateTimedOut",
-			Message: fmt.Sprintf("no certificate after %s: %s", certGracePeriod, pendingMsg),
+			Message: fmt.Sprintf("no certificate after %s: %s", tlsGracePeriod, pendingMsg),
 		}
 	}
 
-	return certStatus{
-		Stage:      certIssuanceStageIssuing,
-		Reason:     "CertificateIssuing",
+	return tlsState{
+		Stage:      tlsStageWaiting,
+		Reason:     reasonTLSWaiting,
 		Message:    pendingMsg,
-		RetryAfter: certGracePeriod - elapsed,
+		RetryAfter: remaining,
 	}
 }
 
-// tlsPendingSince is when the resource first reported TLS as not-ready, which
-// starts the grace-period clock. meta.SetStatusCondition only moves
-// LastTransitionTime when Status changes, so this stays pinned at the start of
-// the pending window however many times the reason is rewritten.
-func tlsPendingSince(resource *v1alpha1.StackResource) time.Time {
-	cond := meta.FindStatusCondition(resource.Status.Conditions, string(v1alpha1.StackResourceTLSConfigured))
-	if cond == nil || cond.Status != metav1.ConditionFalse {
+func certManagerTLSPendingSince(resource *v1alpha1.StackResource) time.Time {
+	status := resource.Status.CertManagerTLS
+	if status == nil || status.WaitingSince == nil {
 		return time.Time{}
 	}
-	return cond.LastTransitionTime.Time
+	return status.WaitingSince.Time
 }
 
-// certificateStatus fetches the Certificate that cert-manager's ingress-shim
+func updateCertManagerTLSStatus(resource *v1alpha1.StackResource, status tlsState) {
+	if status.Stage == tlsStageNone || status.Stage == tlsStageReady {
+		resource.Status.CertManagerTLS = nil
+		return
+	}
+	if resource.Status.CertManagerTLS != nil && resource.Status.CertManagerTLS.WaitingSince != nil {
+		return
+	}
+	now := metav1.Now()
+	resource.Status.CertManagerTLS = &v1alpha1.CertManagerTLSStatus{WaitingSince: &now}
+}
+
+// getCertManagerTLSState fetches the Certificate that cert-manager's ingress-shim
 // creates for the resource's Ingress and classifies it. ingress-shim names the
 // Certificate after the Ingress TLS secretName, which is <resource>-tls.
-func (r *svcReconciler) certificateStatus(
+func (r *svcReconciler) getCertManagerTLSState(
 	ctx context.Context,
 	resource *v1alpha1.StackResource,
-) (certStatus, error) {
+) (tlsState, error) {
 	cert := &cmv1.Certificate{}
 	key := types.NamespacedName{Name: certificateNameForResource(resource.Name), Namespace: resource.Namespace}
 	if err := r.Client.Get(ctx, key, cert); err != nil {
 		if !apierrors.IsNotFound(err) {
-			return certStatus{}, err
+			return tlsState{}, err
 		}
 		cert = nil
 	}
-	return classifyCertificate(cert, tlsPendingSince(resource), time.Now()), nil
+	return classifyCertificate(cert, certManagerTLSPendingSince(resource), time.Now()), nil
 }
 
 // certNameSuffix is what ingress-shim appends when naming the Certificate and

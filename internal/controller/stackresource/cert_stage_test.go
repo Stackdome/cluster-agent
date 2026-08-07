@@ -42,9 +42,9 @@ var _ = Describe("classifyCertificate", func() {
 
 	It("is issuing when the Certificate does not exist yet and the grace period has not elapsed", func() {
 		got := classifyCertificate(nil, justCreated, now)
-		Expect(got.Stage).To(Equal(certIssuanceStageIssuing))
+		Expect(got.Stage).To(Equal(tlsStageWaiting))
 		Expect(got.Reason).To(Equal("CertificateIssuing"))
-		Expect(got.RetryAfter).To(Equal(certGracePeriod - 10*time.Second))
+		Expect(got.RetryAfter).To(Equal(tlsGracePeriod - 10*time.Second))
 	})
 
 	It("is issuing when the Certificate exists but is not yet Ready", func() {
@@ -59,21 +59,21 @@ var _ = Describe("classifyCertificate", func() {
 			},
 		}
 		got := classifyCertificate(cert, justCreated, now)
-		Expect(got.Stage).To(Equal(certIssuanceStageIssuing))
+		Expect(got.Stage).To(Equal(tlsStageWaiting))
 		Expect(got.Message).To(Equal("Issuing certificate as Secret does not exist"))
 		Expect(got.RetryAfter).To(BeNumerically(">", 0))
 	})
 
 	It("is ready when the Ready condition is True", func() {
 		got := classifyCertificate(readyCert(), longAgo, now)
-		Expect(got.Stage).To(Equal(certIssuanceStageReady))
+		Expect(got.Stage).To(Equal(tlsStageReady))
 		Expect(got.Reason).To(Equal("TLSReady"))
 		Expect(got.RetryAfter).To(BeZero())
 	})
 
 	It("stays ready past the grace period — the clock only bounds the pending window", func() {
 		got := classifyCertificate(readyCert(), longAgo, now)
-		Expect(got.Stage).To(Equal(certIssuanceStageReady))
+		Expect(got.Stage).To(Equal(tlsStageReady))
 	})
 
 	It("is failed when cert-manager records a failed issuance attempt", func() {
@@ -89,7 +89,7 @@ var _ = Describe("classifyCertificate", func() {
 			},
 		}
 		got := classifyCertificate(cert, justCreated, now)
-		Expect(got.Stage).To(Equal(certIssuanceStageUnavailable))
+		Expect(got.Stage).To(Equal(tlsStageUnavailable))
 		Expect(got.Reason).To(Equal("CertificateFailed"))
 		Expect(got.Message).To(ContainSubstring("failed to complete"))
 		Expect(got.RetryAfter).To(BeZero())
@@ -99,12 +99,12 @@ var _ = Describe("classifyCertificate", func() {
 		cert := readyCert()
 		cert.Status.FailedIssuanceAttempts = ptr.To(1)
 		got := classifyCertificate(cert, longAgo, now)
-		Expect(got.Stage).To(Equal(certIssuanceStageReady))
+		Expect(got.Stage).To(Equal(tlsStageReady))
 	})
 
 	It("times out when the grace period elapses with no Certificate at all", func() {
 		got := classifyCertificate(nil, longAgo, now)
-		Expect(got.Stage).To(Equal(certIssuanceStageUnavailable))
+		Expect(got.Stage).To(Equal(tlsStageUnavailable))
 		Expect(got.Reason).To(Equal("CertificateTimedOut"))
 		Expect(got.RetryAfter).To(BeZero())
 	})
@@ -121,7 +121,7 @@ var _ = Describe("classifyCertificate", func() {
 			},
 		}
 		got := classifyCertificate(cert, longAgo, now)
-		Expect(got.Stage).To(Equal(certIssuanceStageUnavailable))
+		Expect(got.Stage).To(Equal(tlsStageUnavailable))
 		Expect(got.Message).To(ContainSubstring("ACME challenge"))
 	})
 
@@ -130,46 +130,81 @@ var _ = Describe("classifyCertificate", func() {
 		// no condition to read a timestamp from. Measuring elapsed time from the
 		// epoch would time out instantly.
 		got := classifyCertificate(nil, time.Time{}, now)
-		Expect(got.Stage).To(Equal(certIssuanceStageIssuing))
-		Expect(got.RetryAfter).To(Equal(certGracePeriod))
+		Expect(got.Stage).To(Equal(tlsStageWaiting))
+		Expect(got.RetryAfter).To(Equal(tlsGracePeriod))
 	})
 })
 
-var _ = Describe("tlsPendingSince", func() {
-	resourceWithTLSCondition := func(cond *metav1.Condition) *v1alpha1.StackResource {
+var _ = Describe("remainingTLSGracePeriod", func() {
+	now := time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
+
+	DescribeTable("returns the time left in the TLS grace window",
+		func(pendingSince time.Time, want time.Duration) {
+			Expect(remainingTLSGracePeriod(pendingSince, now)).To(Equal(want))
+		},
+		Entry("starts a full grace period when no pending time is recorded", time.Time{}, tlsGracePeriod),
+		Entry("returns the active remainder", now.Add(-10*time.Second), tlsGracePeriod-10*time.Second),
+		Entry("expires at the grace boundary", now.Add(-tlsGracePeriod), time.Duration(0)),
+		Entry("stays expired after the grace boundary", now.Add(-2*tlsGracePeriod), time.Duration(0)),
+	)
+})
+
+var _ = Describe("cert-manager TLS status", func() {
+	It("starts the grace period when certificate issuance begins", func() {
 		resource := &v1alpha1.StackResource{}
-		if cond != nil {
-			resource.Status.Conditions = []metav1.Condition{*cond}
+
+		updateCertManagerTLSStatus(resource, tlsState{Stage: tlsStageWaiting})
+
+		Expect(resource.Status.CertManagerTLS).NotTo(BeNil())
+		Expect(resource.Status.CertManagerTLS.WaitingSince).NotTo(BeNil())
+		Expect(resource.Status.CertManagerTLS.WaitingSince.Time).To(BeTemporally("~", time.Now(), time.Second))
+	})
+
+	It("preserves the grace-period start across pending reconciles", func() {
+		waitingSince := metav1.NewTime(time.Now().Add(-time.Minute).Truncate(time.Second))
+		resource := &v1alpha1.StackResource{
+			Status: v1alpha1.StackResourceStatus{
+				CertManagerTLS: &v1alpha1.CertManagerTLSStatus{WaitingSince: &waitingSince},
+			},
 		}
-		return resource
-	}
 
-	It("is zero when the resource has no TLS condition yet", func() {
-		Expect(tlsPendingSince(resourceWithTLSCondition(nil)).IsZero()).To(BeTrue())
+		updateCertManagerTLSStatus(resource, tlsState{Stage: tlsStageWaiting})
+
+		Expect(certManagerTLSPendingSince(resource)).To(Equal(waitingSince.Time))
 	})
 
-	It("is zero when TLS is already ready, so the clock does not run", func() {
-		got := tlsPendingSince(resourceWithTLSCondition(&metav1.Condition{
-			Type:               string(v1alpha1.StackResourceTLSConfigured),
-			Status:             metav1.ConditionTrue,
-			LastTransitionTime: metav1.NewTime(time.Now().Add(-time.Hour)),
-		}))
-		Expect(got.IsZero()).To(BeTrue())
+	It("keeps the expired grace-period start while TLS is unavailable", func() {
+		waitingSince := metav1.NewTime(time.Now().Add(-tlsGracePeriod).Truncate(time.Second))
+		resource := &v1alpha1.StackResource{
+			Status: v1alpha1.StackResourceStatus{
+				CertManagerTLS: &v1alpha1.CertManagerTLSStatus{WaitingSince: &waitingSince},
+			},
+		}
+
+		updateCertManagerTLSStatus(resource, tlsState{Stage: tlsStageUnavailable})
+
+		Expect(certManagerTLSPendingSince(resource)).To(Equal(waitingSince.Time))
 	})
 
-	It("reads the transition time while TLS is pending", func() {
-		pendingAt := time.Now().Add(-90 * time.Second).Truncate(time.Second)
-		got := tlsPendingSince(resourceWithTLSCondition(&metav1.Condition{
-			Type:               string(v1alpha1.StackResourceTLSConfigured),
-			Status:             metav1.ConditionFalse,
-			Reason:             "CertificateIssuing",
-			LastTransitionTime: metav1.NewTime(pendingAt),
-		}))
-		Expect(got).To(BeTemporally("==", pendingAt))
-	})
+	DescribeTable("clears the grace-period clock when cert-manager TLS is not waiting",
+		func(stage tlsStage) {
+			waitingSince := metav1.NewTime(time.Now().Add(-time.Minute))
+			resource := &v1alpha1.StackResource{
+				Status: v1alpha1.StackResourceStatus{
+					CertManagerTLS: &v1alpha1.CertManagerTLSStatus{WaitingSince: &waitingSince},
+				},
+			}
+
+			updateCertManagerTLSStatus(resource, tlsState{Stage: stage})
+
+			Expect(resource.Status.CertManagerTLS).To(BeNil())
+		},
+		Entry("certificate is ready", tlsStageReady),
+		Entry("no cert-manager TLS ports exist", tlsStageNone),
+	)
 })
 
-var _ = Describe("certificateStatus", func() {
+var _ = Describe("getCertManagerTLSState", func() {
 	var (
 		mockCtrl   *gomock.Controller
 		mockClient *mocks.MockClient
@@ -203,9 +238,9 @@ var _ = Describe("certificateStatus", func() {
 				return nil
 			})
 
-		got, err := reconciler.certificateStatus(context.Background(), resource)
+		got, err := reconciler.getCertManagerTLSState(context.Background(), resource)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(got.Stage).To(Equal(certIssuanceStageReady))
+		Expect(got.Stage).To(Equal(tlsStageReady))
 	})
 
 	It("treats a missing Certificate as not-yet-created rather than an error", func() {
@@ -213,9 +248,9 @@ var _ = Describe("certificateStatus", func() {
 			Get(gomock.Any(), client.ObjectKey{Name: "my-app-tls", Namespace: "test-ns"}, gomock.AssignableToTypeOf(&cmv1.Certificate{})).
 			Return(apierrors.NewNotFound(schema.GroupResource{Group: "cert-manager.io", Resource: "certificates"}, "my-app-tls"))
 
-		got, err := reconciler.certificateStatus(context.Background(), resource)
+		got, err := reconciler.getCertManagerTLSState(context.Background(), resource)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(got.Stage).To(Equal(certIssuanceStageIssuing))
+		Expect(got.Stage).To(Equal(tlsStageWaiting))
 	})
 
 	It("propagates a non-NotFound Get error", func() {
@@ -223,7 +258,7 @@ var _ = Describe("certificateStatus", func() {
 			Get(gomock.Any(), gomock.Any(), gomock.AssignableToTypeOf(&cmv1.Certificate{})).
 			Return(apierrors.NewInternalError(fmt.Errorf("boom")))
 
-		_, err := reconciler.certificateStatus(context.Background(), resource)
+		_, err := reconciler.getCertManagerTLSState(context.Background(), resource)
 		Expect(err).To(HaveOccurred())
 	})
 })

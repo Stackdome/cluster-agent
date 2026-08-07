@@ -3,6 +3,7 @@ package ingresstls
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	cmv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	"github.com/go-logr/logr"
@@ -62,14 +63,31 @@ func BuildTLSConfig(issuerName string, tlsHosts []string, namespace, tlsSecretNa
 		return
 	}
 
+	annotations = TraefikAnnotations(namespace)
 	annotations[CertManagerClusterIssuerAnnotation] = issuerName
-	annotations[TraefikEntrypointsAnnotation] = "web,websecure"
-	annotations[TraefikMiddlewaresAnnotation] = fmt.Sprintf("%s-%s@kubernetescrd", namespace, RedirectMiddlewareName)
 	tls = []networkingv1.IngressTLS{{
 		Hosts:      lo.Uniq(tlsHosts),
 		SecretName: tlsSecretName,
 	}}
 	return
+}
+
+// TraefikAnnotations are the router annotations for a TLS-terminating Ingress:
+// the entrypoints it listens on, and the HTTP→HTTPS redirect middleware in the
+// Ingress' own namespace.
+func TraefikAnnotations(namespace string) map[string]string {
+	return map[string]string{
+		TraefikEntrypointsAnnotation: "web,websecure",
+		TraefikMiddlewaresAnnotation: fmt.Sprintf("%s-%s@kubernetescrd", namespace, RedirectMiddlewareName),
+	}
+}
+
+// SplitSecretRef splits a "<namespace>/<name>" secret reference. Anything else — no
+// slash, an empty half, or a third segment ("a/b/c") — is not a usable reference and
+// reports ok=false rather than handing the API server a name it will reject.
+func SplitSecretRef(ref string) (namespace, name string, ok bool) {
+	namespace, name, ok = strings.Cut(ref, "/")
+	return namespace, name, ok && namespace != "" && name != "" && !strings.Contains(name, "/")
 }
 
 // EnsureRedirectMiddleware creates or updates the Traefik Middleware CR for

@@ -8,6 +8,7 @@ import (
 	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/samber/lo"
 	"go.uber.org/mock/gomock"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -20,6 +21,8 @@ import (
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	"stackdome.io/cluster-agent/api/core/v1alpha1"
 	"stackdome.io/cluster-agent/internal/controller"
@@ -45,6 +48,16 @@ func expectIngressNotFound(mockClient *mocks.MockClient) {
 	mockClient.EXPECT().
 		Get(gomock.Any(), client.ObjectKey{Name: "my-app-http-proxy", Namespace: "test-ns"}, gomock.AssignableToTypeOf(&networkingv1.Ingress{})).
 		Return(apierrors.NewNotFound(schema.GroupResource{Group: "networking.k8s.io", Resource: "ingresses"}, "my-app-http-proxy"))
+}
+
+// allowReferencedTLSIngressCleanup stubs cleanup of the legacy-named referenced TLS Ingress
+// when no port references a TLS Secret. It is a read, not a delete:
+// the Ingress was never created, so there is nothing to remove.
+func allowReferencedTLSIngressCleanup(mockClient *mocks.MockClient) {
+	mockClient.EXPECT().
+		Get(gomock.Any(), client.ObjectKey{Name: "my-app-wildcard", Namespace: "test-ns"}, gomock.AssignableToTypeOf(&networkingv1.Ingress{})).
+		Return(apierrors.NewNotFound(schema.GroupResource{Group: "networking.k8s.io", Resource: "ingresses"}, "my-app-wildcard")).
+		AnyTimes()
 }
 
 func expectClusterIssuerGet(mockClient *mocks.MockClient, name string, found bool) {
@@ -168,6 +181,7 @@ var _ = Describe("svcReconciler Ingress TLS", func() {
 		svc = &corev1.Service{
 			ObjectMeta: metav1.ObjectMeta{Name: "my-app", Namespace: "test-ns"},
 		}
+		allowReferencedTLSIngressCleanup(mockClient)
 	})
 
 	AfterEach(func() {
@@ -203,10 +217,10 @@ var _ = Describe("svcReconciler Ingress TLS", func() {
 				})
 			expectMiddlewareCreated(mockClient)
 
-			portMap, _, err := reconciler.reconcileIngress(ctx, resource, svc)
+			state, err := reconciler.reconcileIngress(ctx, resource, svc)
 			Expect(err).NotTo(HaveOccurred())
 			// reconcileIngress returns the port→FQDN map on create too (no requeue).
-			Expect(portMap).To(HaveKeyWithValue(8080, "app.example.com"))
+			Expect(state.publicFQDNs).To(HaveKeyWithValue(8080, "app.example.com"))
 			cond := findCondition(resource.Status.Conditions, string(v1alpha1.StackResourceTLSConfigured))
 			Expect(cond).NotTo(BeNil())
 			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
@@ -235,7 +249,7 @@ var _ = Describe("svcReconciler Ingress TLS", func() {
 					return nil
 				})
 
-			_, _, err := reconciler.reconcileIngress(ctx, resource, svc)
+			_, err := reconciler.reconcileIngress(ctx, resource, svc)
 			Expect(err).NotTo(HaveOccurred())
 		})
 	})
@@ -262,7 +276,7 @@ var _ = Describe("svcReconciler Ingress TLS", func() {
 					return nil
 				})
 
-			_, _, err := reconciler.reconcileIngress(ctx, resource, svc)
+			_, err := reconciler.reconcileIngress(ctx, resource, svc)
 			Expect(err).NotTo(HaveOccurred())
 			cond := findCondition(resource.Status.Conditions, string(v1alpha1.StackResourceTLSConfigured))
 			Expect(cond).NotTo(BeNil())
@@ -296,7 +310,7 @@ var _ = Describe("svcReconciler Ingress TLS", func() {
 					return nil
 				})
 
-			_, _, err := reconciler.reconcileIngress(ctx, resource, svc)
+			_, err := reconciler.reconcileIngress(ctx, resource, svc)
 			Expect(err).NotTo(HaveOccurred())
 			cond := findCondition(resource.Status.Conditions, string(v1alpha1.StackResourceTLSConfigured))
 			Expect(cond).NotTo(BeNil())
@@ -339,7 +353,7 @@ var _ = Describe("svcReconciler Ingress TLS", func() {
 				})
 			expectMiddlewareCreated(mockClient)
 
-			_, _, err := reconciler.reconcileIngress(ctx, resource, svc)
+			_, err := reconciler.reconcileIngress(ctx, resource, svc)
 			Expect(err).NotTo(HaveOccurred())
 			cond := findCondition(resource.Status.Conditions, string(v1alpha1.StackResourceTLSConfigured))
 			Expect(cond).NotTo(BeNil())
@@ -391,7 +405,7 @@ var _ = Describe("svcReconciler Ingress TLS", func() {
 				})
 			expectMiddlewareCreated(mockClient)
 
-			_, _, err := reconciler.reconcileIngress(ctx, resource, svc)
+			_, err := reconciler.reconcileIngress(ctx, resource, svc)
 			Expect(err).NotTo(HaveOccurred())
 		})
 	})
@@ -422,7 +436,7 @@ var _ = Describe("svcReconciler Ingress TLS", func() {
 				},
 			})
 
-			_, _, err := reconciler.reconcileIngress(ctx, resource, svc)
+			_, err := reconciler.reconcileIngress(ctx, resource, svc)
 			Expect(err).NotTo(HaveOccurred())
 		})
 	})
@@ -463,11 +477,21 @@ var _ = Describe("svcReconciler Ingress TLS", func() {
 					return nil
 				})
 
-			_, _, err := reconciler.reconcileIngress(ctx, resource, svc)
+			_, err := reconciler.reconcileIngress(ctx, resource, svc)
 			Expect(err).NotTo(HaveOccurred())
 		})
 	})
 })
+
+func referencedTLSResource() *v1alpha1.StackResource {
+	return &v1alpha1.StackResource{
+		Spec: v1alpha1.StackResourceSpec{
+			Ports: []v1alpha1.Port{
+				{Name: "http", Number: 443, Protocol: "http", ExposeToPublic: true, FQDN: "web.stackdome.app", TLS: true, TLSSecretRef: referencedTLSSecretRef},
+			},
+		},
+	}
+}
 
 var _ = Describe("buildExternalAddresses", func() {
 	It("should prefix http:// when TLS is false", func() {
@@ -478,7 +502,7 @@ var _ = Describe("buildExternalAddresses", func() {
 				},
 			},
 		}
-		addresses := buildExternalAddresses(resource, map[int]string{8080: "app.local.dev"}, certIssuanceStageIssuing)
+		addresses := buildExternalAddresses(resource, map[int]string{8080: "app.local.dev"}, tlsStageWaiting, tlsStageNone)
 		Expect(addresses).To(HaveLen(1))
 		Expect(addresses[0].Address).To(Equal("http://app.local.dev"))
 		Expect(addresses[0].TargetPort).To(Equal(int32(8080)))
@@ -492,7 +516,7 @@ var _ = Describe("buildExternalAddresses", func() {
 				},
 			},
 		}
-		addresses := buildExternalAddresses(resource, map[int]string{443: "app.example.com"}, certIssuanceStageReady)
+		addresses := buildExternalAddresses(resource, map[int]string{443: "app.example.com"}, tlsStageReady, tlsStageNone)
 		Expect(addresses).To(HaveLen(1))
 		Expect(addresses[0].Address).To(Equal("https://app.example.com"))
 	})
@@ -505,7 +529,7 @@ var _ = Describe("buildExternalAddresses", func() {
 				},
 			},
 		}
-		Expect(buildExternalAddresses(resource, map[int]string{443: "app.example.com"}, certIssuanceStageIssuing)).To(BeEmpty())
+		Expect(buildExternalAddresses(resource, map[int]string{443: "app.example.com"}, tlsStageWaiting, tlsStageNone)).To(BeEmpty())
 	})
 
 	It("should fall back to http:// when no certificate is coming, so the site stays reachable", func() {
@@ -516,9 +540,66 @@ var _ = Describe("buildExternalAddresses", func() {
 				},
 			},
 		}
-		addresses := buildExternalAddresses(resource, map[int]string{443: "app.example.com"}, certIssuanceStageUnavailable)
+		addresses := buildExternalAddresses(resource, map[int]string{443: "app.example.com"}, tlsStageUnavailable, tlsStageNone)
 		Expect(addresses).To(HaveLen(1))
 		Expect(addresses[0].Address).To(Equal("http://app.example.com"))
+	})
+
+	It("prefixes https:// for a referenced TLS Secret when its replica is ready", func() {
+		// Nothing is being issued for this host, so the resource-wide stage — which tracks
+		// the cert-manager port on the same resource — must not hold its address back.
+		resource := referencedTLSResource()
+		addresses := buildExternalAddresses(resource, map[int]string{443: "web.stackdome.app"}, tlsStageWaiting, tlsStageReady)
+		Expect(addresses).To(HaveLen(1))
+		Expect(addresses[0].Address).To(Equal("https://web.stackdome.app"))
+	})
+
+	It("publishes nothing for a referenced TLS Secret whose replica is not in place", func() {
+		resource := referencedTLSResource()
+		Expect(buildExternalAddresses(resource, map[int]string{443: "web.stackdome.app"}, tlsStageReady, tlsStageWaiting)).To(BeEmpty())
+	})
+
+	It("publishes http:// for a referenced TLS Secret after its grace period", func() {
+		resource := referencedTLSResource()
+		addresses := buildExternalAddresses(resource, map[int]string{443: "web.stackdome.app"}, tlsStageNone, tlsStageUnavailable)
+		Expect(addresses).To(Equal([]v1alpha1.ExternalAddress{{
+			TargetPort: 443,
+			Address:    "http://web.stackdome.app",
+		}}))
+	})
+
+	It("uses wildcard fallback when a custom certificate is ready", func() {
+		resource := newSvcTestResource([]v1alpha1.Port{
+			{Name: "platform", Number: 443, ExposeToPublic: true, TLS: true, TLSSecretRef: referencedTLSSecretRef},
+			{Name: "custom", Number: 8443, ExposeToPublic: true, TLS: true},
+		}, nil)
+
+		addresses := buildExternalAddresses(resource, map[int]string{
+			443:  "web.stackdome.app",
+			8443: "app.customer.com",
+		}, tlsStageReady, tlsStageUnavailable)
+
+		Expect(addresses).To(ConsistOf(
+			v1alpha1.ExternalAddress{TargetPort: 443, Address: "http://web.stackdome.app"},
+			v1alpha1.ExternalAddress{TargetPort: 8443, Address: "https://app.customer.com"},
+		))
+	})
+
+	It("uses wildcard fallback while a custom certificate is issuing", func() {
+		resource := newSvcTestResource([]v1alpha1.Port{
+			{Name: "platform", Number: 443, ExposeToPublic: true, TLS: true, TLSSecretRef: referencedTLSSecretRef},
+			{Name: "custom", Number: 8443, ExposeToPublic: true, TLS: true},
+		}, nil)
+
+		addresses := buildExternalAddresses(resource, map[int]string{
+			443:  "web.stackdome.app",
+			8443: "app.customer.com",
+		}, tlsStageWaiting, tlsStageUnavailable)
+
+		Expect(addresses).To(Equal([]v1alpha1.ExternalAddress{{
+			TargetPort: 443,
+			Address:    "http://web.stackdome.app",
+		}}))
 	})
 
 	It("should handle mixed TLS and non-TLS ports", func() {
@@ -533,7 +614,7 @@ var _ = Describe("buildExternalAddresses", func() {
 		addresses := buildExternalAddresses(resource, map[int]string{
 			8080: "app.local.dev",
 			443:  "app.example.com",
-		}, certIssuanceStageReady)
+		}, tlsStageReady, tlsStageNone)
 		Expect(addresses).To(HaveLen(2))
 		addrMap := map[string]string{}
 		for _, a := range addresses {
@@ -541,6 +622,17 @@ var _ = Describe("buildExternalAddresses", func() {
 		}
 		Expect(addrMap).To(HaveKey("http://app.local.dev"))
 		Expect(addrMap).To(HaveKey("https://app.example.com"))
+	})
+})
+
+var _ = Describe("earliestRetry", func() {
+	It("returns the earliest positive TLS retry", func() {
+		got := earliestRetry(
+			tlsState{},
+			tlsState{RetryAfter: 90 * time.Second},
+			tlsState{RetryAfter: 30 * time.Second},
+		)
+		Expect(got).To(Equal(30 * time.Second))
 	})
 })
 
@@ -567,6 +659,7 @@ var _ = Describe("svcReconciler redirect gating", func() {
 
 		reconciler = &svcReconciler{Client: mockClient, Scheme: scheme}
 		svc = &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "my-app", Namespace: "test-ns"}}
+		allowReferencedTLSIngressCleanup(mockClient)
 	})
 
 	AfterEach(func() {
@@ -602,12 +695,10 @@ var _ = Describe("svcReconciler redirect gating", func() {
 				Expect(ingress.Annotations).NotTo(HaveKey(ingresstls.TraefikMiddlewaresAnnotation))
 				return nil
 			})
-		expectMiddlewareCreated(mockClient)
-
 		resource := tlsResource()
-		_, certState, err := reconciler.reconcileIngress(ctx, resource, svc)
+		state, err := reconciler.reconcileIngress(ctx, resource, svc)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(certState.Stage).To(Equal(certIssuanceStageIssuing))
+		Expect(state.certManagerTLS.Stage).To(Equal(tlsStageWaiting))
 
 		cond := tlsCondition(resource)
 		Expect(cond).NotTo(BeNil())
@@ -630,9 +721,9 @@ var _ = Describe("svcReconciler redirect gating", func() {
 		expectMiddlewareCreated(mockClient)
 
 		resource := tlsResource()
-		_, certState, err := reconciler.reconcileIngress(ctx, resource, svc)
+		state, err := reconciler.reconcileIngress(ctx, resource, svc)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(certState.Stage).To(Equal(certIssuanceStageReady))
+		Expect(state.certManagerTLS.Stage).To(Equal(tlsStageReady))
 
 		cond := tlsCondition(resource)
 		Expect(cond.Status).To(Equal(metav1.ConditionTrue))
@@ -666,22 +757,382 @@ var _ = Describe("svcReconciler redirect gating", func() {
 				Expect(ingress.Annotations).NotTo(HaveKey(ingresstls.TraefikMiddlewaresAnnotation))
 				return nil
 			})
+		resource := tlsResource()
+		resource.Status.CertManagerTLS = &v1alpha1.CertManagerTLSStatus{
+			WaitingSince: &metav1.Time{Time: time.Now().Add(-2 * tlsGracePeriod)},
+		}
+
+		state, err := reconciler.reconcileIngress(ctx, resource, svc)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(state.certManagerTLS.Stage).To(Equal(tlsStageUnavailable))
+		Expect(tlsCondition(resource).Reason).To(Equal("CertificateTimedOut"))
+	})
+})
+
+var _ = Describe("svcReconciler Ingress TLS with a referenced TLS Secret", func() {
+	var (
+		mockCtrl   *gomock.Controller
+		mockClient *mocks.MockClient
+		reconciler *svcReconciler
+		ctx        context.Context
+		svc        *corev1.Service
+		created    map[string]*networkingv1.Ingress
+	)
+
+	BeforeEach(func() {
+		mockCtrl = gomock.NewController(GinkgoT())
+		mockClient = mocks.NewMockClient(mockCtrl)
+		ctx = context.Background()
+
+		scheme := runtime.NewScheme()
+		Expect(v1alpha1.AddToScheme(scheme)).To(Succeed())
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
+		Expect(networkingv1.AddToScheme(scheme)).To(Succeed())
+		Expect(cmv1.AddToScheme(scheme)).To(Succeed())
+
+		reconciler = &svcReconciler{Client: mockClient, Scheme: scheme}
+		svc = &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "my-app", Namespace: "test-ns"}}
+		created = map[string]*networkingv1.Ingress{}
+	})
+
+	AfterEach(func() {
+		mockCtrl.Finish()
+	})
+
+	// The mock is strict, so an unexpected ClusterIssuer or Certificate Get fails the spec —
+	// that is what proves cert-manager is never consulted for a referenced secret.
+	ingressNotFound := func(name string) error {
+		return apierrors.NewNotFound(schema.GroupResource{Group: "networking.k8s.io", Resource: "ingresses"}, name)
+	}
+
+	expectIngressAbsent := func(name string) {
+		mockClient.EXPECT().
+			Get(gomock.Any(), client.ObjectKey{Name: name, Namespace: "test-ns"}, gomock.AssignableToTypeOf(&networkingv1.Ingress{})).
+			Return(ingressNotFound(name))
+	}
+
+	// expectIngressCreates captures the Ingresses the reconciler creates, by name.
+	expectIngressCreates := func(times int) {
+		mockClient.EXPECT().
+			Create(gomock.Any(), gomock.AssignableToTypeOf(&networkingv1.Ingress{})).
+			DoAndReturn(func(_ context.Context, obj client.Object, _ ...client.CreateOption) error {
+				ingress := obj.(*networkingv1.Ingress)
+				created[ingress.Name] = ingress
+				return nil
+			}).
+			Times(times)
+	}
+
+	// expectIngressDeleted stands an existing Ingress this resource controls in front of the
+	// reconciler and expects it removed. The Get comes first — the cleanup path never issues a
+	// blind delete — and the strict mock proves it.
+	expectIngressDeleted := func(resource *v1alpha1.StackResource, name string) {
+		mockClient.EXPECT().
+			Get(gomock.Any(), client.ObjectKey{Name: name, Namespace: "test-ns"}, gomock.AssignableToTypeOf(&networkingv1.Ingress{})).
+			DoAndReturn(func(_ context.Context, _ client.ObjectKey, obj client.Object, _ ...client.GetOption) error {
+				ingress := obj.(*networkingv1.Ingress)
+				*ingress = networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "test-ns"}}
+				return controllerutil.SetControllerReference(resource, ingress, reconciler.Scheme)
+			})
+		mockClient.EXPECT().
+			Delete(gomock.Any(), gomock.AssignableToTypeOf(&networkingv1.Ingress{})).
+			DoAndReturn(func(_ context.Context, obj client.Object, _ ...client.DeleteOption) error {
+				Expect(obj.GetName()).To(Equal(name))
+				return nil
+			})
+	}
+
+	ruleHosts := func(ingress *networkingv1.Ingress) []string {
+		return lo.Map(ingress.Spec.Rules, func(rule networkingv1.IngressRule, _ int) string { return rule.Host })
+	}
+
+	// expectSecretReplicated stubs the source secret read plus the copy into the workload
+	// namespace that has to be in place before the Ingress names it.
+	expectSecretReplicated := func(ref string) {
+		sourceNamespace, name, _ := ingresstls.SplitSecretRef(ref)
+		mockClient.EXPECT().
+			Get(gomock.Any(), client.ObjectKey{Name: name, Namespace: sourceNamespace}, gomock.AssignableToTypeOf(&corev1.Secret{})).
+			DoAndReturn(func(_ context.Context, _ client.ObjectKey, obj client.Object, _ ...client.GetOption) error {
+				*obj.(*corev1.Secret) = *sourceTLSSecret(sourceNamespace, name, "cert")
+				return nil
+			})
+		mockClient.EXPECT().
+			Get(gomock.Any(), client.ObjectKey{Name: name, Namespace: "test-ns"}, gomock.AssignableToTypeOf(&corev1.Secret{})).
+			Return(apierrors.NewNotFound(schema.GroupResource{Resource: "secrets"}, name))
+		mockClient.EXPECT().
+			Create(gomock.Any(), gomock.AssignableToTypeOf(&corev1.Secret{})).
+			Return(nil)
+	}
+
+	expectSourceSecretMissing := func(ref string) {
+		sourceNamespace, name, _ := ingresstls.SplitSecretRef(ref)
+		mockClient.EXPECT().
+			Get(gomock.Any(), client.ObjectKey{Name: name, Namespace: sourceNamespace}, gomock.AssignableToTypeOf(&corev1.Secret{})).
+			Return(apierrors.NewNotFound(schema.GroupResource{Resource: "secrets"}, name))
+	}
+
+	It("serves every referenced port from the referenced TLS Ingress and drops the main one", func() {
+		resource := newSvcTestResource(
+			[]v1alpha1.Port{
+				{Name: "http", Number: 8080, Protocol: "http", ExposeToPublic: true, FQDN: "web.stackdome.app", TLS: true, TLSSecretRef: "stackdome-system/platform-wildcard-tls"},
+				{Name: "api", Number: 9090, Protocol: "http", ExposeToPublic: true, FQDN: "api.stackdome.app", TLS: true, TLSSecretRef: "stackdome-system/platform-wildcard-tls"},
+			},
+			nil,
+		)
+
+		expectSecretReplicated(referencedTLSSecretRef)
+		expectIngressDeleted(resource, "my-app-http-proxy")
+		expectIngressAbsent("my-app-wildcard")
+		expectIngressCreates(1)
 		expectMiddlewareCreated(mockClient)
 
-		// The grace clock is TLSConfigured's LastTransitionTime, so an old pending
-		// condition is what puts this resource past the deadline.
-		resource := tlsResource()
-		resource.Status.Conditions = []metav1.Condition{{
-			Type:               string(v1alpha1.StackResourceTLSConfigured),
-			Status:             metav1.ConditionFalse,
-			Reason:             "CertificateIssuing",
-			LastTransitionTime: metav1.NewTime(time.Now().Add(-2 * certGracePeriod)),
-		}}
-
-		_, certState, err := reconciler.reconcileIngress(ctx, resource, svc)
+		_, err := reconciler.reconcileIngress(ctx, resource, svc)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(certState.Stage).To(Equal(certIssuanceStageUnavailable))
-		Expect(tlsCondition(resource).Reason).To(Equal("CertificateTimedOut"))
+
+		wildcard := created["my-app-wildcard"]
+		Expect(wildcard).NotTo(BeNil())
+		Expect(ruleHosts(wildcard)).To(Equal([]string{"web.stackdome.app", "api.stackdome.app"}))
+		Expect(wildcard.Spec.TLS).To(Equal([]networkingv1.IngressTLS{{
+			Hosts:      []string{"web.stackdome.app", "api.stackdome.app"},
+			SecretName: "platform-wildcard-tls",
+		}}))
+		Expect(wildcard.Annotations).NotTo(HaveKey(ingresstls.CertManagerClusterIssuerAnnotation))
+		Expect(wildcard.Annotations).To(HaveKeyWithValue(ingresstls.TraefikEntrypointsAnnotation, "web,websecure"))
+		Expect(wildcard.Annotations).To(HaveKeyWithValue(ingresstls.TraefikMiddlewaresAnnotation, "test-ns-redirect-https@kubernetescrd"))
+	})
+
+	It("rejects conflicting referenced TLS Secret references", func() {
+		resource := newSvcTestResource(
+			[]v1alpha1.Port{
+				{Name: "api", Number: 9090, Protocol: "http", ExposeToPublic: true, FQDN: "api.stackdome.app", TLS: true, TLSSecretRef: "stackdome-system/zeta-tls"},
+				{Name: "http", Number: 8080, Protocol: "http", ExposeToPublic: true, FQDN: "web.example.com", TLS: true, TLSSecretRef: "stackdome-system/alpha-tls"},
+			},
+			nil,
+		)
+
+		_, err := reconciler.reconcileIngress(ctx, resource, svc)
+		Expect(err).To(MatchError(And(
+			ContainSubstring("stackdome-system/alpha-tls"),
+			ContainSubstring("stackdome-system/zeta-tls"),
+		)))
+	})
+
+	It("splits a mixed resource across the two Ingresses", func() {
+		resource := newSvcTestResource(
+			[]v1alpha1.Port{
+				{Name: "http", Number: 8080, Protocol: "http", ExposeToPublic: true, FQDN: "web.stackdome.app", TLS: true, TLSSecretRef: "stackdome-system/platform-wildcard-tls"},
+				{Name: "api", Number: 9090, Protocol: "http", ExposeToPublic: true, FQDN: "app.customer.com", TLS: true},
+			},
+			map[string]string{v1alpha1.ClusterIssuerAnnotation: "letsencrypt-prod"},
+		)
+
+		expectSecretReplicated(referencedTLSSecretRef)
+		expectClusterIssuerGet(mockClient, "letsencrypt-prod", true)
+		expectCertificateGet(mockClient, readyCertificate())
+		expectIngressAbsent("my-app-http-proxy")
+		expectIngressAbsent("my-app-wildcard")
+		expectIngressCreates(2)
+		expectMiddlewareCreated(mockClient)
+
+		_, err := reconciler.reconcileIngress(ctx, resource, svc)
+		Expect(err).NotTo(HaveOccurred())
+
+		By("cert-manager keeps the unreferenced host, and only that host")
+		main := created["my-app-http-proxy"]
+		Expect(ruleHosts(main)).To(Equal([]string{"app.customer.com"}))
+		Expect(main.Spec.TLS).To(Equal([]networkingv1.IngressTLS{{
+			Hosts:      []string{"app.customer.com"},
+			SecretName: "my-app-tls",
+		}}))
+		Expect(main.Annotations).To(HaveKeyWithValue(ingresstls.CertManagerClusterIssuerAnnotation, "letsencrypt-prod"))
+
+		By("the referenced host is on an Ingress ingress-shim never looks at")
+		wildcard := created["my-app-wildcard"]
+		Expect(ruleHosts(wildcard)).To(Equal([]string{"web.stackdome.app"}))
+		Expect(wildcard.Spec.TLS).To(Equal([]networkingv1.IngressTLS{{
+			Hosts:      []string{"web.stackdome.app"},
+			SecretName: "platform-wildcard-tls",
+		}}))
+		Expect(wildcard.Annotations).NotTo(HaveKey(ingresstls.CertManagerClusterIssuerAnnotation))
+
+		cond := meta.FindStatusCondition(resource.Status.Conditions, string(v1alpha1.StackResourceTLSConfigured))
+		Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+	})
+
+	It("still serves the referenced host when the ClusterIssuer for the other one is missing", func() {
+		resource := newSvcTestResource(
+			[]v1alpha1.Port{
+				{Name: "http", Number: 8080, Protocol: "http", ExposeToPublic: true, FQDN: "web.stackdome.app", TLS: true, TLSSecretRef: "stackdome-system/platform-wildcard-tls"},
+				{Name: "api", Number: 9090, Protocol: "http", ExposeToPublic: true, FQDN: "app.customer.com", TLS: true},
+			},
+			map[string]string{v1alpha1.ClusterIssuerAnnotation: "letsencrypt-prod"},
+		)
+
+		expectSecretReplicated(referencedTLSSecretRef)
+		expectClusterIssuerGet(mockClient, "letsencrypt-prod", false)
+		expectIngressAbsent("my-app-http-proxy")
+		expectIngressAbsent("my-app-wildcard")
+		expectIngressCreates(2)
+		expectMiddlewareCreated(mockClient)
+
+		_, err := reconciler.reconcileIngress(ctx, resource, svc)
+		Expect(err).NotTo(HaveOccurred())
+
+		By("the unissuable host stays on plain HTTP")
+		main := created["my-app-http-proxy"]
+		Expect(main.Spec.TLS).To(BeEmpty())
+		Expect(main.Annotations).To(BeEmpty())
+
+		By("the redirect Middleware is created only because the wildcard Ingress uses it")
+		wildcard := created["my-app-wildcard"]
+		Expect(wildcard.Spec.TLS).To(Equal([]networkingv1.IngressTLS{{
+			Hosts:      []string{"web.stackdome.app"},
+			SecretName: "platform-wildcard-tls",
+		}}))
+		Expect(wildcard.Annotations).To(HaveKeyWithValue(ingresstls.TraefikMiddlewaresAnnotation, "test-ns-redirect-https@kubernetescrd"))
+	})
+
+	It("serves the referenced host over plain HTTP until its secret replica exists", func() {
+		resource := newSvcTestResource(
+			[]v1alpha1.Port{
+				{Name: "http", Number: 8080, Protocol: "http", ExposeToPublic: true, FQDN: "web.stackdome.app", TLS: true, TLSSecretRef: referencedTLSSecretRef},
+			},
+			nil,
+		)
+
+		expectSourceSecretMissing(referencedTLSSecretRef)
+		expectIngressDeleted(resource, "my-app-http-proxy")
+		expectIngressAbsent("my-app-wildcard")
+		expectIngressCreates(1)
+
+		state, err := reconciler.reconcileIngress(ctx, resource, svc)
+		Expect(err).NotTo(HaveOccurred())
+
+		By("no TLS block and no redirect, so the browser never meets Traefik's self-signed default")
+		wildcard := created["my-app-wildcard"]
+		Expect(ruleHosts(wildcard)).To(Equal([]string{"web.stackdome.app"}))
+		Expect(wildcard.Spec.TLS).To(BeEmpty())
+		Expect(wildcard.Annotations).NotTo(HaveKey(ingresstls.TraefikMiddlewaresAnnotation))
+
+		By("the hub is told TLS is issuing, not failing")
+		cond := findTLSCondition(resource)
+		Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+		Expect(cond.Reason).To(Equal(reasonTLSWaiting))
+
+		By("and no address is published for the port")
+		Expect(buildExternalAddresses(
+			resource,
+			state.publicFQDNs,
+			state.certManagerTLS.Stage,
+			state.referencedTLS.Stage,
+		)).To(BeEmpty())
+	})
+
+	It("deletes the referenced TLS Ingress once no port references a Secret", func() {
+		resource := newSvcTestResource(
+			[]v1alpha1.Port{
+				{Name: "http", Number: 8080, Protocol: "http", ExposeToPublic: true, FQDN: "app.customer.com", TLS: true},
+			},
+			map[string]string{v1alpha1.ClusterIssuerAnnotation: "letsencrypt-prod"},
+		)
+
+		expectClusterIssuerGet(mockClient, "letsencrypt-prod", true)
+		expectCertificateGet(mockClient, readyCertificate())
+		expectIngressAbsent("my-app-http-proxy")
+		expectIngressCreates(1)
+		expectIngressDeleted(resource, "my-app-wildcard")
+		expectMiddlewareCreated(mockClient)
+
+		_, err := reconciler.reconcileIngress(ctx, resource, svc)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(created).To(HaveKey("my-app-http-proxy"))
+	})
+
+	DescribeTable("falls back to cert-manager when the ref is not <namespace>/<name>",
+		func(ref string) {
+			resource := newSvcTestResource(
+				[]v1alpha1.Port{
+					{Name: "http", Number: 8080, Protocol: "http", ExposeToPublic: true, FQDN: "app.example.com", TLS: true, TLSSecretRef: ref},
+				},
+				map[string]string{v1alpha1.ClusterIssuerAnnotation: "letsencrypt-prod"},
+			)
+
+			expectClusterIssuerGet(mockClient, "letsencrypt-prod", true)
+			expectCertificateGet(mockClient, readyCertificate())
+			expectIngressAbsent("my-app-http-proxy")
+			expectIngressCreates(1)
+			expectIngressDeleted(resource, "my-app-wildcard")
+			expectMiddlewareCreated(mockClient)
+
+			_, err := reconciler.reconcileIngress(ctx, resource, svc)
+			Expect(err).NotTo(HaveOccurred())
+
+			main := created["my-app-http-proxy"]
+			Expect(main.Spec.TLS).To(Equal([]networkingv1.IngressTLS{{
+				Hosts:      []string{"app.example.com"},
+				SecretName: "my-app-tls",
+			}}))
+			Expect(main.Annotations).To(HaveKeyWithValue(ingresstls.CertManagerClusterIssuerAnnotation, "letsencrypt-prod"))
+		},
+		Entry("no namespace", "platform-wildcard-tls"),
+		// "a/b/c" would otherwise yield the secret name "b/c", which the API server rejects.
+		Entry("an extra segment", "stackdome-system/sub/platform-wildcard-tls"),
+		Entry("an empty namespace", "/platform-wildcard-tls"),
+	)
+})
+
+var _ = Describe("setTLSConfigured", func() {
+	var resource *v1alpha1.StackResource
+
+	BeforeEach(func() {
+		resource = newSvcTestResource(nil, nil)
+	})
+
+	conditionOf := func() *metav1.Condition {
+		return findTLSCondition(resource)
+	}
+
+	It("leaves the condition alone when the resource has no TLS", func() {
+		setTLSConfigured(resource, tlsState{}, tlsState{})
+		Expect(conditionOf()).To(BeNil())
+	})
+
+	It("is ready when the referenced TLS Secret is ready", func() {
+		setTLSConfigured(resource, tlsState{}, tlsState{Stage: tlsStageReady, Reason: reasonTLSReady, Message: "replicated"})
+		Expect(conditionOf().Status).To(Equal(metav1.ConditionTrue))
+		Expect(conditionOf().Reason).To(Equal(reasonTLSReady))
+	})
+
+	It("waits while a referenced TLS Secret is unavailable", func() {
+		setTLSConfigured(resource, tlsState{}, tlsState{Stage: tlsStageWaiting, Reason: reasonTLSWaiting, Message: "waiting"})
+		Expect(conditionOf().Status).To(Equal(metav1.ConditionFalse))
+		Expect(conditionOf().Reason).To(Equal(reasonTLSWaiting))
+	})
+
+	It("waits until both TLS paths are ready", func() {
+		setTLSConfigured(resource,
+			tlsState{Stage: tlsStageReady, Reason: reasonTLSReady, Message: "issued"},
+			tlsState{Stage: tlsStageWaiting, Reason: reasonTLSWaiting, Message: "waiting"},
+		)
+		Expect(conditionOf().Status).To(Equal(metav1.ConditionFalse))
+		Expect(conditionOf().Reason).To(Equal(reasonTLSWaiting))
+	})
+
+	It("reports an unavailable cert-manager path even when the referenced Secret is ready", func() {
+		setTLSConfigured(resource,
+			tlsState{Stage: tlsStageUnavailable, Reason: "CertificateFailed", Message: "gave up"},
+			tlsState{Stage: tlsStageReady, Reason: reasonTLSReady, Message: "replicated"},
+		)
+		Expect(conditionOf().Status).To(Equal(metav1.ConditionFalse))
+		Expect(conditionOf().Reason).To(Equal("CertificateFailed"))
+	})
+
+	It("is ready when both TLS paths are ready", func() {
+		setTLSConfigured(resource,
+			tlsState{Stage: tlsStageReady, Reason: reasonTLSReady, Message: "issued"},
+			tlsState{Stage: tlsStageReady, Reason: reasonTLSReady, Message: "replicated"},
+		)
+		Expect(conditionOf().Status).To(Equal(metav1.ConditionTrue))
 	})
 })
 
@@ -941,18 +1392,6 @@ var _ = Describe("svcReconciler.reconcile (orchestration)", func() {
 		Expect(verdicts.Failed()).To(BeNil())
 	}
 
-	It("skips Service/Ingress for a Worker", func() {
-		resource := orchestrationResource(v1alpha1.WorkloadTypeWorker)
-
-		res, err := reconciler.reconcile(ctx, resource)
-
-		Expect(err).NotTo(HaveOccurred())
-		Expect(res).To(Equal(resultNil))
-		Expect(serviceExists()).To(BeFalse(), "Worker should not get a Service")
-		Expect(resource.Status.InternalAddress).To(BeNil())
-		expectNoVerdicts()
-	})
-
 	It("creates the Service in one pass (no exposed ports)", func() {
 		// Internal-only port: a Service is created, but no Ingress is needed. ensureService
 		// returns the just-created Service, so reconcile publishes the internal address in
@@ -976,6 +1415,71 @@ var _ = Describe("svcReconciler.reconcile (orchestration)", func() {
 		Expect(res).To(Equal(resultNil))
 		Expect(*resource.Status.InternalAddress).To(Equal("my-app"))
 		expectNoVerdicts()
+	})
+
+	It("rejects conflicting referenced TLS Secrets before writing the Service", func() {
+		resource := orchestrationResource(v1alpha1.WorkloadTypeService,
+			v1alpha1.Port{Name: "api", Number: 9090, ExposeToPublic: true, TLS: true, TLSSecretRef: "stackdome-system/zeta-tls"},
+			v1alpha1.Port{Name: "http", Number: 8080, ExposeToPublic: true, TLS: true, TLSSecretRef: "stackdome-system/alpha-tls"},
+		)
+
+		_, err := reconciler.reconcile(ctx, resource)
+
+		Expect(err).To(MatchError(And(
+			ContainSubstring("stackdome-system/alpha-tls"),
+			ContainSubstring("stackdome-system/zeta-tls"),
+		)))
+		Expect(serviceExists()).To(BeFalse())
+	})
+
+	It("cleans public routing when the last exposed port becomes private", func() {
+		resource := orchestrationResource(v1alpha1.WorkloadTypeService,
+			v1alpha1.Port{Name: "http", Number: 8080, Protocol: "http", ExposeToPublic: false})
+		resource.Status.ExternalAddress = []v1alpha1.ExternalAddress{{
+			TargetPort: 8080,
+			Address:    "https://web.stackdome.app",
+		}}
+		resource.Status.ReferencedTLSSecret = &v1alpha1.ReferencedTLSSecretStatus{Reference: referencedTLSSecretRef}
+		waitingSince := metav1.Now()
+		resource.Status.CertManagerTLS = &v1alpha1.CertManagerTLSStatus{WaitingSince: &waitingSince}
+		resource.Status.Conditions = []metav1.Condition{
+			{Type: string(v1alpha1.StackResourceTLSConfigured), Status: metav1.ConditionTrue},
+			{Type: string(v1alpha1.StackResourceIngressReady), Status: metav1.ConditionTrue},
+		}
+
+		mainIngress := &networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{
+			Name:      "my-app-http-proxy",
+			Namespace: resource.Namespace,
+		}}
+		wildcardIngress := &networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{
+			Name:      "my-app-wildcard",
+			Namespace: resource.Namespace,
+		}}
+		Expect(controllerutil.SetControllerReference(resource, mainIngress, scheme)).To(Succeed())
+		Expect(controllerutil.SetControllerReference(resource, wildcardIngress, scheme)).To(Succeed())
+		Expect(fakeClient.Create(ctx, mainIngress)).To(Succeed())
+		Expect(fakeClient.Create(ctx, wildcardIngress)).To(Succeed())
+
+		result, err := reconciler.reconcile(ctx, resource)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result).To(Equal(resultNil))
+		Expect(serviceExists()).To(BeTrue())
+		Expect(resource.Status.ExternalAddress).To(BeEmpty())
+		Expect(resource.Status.ReferencedTLSSecret).To(BeNil())
+		Expect(resource.Status.CertManagerTLS).To(BeNil())
+		Expect(findCondition(resource.Status.Conditions, string(v1alpha1.StackResourceTLSConfigured))).To(BeNil())
+		Expect(findCondition(resource.Status.Conditions, string(v1alpha1.StackResourceIngressReady))).To(BeNil())
+
+		for _, name := range []string{"my-app-http-proxy", "my-app-wildcard"} {
+			err := fakeClient.Get(ctx, client.ObjectKey{Name: name, Namespace: resource.Namespace}, &networkingv1.Ingress{})
+			Expect(apierrors.IsNotFound(err)).To(BeTrue(), name)
+		}
+
+		middleware := &unstructured.Unstructured{}
+		middleware.SetAPIVersion("traefik.io/v1alpha1")
+		middleware.SetKind("Middleware")
+		err = fakeClient.Get(ctx, client.ObjectKey{Name: "redirect-https", Namespace: resource.Namespace}, middleware)
+		Expect(apierrors.IsNotFound(err)).To(BeTrue())
 	})
 
 	It("creates Service+Ingress in one pass (exposed port, no TLS)", func() {
@@ -1010,6 +1514,126 @@ var _ = Describe("svcReconciler.reconcile (orchestration)", func() {
 		expectNoVerdicts()
 	})
 
+	It("falls back to HTTP after the referenced TLS Secret grace period and recovers HTTPS", func() {
+		resource := orchestrationResource(v1alpha1.WorkloadTypeService,
+			v1alpha1.Port{
+				Name: "http", Number: 8080, Protocol: "http", ExposeToPublic: true,
+				FQDN: "web.stackdome.app", TLS: true, TLSSecretRef: referencedTLSSecretRef,
+			})
+
+		By("waiting without publishing while the source Secret is missing")
+		result, err := reconciler.reconcile(ctx, resource)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.DeferredRequeueAfter).NotTo(BeNil())
+		Expect(*result.DeferredRequeueAfter).To(BeNumerically(">", 0))
+		Expect(resource.Status.ExternalAddress).To(BeEmpty())
+
+		wildcard := &networkingv1.Ingress{}
+		wildcardKey := client.ObjectKey{Name: "my-app-wildcard", Namespace: "test-ns"}
+		Expect(fakeClient.Get(ctx, wildcardKey, wildcard)).To(Succeed())
+		Expect(wildcard.Spec.TLS).To(BeEmpty())
+		Expect(wildcard.Annotations).NotTo(HaveKey(ingresstls.TraefikMiddlewaresAnnotation))
+
+		By("publishing HTTP after the two-minute grace period")
+		Expect(resource.Status.ReferencedTLSSecret).NotTo(BeNil())
+		resource.Status.ReferencedTLSSecret.WaitingSince = &metav1.Time{Time: time.Now().Add(-tlsGracePeriod)}
+		result, err = reconciler.reconcile(ctx, resource)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result).To(Equal(resultNil))
+		Expect(resource.Status.ExternalAddress).To(Equal([]v1alpha1.ExternalAddress{{
+			TargetPort: 8080,
+			Address:    "http://web.stackdome.app",
+		}}))
+
+		By("switching to HTTPS when the source becomes ready")
+		source := sourceTLSSecret(sourceSecretNamespace, sourceSecretName, "first")
+		Expect(fakeClient.Create(ctx, source)).To(Succeed())
+		result, err = reconciler.reconcile(ctx, resource)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result).To(Equal(resultNil))
+		Expect(resource.Status.ExternalAddress).To(Equal([]v1alpha1.ExternalAddress{{
+			TargetPort: 8080,
+			Address:    "https://web.stackdome.app",
+		}}))
+
+		replica := &corev1.Secret{}
+		replicaKey := client.ObjectKey{Name: sourceSecretName, Namespace: "test-ns"}
+		Expect(fakeClient.Get(ctx, replicaKey, replica)).To(Succeed())
+		Expect(replica.Data).To(HaveKeyWithValue(corev1.TLSCertKey, []byte("first")))
+		Expect(fakeClient.Get(ctx, wildcardKey, wildcard)).To(Succeed())
+		Expect(wildcard.Spec.TLS).To(HaveLen(1))
+		Expect(wildcard.Annotations).To(HaveKey(ingresstls.TraefikMiddlewaresAnnotation))
+
+		By("propagating a renewed certificate without dropping HTTPS")
+		source.Data[corev1.TLSCertKey] = []byte("renewed")
+		Expect(fakeClient.Update(ctx, source)).To(Succeed())
+		_, err = reconciler.reconcile(ctx, resource)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(fakeClient.Get(ctx, replicaKey, replica)).To(Succeed())
+		Expect(replica.Data).To(HaveKeyWithValue(corev1.TLSCertKey, []byte("renewed")))
+		Expect(resource.Status.ExternalAddress[0].Address).To(Equal("https://web.stackdome.app"))
+
+		By("starting a new grace period if the source disappears after recovery")
+		Expect(fakeClient.Delete(ctx, source)).To(Succeed())
+		result, err = reconciler.reconcile(ctx, resource)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.DeferredRequeueAfter).NotTo(BeNil())
+		Expect(*result.DeferredRequeueAfter).To(BeNumerically(">", tlsGracePeriod-time.Second))
+		Expect(resource.Status.ExternalAddress).To(BeEmpty())
+	})
+
+	It("starts a new grace period after a referenced TLS port is removed and re-exposed", func() {
+		resource := orchestrationResource(v1alpha1.WorkloadTypeService,
+			v1alpha1.Port{
+				Name: "http", Number: 8080, Protocol: "http", ExposeToPublic: true,
+				FQDN: "web.stackdome.app", TLS: true, TLSSecretRef: referencedTLSSecretRef,
+			})
+
+		_, err := reconciler.reconcile(ctx, resource)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resource.Status.ReferencedTLSSecret).NotTo(BeNil())
+		resource.Status.ReferencedTLSSecret.WaitingSince = &metav1.Time{Time: time.Now().Add(-tlsGracePeriod)}
+
+		result, err := reconciler.reconcile(ctx, resource)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result).To(Equal(resultNil))
+		Expect(resource.Status.ExternalAddress[0].Address).To(Equal("http://web.stackdome.app"))
+
+		resource.Spec.Ports[0].ExposeToPublic = false
+		_, err = reconciler.reconcile(ctx, resource)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resource.Status.ReferencedTLSSecret).To(BeNil())
+
+		resource.Spec.Ports[0].ExposeToPublic = true
+		result, err = reconciler.reconcile(ctx, resource)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.DeferredRequeueAfter).NotTo(BeNil())
+		Expect(*result.DeferredRequeueAfter).To(BeNumerically(">", tlsGracePeriod-time.Second))
+		Expect(resource.Status.ExternalAddress).To(BeEmpty())
+	})
+
+	It("starts a new grace period when the referenced TLS Secret changes", func() {
+		firstRef := "stackdome-system/first-wildcard-tls"
+		secondRef := "stackdome-system/second-wildcard-tls"
+		resource := orchestrationResource(v1alpha1.WorkloadTypeService,
+			v1alpha1.Port{
+				Name: "http", Number: 8080, Protocol: "http", ExposeToPublic: true,
+				FQDN: "web.stackdome.app", TLS: true, TLSSecretRef: firstRef,
+			})
+
+		_, err := reconciler.reconcile(ctx, resource)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resource.Status.ReferencedTLSSecret).NotTo(BeNil())
+		resource.Status.ReferencedTLSSecret.WaitingSince = &metav1.Time{Time: time.Now().Add(-tlsGracePeriod)}
+
+		resource.Spec.Ports[0].TLSSecretRef = secondRef
+		result, err := reconciler.reconcile(ctx, resource)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.DeferredRequeueAfter).NotTo(BeNil())
+		Expect(*result.DeferredRequeueAfter).To(BeNumerically(">", tlsGracePeriod-time.Second))
+		Expect(resource.Status.ExternalAddress).To(BeEmpty())
+	})
+
 	It("creates a headless Service for a StatefulService", func() {
 		resource := orchestrationResource(v1alpha1.WorkloadTypeStatefulService)
 
@@ -1019,6 +1643,83 @@ var _ = Describe("svcReconciler.reconcile (orchestration)", func() {
 		svc := &corev1.Service{}
 		Expect(fakeClient.Get(ctx, client.ObjectKey{Name: "my-app", Namespace: "test-ns"}, svc)).To(Succeed())
 		Expect(svc.Spec.ClusterIP).To(Equal("None"))
+	})
+})
+
+var _ = Describe("svcReconciler child Ingress cleanup", func() {
+	var (
+		reconciler *svcReconciler
+		scheme     *runtime.Scheme
+		ctx        context.Context
+		resource   *v1alpha1.StackResource
+		deleted    []string
+	)
+
+	// The empty-rules path runs on every reconcile of every resource with exposed ports, so
+	// what it writes is counted, not just what it leaves behind.
+	newReconciler := func(objects ...client.Object) {
+		deleted = nil
+		built := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(objects...).
+			WithInterceptorFuncs(interceptor.Funcs{
+				Delete: func(c context.Context, cl client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+					deleted = append(deleted, obj.GetName())
+					return cl.Delete(c, obj, opts...)
+				},
+			}).
+			Build()
+		reconciler = &svcReconciler{Client: built, Scheme: scheme}
+	}
+
+	wildcardIngress := func(owner *v1alpha1.StackResource) *networkingv1.Ingress {
+		ingress := &networkingv1.Ingress{
+			ObjectMeta: metav1.ObjectMeta{Name: "my-app-wildcard", Namespace: "test-ns"},
+		}
+		if owner != nil {
+			Expect(controllerutil.SetControllerReference(owner, ingress, scheme)).To(Succeed())
+		}
+		return ingress
+	}
+
+	ingressExists := func() bool {
+		err := reconciler.Client.Get(ctx, client.ObjectKey{Name: "my-app-wildcard", Namespace: "test-ns"}, &networkingv1.Ingress{})
+		return err == nil
+	}
+
+	BeforeEach(func() {
+		ctx = context.Background()
+		scheme = runtime.NewScheme()
+		Expect(v1alpha1.AddToScheme(scheme)).To(Succeed())
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
+		Expect(networkingv1.AddToScheme(scheme)).To(Succeed())
+		resource = newSvcTestResource(nil, nil)
+	})
+
+	It("writes nothing when the child Ingress never existed", func() {
+		newReconciler()
+
+		Expect(reconciler.reconcileIngressCR(ctx, resource, "my-app-wildcard", nil, nil, nil)).To(Succeed())
+		Expect(deleted).To(BeEmpty())
+	})
+
+	It("deletes the child Ingress it controls", func() {
+		newReconciler(wildcardIngress(resource))
+
+		Expect(reconciler.reconcileIngressCR(ctx, resource, "my-app-wildcard", nil, nil, nil)).To(Succeed())
+		Expect(deleted).To(ConsistOf("my-app-wildcard"))
+		Expect(ingressExists()).To(BeFalse())
+	})
+
+	It("leaves a same-named Ingress it does not control alone", func() {
+		stranger := newSvcTestResource(nil, nil)
+		stranger.Name = "someone-else"
+		stranger.UID = "someone-else-uid"
+		newReconciler(wildcardIngress(stranger))
+
+		Expect(reconciler.reconcileIngressCR(ctx, resource, "my-app-wildcard", nil, nil, nil)).To(Succeed())
+		Expect(deleted).To(BeEmpty())
+		Expect(ingressExists()).To(BeTrue())
 	})
 })
 
@@ -1088,7 +1789,7 @@ var _ = Describe("buildDesiredIngress", func() {
 		annotations := map[string]string{"cert-manager.io/cluster-issuer": "letsencrypt-prod"}
 		tls := []networkingv1.IngressTLS{{Hosts: []string{"app.example.com"}, SecretName: "my-app-tls"}}
 
-		ing := buildDesiredIngress(resource, rules, annotations, tls)
+		ing := buildDesiredIngress(resource, httpProxyNameForResource(resource.Name), rules, annotations, tls)
 
 		Expect(ing.Name).To(Equal("my-app-http-proxy"))
 		Expect(ing.Namespace).To(Equal("test-ns"))
