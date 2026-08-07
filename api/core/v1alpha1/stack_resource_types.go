@@ -195,6 +195,14 @@ type Port struct {
 	FQDN string `json:"fqdn,omitempty"`
 	// +optional
 	TLS bool `json:"tls,omitempty"`
+	// TLSSecretRef names a pre-provisioned TLS Secret in the configured platform
+	// TLS namespace. Its certificate must cover FQDN. When set, the ingress uses
+	// a copy of this Secret instead of asking cert-manager for a certificate.
+	// +optional
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
+	TLSSecretRef string `json:"tlsSecretRef,omitempty"`
 }
 
 // +kubebuilder:validation:XValidation:rule="has(self.value) != has(self.valueFrom)",message="exactly one of value or valueFrom must be set"
@@ -447,6 +455,26 @@ type BuildStatus struct {
 	Phase          string `json:"phase,omitempty"`
 }
 
+// CertManagerTLSStatus records when this resource started waiting for its
+// cert-manager Certificate. The time remains set after the grace period
+// expires so another reconcile does not restart the clock.
+type CertManagerTLSStatus struct {
+	// +optional
+	WaitingSince *metav1.Time `json:"waitingSince,omitempty"`
+}
+
+// ReferencedTLSSecretStatus records controller state for a TLS Secret copied
+// from the platform TLS namespace. It is not a user-facing condition: it scopes the
+// temporary HTTPS grace period to the configured Secret reference.
+type ReferencedTLSSecretStatus struct {
+	// Reference is the configured TLS Secret name.
+	Reference string `json:"reference"`
+	// WaitingSince is set while the source Secret or its workload replica is
+	// unavailable, and is cleared once the replica is ready.
+	// +optional
+	WaitingSince *metav1.Time `json:"waitingSince,omitempty"`
+}
+
 // StackResourceStatus defines the observed state of StackResource
 type StackResourceStatus struct {
 	// The most recent generation observed by the controller.
@@ -478,6 +506,16 @@ type StackResourceStatus struct {
 	// memory) also keeps the grace window intact across operator restarts.
 	// +optional
 	PortCheck *PortCheckStatus `json:"portCheck,omitempty"`
+	// ReferencedTLSSecret tracks the copied Secret and the start of its
+	// temporary unavailable period. It is absent when no referenced TLS Secret
+	// is configured.
+	// +optional
+	ReferencedTLSSecret *ReferencedTLSSecretStatus `json:"referencedTLSSecret,omitempty"`
+	// CertManagerTLS tracks the certificate grace period independently from a
+	// referenced TLS Secret. It is absent when no certificate is needed or the
+	// certificate is ready.
+	// +optional
+	CertManagerTLS *CertManagerTLSStatus `json:"certManagerTLS,omitempty"`
 	// Summary is the agent's rolled-up verdict, written every pass.
 	// +optional
 	Summary *StackResourceStatusSummary `json:"summary,omitempty"`
@@ -580,6 +618,15 @@ type StackResource struct {
 
 	Spec   StackResourceSpec   `json:"spec,omitempty"`
 	Status StackResourceStatus `json:"status,omitempty"`
+}
+
+func (w *StackResource) GetPort(port int32) *Port {
+	for _, p := range w.Spec.Ports {
+		if p.Number == port {
+			return &p
+		}
+	}
+	return nil
 }
 
 func (w *StackResource) NeedsPullSecret() bool {

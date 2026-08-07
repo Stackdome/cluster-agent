@@ -119,6 +119,7 @@ rules:
     - list
     - patch
     - create
+    - delete
 - apiGroups:
     - traefik.io
   resources:

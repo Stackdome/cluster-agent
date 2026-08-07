@@ -27,6 +27,7 @@ spec:
         image: {{ include "stackdome-agent-standalone.image" . }}
         imagePullPolicy: {{ .Values.image.pullPolicy }}
         args:
+        - --platform-tls-namespace={{ .Values.platformTLSNamespace }}
         {{- if .Values.leaderElect }}
         - --leader-elect
         {{- end }}

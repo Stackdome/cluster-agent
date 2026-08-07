@@ -676,6 +676,15 @@ spec:
                       type: string
                     tls:
                       type: boolean
+                    tlsSecretRef:
+                      description: |-
+                        TLSSecretRef names a pre-provisioned TLS Secret in the configured platform
+                        TLS namespace. Its certificate must cover FQDN. When set, the ingress uses
+                        a copy of this Secret instead of asking cert-manager for a certificate.
+                      maxLength: 253
+                      minLength: 1
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                      type: string
                   required:
                   - name
                   - number
@@ -814,6 +823,16 @@ spec:
               availableReplicas:
                 format: int32
                 type: integer
+              certManagerTLS:
+                description: |-
+                  CertManagerTLS tracks the certificate grace period independently from a
+                  referenced TLS Secret. It is absent when no certificate is needed or the
+                  certificate is ready.
+                properties:
+                  waitingSince:
+                    format: date-time
+                    type: string
+                type: object
               conditions:
                 description: Conditions is a list of status conditions ths object
                   is in.
@@ -1006,6 +1025,24 @@ spec:
                 required:
                 - revision
                 - status
+                type: object
+              referencedTLSSecret:
+                description: |-
+                  ReferencedTLSSecret tracks the copied Secret and the start of its
+                  temporary unavailable period. It is absent when no referenced TLS Secret
+                  is configured.
+                properties:
+                  reference:
+                    description: Reference is the configured TLS Secret name.
+                    type: string
+                  waitingSince:
+                    description: |-
+                      WaitingSince is set while the source Secret or its workload replica is
+                      unavailable, and is cleared once the replica is ready.
+                    format: date-time
+                    type: string
+                required:
+                - reference
                 type: object
               replicas:
                 format: int32

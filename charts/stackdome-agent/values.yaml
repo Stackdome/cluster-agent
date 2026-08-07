@@ -6,6 +6,7 @@ stackdome-agent-standalone:
     tag: ""
   replicaCount: 1
   leaderElect: true
+  platformTLSNamespace: stackdome-control-plane
   resources:
     limits:
       cpu: 500m

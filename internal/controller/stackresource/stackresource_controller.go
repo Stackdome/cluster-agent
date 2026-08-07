@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -49,9 +50,10 @@ const DefaultRequeueTime = 5 * time.Second
 // StackResourceReconciler reconciles a StackResource object
 type StackResourceReconciler struct {
 	client.Client
-	uncachedClient client.Client
-	Scheme         *runtime.Scheme
-	subReconcilers []subReconciler
+	uncachedClient       client.Client
+	platformTLSNamespace string
+	Scheme               *runtime.Scheme
+	subReconcilers       []subReconciler
 }
 
 func (r *StackResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -210,6 +212,7 @@ func (defaultStatusReporter) SetCondition(r *v1alpha1.StackResource, t v1alpha1.
 // its clients. Grouping them keeps the constructor readable as options accrue.
 type StackResourceReconcilerOpts struct {
 	ImageBuildHistoryLimit int
+	PlatformTLSNamespace   string
 	// PortVerifier proves declared ports are actually listening. Optional: a nil
 	// verifier disables the check.
 	PortVerifier *portcheck.Verifier
@@ -218,9 +221,15 @@ type StackResourceReconcilerOpts struct {
 }
 
 func NewStackResourceReconciler(client client.Client, scheme *runtime.Scheme, uncachedClient client.Client, opts StackResourceReconcilerOpts) *StackResourceReconciler {
+	platformTLSNamespace := opts.PlatformTLSNamespace
+	if platformTLSNamespace == "" {
+		platformTLSNamespace = DefaultPlatformTLSNamespace
+	}
 	w := &StackResourceReconciler{
-		Client: client,
-		Scheme: scheme,
+		Client:               client,
+		uncachedClient:       uncachedClient,
+		platformTLSNamespace: platformTLSNamespace,
+		Scheme:               scheme,
 	}
 
 	depChecker := &workloadDependencyChecker{
@@ -241,8 +250,9 @@ func NewStackResourceReconciler(client client.Client, scheme *runtime.Scheme, un
 			opts.PortVerifier, opts.PortCheckGrace,
 		)},
 		&svcReconciler{
-			Client: client,
-			Scheme: scheme,
+			Client:               client,
+			Scheme:               scheme,
+			platformTLSNamespace: platformTLSNamespace,
 		},
 	}
 	w.subReconcilers = subReconcilers
@@ -269,6 +279,11 @@ func (r *StackResourceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&corev1.Service{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &v1alpha1.StackResource{})).
 		Watches(&networkingv1.Ingress{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &v1alpha1.StackResource{})).
 		Watches(&cmv1.Certificate{}, handler.EnqueueRequestsFromMapFunc(certificateToStackResource)).
+		Watches(
+			&corev1.Secret{},
+			handler.EnqueueRequestsFromMapFunc(r.platformWildcardTLSSecretToStackResources),
+			builder.WithPredicates(platformWildcardTLSSecretPredicate(r.platformTLSNamespace)),
+		).
 		Watches(&appsv1.Deployment{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &v1alpha1.StackResource{})).
 		Watches(&appsv1.StatefulSet{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &v1alpha1.StackResource{})).
 		Watches(&batchv1.Job{}, handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), &v1alpha1.StackResource{})).
