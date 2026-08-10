@@ -28,6 +28,8 @@ spec:
         imagePullPolicy: {{ .Values.image.pullPolicy }}
         args:
         - --platform-tls-namespace={{ .Values.platformTLSNamespace }}
+        - --registry-config-reconciler-image={{ include "stackdome-agent-standalone.registryConfigReconcilerImage" . }}
+        - --require-registry-config-reconciler-digest={{ .Values.registryConfigReconciler.requireDigest }}
         {{- if .Values.leaderElect }}
         - --leader-elect
         {{- end }}

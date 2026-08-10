@@ -5,6 +5,11 @@ stackdome-agent-standalone:
     repository: quay.io/stackdome/cluster-agent/cluster-agent-manager
     tag: ""
     digest: ""
+  registryConfigReconciler:
+    repository: quay.io/stackdome/registry-config-reconciler
+    tag: ""
+    digest: ""
+    requireDigest: false
   replicaCount: 1
   leaderElect: true
   platformTLSNamespace: stackdome-control-plane

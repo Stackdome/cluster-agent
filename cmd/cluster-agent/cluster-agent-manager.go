@@ -84,6 +84,8 @@ func main() {
 	var platformTLSNamespace string
 	var portCheckGrace time.Duration
 	var errorPagesAddr string
+	var registryConfigReconcilerImage string
+	var requireRegistryConfigReconcilerDigest bool
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.StringVar(&errorPagesAddr, "error-pages-bind-address", errorpages.DefaultAddr,
@@ -101,6 +103,10 @@ func main() {
 		"Namespace containing the platform wildcard TLS Secret.")
 	flag.DurationVar(&portCheckGrace, "port-check-grace", workload.DefaultPortCheckGrace,
 		"How long a closed-port verdict on a StackResource is re-verified before it is believed and the resource is reported failed.")
+	flag.StringVar(&registryConfigReconcilerImage, "registry-config-reconciler-image", config.RegistryConfigReconcilerImage,
+		"Image reference used for the privileged registry config reconciler DaemonSet.")
+	flag.BoolVar(&requireRegistryConfigReconcilerDigest, "require-registry-config-reconciler-digest", false,
+		"Require the registry config reconciler image to use an immutable sha256 digest.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -108,6 +114,10 @@ func main() {
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+	if err := config.ValidateRegistryConfigReconcilerImage(registryConfigReconcilerImage, requireRegistryConfigReconcilerDigest); err != nil {
+		setupLog.Error(err, "invalid registry config reconciler image configuration")
+		os.Exit(1)
+	}
 
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
 	// due to its vulnerabilities. More specifically, disabling http/2 will
@@ -131,7 +141,7 @@ func main() {
 
 	registryBuilder := zotregistry.NewZotRegistry(zotregistry.ZotRegistryOpts{
 		RegistryImage:                 config.ZotImage,
-		RegistryConfigReconcilerImage: config.RegistryConfigReconcilerImage,
+		RegistryConfigReconcilerImage: registryConfigReconcilerImage,
 		GCDelay:                       "1h",
 		// Run GC every 6h rather than 24h so the Kaniko build cache cannot
 		// accumulate a full day of large per-commit layers between sweeps.

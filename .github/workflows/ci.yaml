@@ -35,6 +35,11 @@ jobs:
         with:
           version: v3.18.4
 
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+        with:
+          driver-opts: image=moby/buildkit@sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec
+
       - name: Run source and generated-file checks
         shell: bash
         run: |
@@ -59,14 +64,22 @@ jobs:
           set -euo pipefail
           version="$(ruby -ryaml -e 'puts YAML.safe_load(File.read(ARGV.fetch(0))).fetch("appVersion")' charts/stackdome-agent-standalone/Chart.yaml)"
           for command in cluster-agent-manager containerd-config-reconciler; do
-            docker build \
+            destination="$RUNNER_TEMP/$command"
+            mkdir -p "$destination"
+            docker buildx build \
               --file config/docker/release.Dockerfile \
+              --platform linux/amd64,linux/arm64 \
               --build-arg "COMMAND=$command" \
               --build-arg "VERSION=$version" \
               --build-arg "COMMIT=$GITHUB_SHA" \
               --build-arg "BUILD_DATE=0" \
-              --tag "cluster-agent-ci-$command:$GITHUB_SHA" \
+              --provenance=false \
+              --sbom=false \
+              --output "type=oci,dest=$destination/image.tar" \
               .
+            mkdir -p "$destination/layout"
+            tar -xf "$destination/image.tar" -C "$destination/layout"
+            ./hack/validate-oci-index.rb "$destination/layout"
           done
 
   integration:

@@ -96,6 +96,12 @@ jobs:
           helm lint charts/stackdome-agent-standalone
           helm lint charts/stackdome-agent
 
+      - name: Install checksum-verified Trivy before registry login
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./hack/install-trivy.sh "$RUNNER_TEMP/trivy-bin"
+
       - name: Log in to Quay
         uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
         with:
@@ -118,7 +124,20 @@ jobs:
             echo "Helm did not resolve the rollback chart digest" >&2
             exit 1
           fi
+          rollback_archive="$RUNNER_TEMP/rollback/stackdome-agent-$ROLLBACK_CHART_VERSION.tgz"
+          test -s "$rollback_archive"
+          ./hack/extract-chart-crds.sh "$rollback_archive" "$RUNNER_TEMP/rollback-crds"
+          ./hack/verify-crd-compatibility.rb \
+            --previous "$RUNNER_TEMP/rollback-crds" \
+            --current config/deploy/crds
+          mkdir -p release-artifacts
+          for file in $(find "$RUNNER_TEMP/rollback-crds" -type f -name '*.yaml' | sort); do
+            printf '%s\n' '---'
+            cat "$file"
+          done >release-artifacts/rollback-crds.yaml
+          rollback_crd_checksum="$(sha256sum release-artifacts/rollback-crds.yaml | awk '{print $1}')"
           echo "digest=$digest" >>"$GITHUB_OUTPUT"
+          echo "crd_bundle_sha256=$rollback_crd_checksum" >>"$GITHUB_OUTPUT"
 
       - name: Build and push content-addressed agent image
         id: build_agent
@@ -154,6 +173,20 @@ jobs:
           provenance: false
           sbom: false
 
+      - name: Verify published image indexes
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-artifacts
+          docker buildx imagetools inspect --raw \
+            "${AGENT_IMAGE}@${{ steps.build_agent.outputs.digest }}" \
+            >release-artifacts/agent-index.json
+          docker buildx imagetools inspect --raw \
+            "${RECONCILER_IMAGE}@${{ steps.build_reconciler.outputs.digest }}" \
+            >release-artifacts/reconciler-index.json
+          ./hack/validate-oci-index.rb release-artifacts/agent-index.json
+          ./hack/validate-oci-index.rb release-artifacts/reconciler-index.json
+
       - name: Install pinned Syft
         shell: bash
         run: |
@@ -171,107 +204,59 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p release-artifacts
-          for item in \
-            "agent|${AGENT_IMAGE}@${{ steps.build_agent.outputs.digest }}" \
-            "reconciler|${RECONCILER_IMAGE}@${{ steps.build_reconciler.outputs.digest }}"; do
-            name="${item%%|*}"
-            image="${item#*|}"
-            for arch in amd64 arm64; do
-              "$RUNNER_TEMP/syft-bin" "registry:$image" \
-                --platform "linux/$arch" \
-                --output "spdx-json=release-artifacts/$name-linux-$arch.spdx.json" \
-                --output "cyclonedx-json=release-artifacts/$name-linux-$arch.cyclonedx.json"
-            done
-          done
+          ./hack/generate-release-sboms.sh "$RUNNER_TEMP/syft-bin" release-artifacts agent \
+            "${AGENT_IMAGE}@${{ steps.build_agent.outputs.digest }}"
+          ./hack/generate-release-sboms.sh "$RUNNER_TEMP/syft-bin" release-artifacts reconciler \
+            "${RECONCILER_IMAGE}@${{ steps.build_reconciler.outputs.digest }}"
 
       - name: Scan agent linux/amd64
         id: vulnerability_scan_agent_amd64
         continue-on-error: true
-        uses: aquasecurity/trivy-action@dc5a429b52fcf669ce959baa2c2dd26090d2a6c4 # v0.32.0
-        env:
-          TRIVY_PLATFORM: linux/amd64
-        with:
-          version: v0.64.1
-          scan-type: image
-          image-ref: ${{ env.AGENT_IMAGE }}@${{ steps.build_agent.outputs.digest }}
-          format: json
-          output: release-artifacts/trivy-agent-linux-amd64.json
-          severity: CRITICAL
-          ignore-unfixed: true
-          exit-code: 1
-          cache: false
+        shell: bash
+        run: |
+          "$RUNNER_TEMP/trivy-bin" image --scanners vuln --platform linux/amd64 --format json \
+            --output release-artifacts/trivy-agent-linux-amd64.json \
+            --severity CRITICAL --ignore-unfixed --exit-code 1 \
+            "${AGENT_IMAGE}@${{ steps.build_agent.outputs.digest }}"
 
       - name: Scan agent linux/arm64
         id: vulnerability_scan_agent_arm64
         continue-on-error: true
-        uses: aquasecurity/trivy-action@dc5a429b52fcf669ce959baa2c2dd26090d2a6c4 # v0.32.0
-        env:
-          TRIVY_PLATFORM: linux/arm64
-        with:
-          version: v0.64.1
-          scan-type: image
-          image-ref: ${{ env.AGENT_IMAGE }}@${{ steps.build_agent.outputs.digest }}
-          format: json
-          output: release-artifacts/trivy-agent-linux-arm64.json
-          severity: CRITICAL
-          ignore-unfixed: true
-          exit-code: 1
-          cache: false
+        shell: bash
+        run: |
+          "$RUNNER_TEMP/trivy-bin" image --scanners vuln --platform linux/arm64 --format json \
+            --output release-artifacts/trivy-agent-linux-arm64.json \
+            --severity CRITICAL --ignore-unfixed --exit-code 1 \
+            "${AGENT_IMAGE}@${{ steps.build_agent.outputs.digest }}"
 
       - name: Scan reconciler linux/amd64
         id: vulnerability_scan_reconciler_amd64
         continue-on-error: true
-        uses: aquasecurity/trivy-action@dc5a429b52fcf669ce959baa2c2dd26090d2a6c4 # v0.32.0
-        env:
-          TRIVY_PLATFORM: linux/amd64
-        with:
-          version: v0.64.1
-          scan-type: image
-          image-ref: ${{ env.RECONCILER_IMAGE }}@${{ steps.build_reconciler.outputs.digest }}
-          format: json
-          output: release-artifacts/trivy-reconciler-linux-amd64.json
-          severity: CRITICAL
-          ignore-unfixed: true
-          exit-code: 1
-          cache: false
+        shell: bash
+        run: |
+          "$RUNNER_TEMP/trivy-bin" image --scanners vuln --platform linux/amd64 --format json \
+            --output release-artifacts/trivy-reconciler-linux-amd64.json \
+            --severity CRITICAL --ignore-unfixed --exit-code 1 \
+            "${RECONCILER_IMAGE}@${{ steps.build_reconciler.outputs.digest }}"
 
       - name: Scan reconciler linux/arm64
         id: vulnerability_scan_reconciler_arm64
         continue-on-error: true
-        uses: aquasecurity/trivy-action@dc5a429b52fcf669ce959baa2c2dd26090d2a6c4 # v0.32.0
-        env:
-          TRIVY_PLATFORM: linux/arm64
-        with:
-          version: v0.64.1
-          scan-type: image
-          image-ref: ${{ env.RECONCILER_IMAGE }}@${{ steps.build_reconciler.outputs.digest }}
-          format: json
-          output: release-artifacts/trivy-reconciler-linux-arm64.json
-          severity: CRITICAL
-          ignore-unfixed: true
-          exit-code: 1
-          cache: false
+        shell: bash
+        run: |
+          "$RUNNER_TEMP/trivy-bin" image --scanners vuln --platform linux/arm64 --format json \
+            --output release-artifacts/trivy-reconciler-linux-arm64.json \
+            --severity CRITICAL --ignore-unfixed --exit-code 1 \
+            "${RECONCILER_IMAGE}@${{ steps.build_reconciler.outputs.digest }}"
 
       - name: Validate SBOM and vulnerability reports
         shell: bash
         run: |
           set -euo pipefail
-          for report in release-artifacts/*.spdx.json; do
-            test -s "$report"
-            jq --exit-status '.spdxVersion | startswith("SPDX-")' "$report" >/dev/null
-          done
-          test "$(find release-artifacts -name '*.spdx.json' | wc -l)" -eq 4
-          for report in release-artifacts/*.cyclonedx.json; do
-            test -s "$report"
-            jq --exit-status '.bomFormat == "CycloneDX"' "$report" >/dev/null
-          done
-          test "$(find release-artifacts -name '*.cyclonedx.json' | wc -l)" -eq 4
-          for report in release-artifacts/trivy-*.json; do
-            test -s "$report"
-            jq --exit-status '.SchemaVersion == 2 and (.Results | type == "array")' "$report" >/dev/null
-          done
-          test "$(find release-artifacts -name 'trivy-*.json' | wc -l)" -eq 4
+          ./hack/validate-release-evidence.rb \
+            --artifact-dir release-artifacts \
+            --agent-ref "${AGENT_IMAGE}@${{ steps.build_agent.outputs.digest }}" \
+            --reconciler-ref "${RECONCILER_IMAGE}@${{ steps.build_reconciler.outputs.digest }}"
 
       - name: Upload vulnerability evidence
         if: always()
@@ -282,6 +267,7 @@ jobs:
             release-artifacts/*.spdx.json
             release-artifacts/*.cyclonedx.json
             release-artifacts/trivy-*.json
+            release-artifacts/*-index.json
           if-no-files-found: error
 
       - name: Enforce public-alpha vulnerability gate
@@ -303,46 +289,8 @@ jobs:
           tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" crane
           install -m 0755 "$RUNNER_TEMP/crane" "$RUNNER_TEMP/crane-bin"
 
-      - name: Promote verified agent digest
-        id: promote_agent
-        shell: bash
-        run: |
-          set -euo pipefail
-          digest="${{ steps.build_agent.outputs.digest }}"
-          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          "$RUNNER_TEMP/crane-bin" tag "$AGENT_IMAGE@$digest" "${{ steps.version.outputs.version }}"
-          promoted="$("$RUNNER_TEMP/crane-bin" digest "$AGENT_IMAGE:${{ steps.version.outputs.version }}")"
-          test "$promoted" = "$digest"
-          echo "digest=$promoted" >>"$GITHUB_OUTPUT"
-
-      - name: Promote verified reconciler digest
-        id: promote_reconciler
-        shell: bash
-        run: |
-          set -euo pipefail
-          digest="${{ steps.build_reconciler.outputs.digest }}"
-          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          "$RUNNER_TEMP/crane-bin" tag "$RECONCILER_IMAGE@$digest" "${{ steps.version.outputs.version }}"
-          promoted="$("$RUNNER_TEMP/crane-bin" digest "$RECONCILER_IMAGE:${{ steps.version.outputs.version }}")"
-          test "$promoted" = "$digest"
-          echo "digest=$promoted" >>"$GITHUB_OUTPUT"
-
-      - name: Attest promoted agent digest
-        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
-        with:
-          subject-name: ${{ env.AGENT_IMAGE }}
-          subject-digest: ${{ steps.promote_agent.outputs.digest }}
-          push-to-registry: true
-
-      - name: Attest promoted reconciler digest
-        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
-        with:
-          subject-name: ${{ env.RECONCILER_IMAGE }}
-          subject-digest: ${{ steps.promote_reconciler.outputs.digest }}
-          push-to-registry: true
-
-      - name: Package and publish standalone and umbrella charts
-        id: charts
+      - name: Package standalone and umbrella charts
+        id: package_charts
         shell: bash
         run: |
           set -euo pipefail
@@ -360,15 +308,91 @@ jobs:
           helm lint "release-artifacts/stackdome-agent-standalone-$chart_version.tgz"
           helm lint "release-artifacts/stackdome-agent-$chart_version.tgz"
 
-          standalone_output="$(helm push "release-artifacts/stackdome-agent-standalone-$chart_version.tgz" "$CHART_REGISTRY")"
-          umbrella_output="$(helm push "release-artifacts/stackdome-agent-$chart_version.tgz" "$CHART_REGISTRY")"
-          printf '%s\n%s\n' "$standalone_output" "$umbrella_output"
-          standalone_digest="$(sed -n 's/^Digest: \(sha256:[0-9a-f]\{64\}\)$/\1/p' <<<"$standalone_output")"
-          umbrella_digest="$(sed -n 's/^Digest: \(sha256:[0-9a-f]\{64\}\)$/\1/p' <<<"$umbrella_output")"
-          [[ "$standalone_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          [[ "$umbrella_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          echo "standalone_digest=$standalone_digest" >>"$GITHUB_OUTPUT"
-          echo "umbrella_digest=$umbrella_digest" >>"$GITHUB_OUTPUT"
+      - name: Preflight every immutable final coordinate
+        id: publication_preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          chart_version="${{ steps.version.outputs.chart_version }}"
+          ./hack/publish-release-coordinate.sh check-image "$RUNNER_TEMP/crane-bin" \
+            "$AGENT_IMAGE" "${{ steps.version.outputs.version }}" "${{ steps.build_agent.outputs.digest }}"
+          ./hack/publish-release-coordinate.sh check-image "$RUNNER_TEMP/crane-bin" \
+            "$RECONCILER_IMAGE" "${{ steps.version.outputs.version }}" "${{ steps.build_reconciler.outputs.digest }}"
+          ./hack/publish-release-coordinate.sh check-chart helm "$CHART_REGISTRY" \
+            stackdome-agent-standalone "$chart_version" \
+            "release-artifacts/stackdome-agent-standalone-$chart_version.tgz"
+          ./hack/publish-release-coordinate.sh check-chart helm "$CHART_REGISTRY" \
+            stackdome-agent "$chart_version" "release-artifacts/stackdome-agent-$chart_version.tgz"
+          printf '%s\n' preflight-complete >release-artifacts/publication-state.txt
+
+      - name: Promote verified agent digest
+        id: promote_agent
+        shell: bash
+        run: |
+          set -euo pipefail
+          promoted="$(./hack/publish-release-coordinate.sh publish-image "$RUNNER_TEMP/crane-bin" \
+            "$AGENT_IMAGE" "${{ steps.version.outputs.version }}" "${{ steps.build_agent.outputs.digest }}")"
+          echo "digest=$promoted" >>"$GITHUB_OUTPUT"
+
+      - name: Record agent image publication
+        run: printf '%s\n' agent-image-tag >>release-artifacts/publication-state.txt
+
+      - name: Promote verified reconciler digest
+        id: promote_reconciler
+        shell: bash
+        run: |
+          set -euo pipefail
+          promoted="$(./hack/publish-release-coordinate.sh publish-image "$RUNNER_TEMP/crane-bin" \
+            "$RECONCILER_IMAGE" "${{ steps.version.outputs.version }}" "${{ steps.build_reconciler.outputs.digest }}")"
+          echo "digest=$promoted" >>"$GITHUB_OUTPUT"
+
+      - name: Record reconciler image publication
+        run: printf '%s\n' reconciler-image-tag >>release-artifacts/publication-state.txt
+
+      - name: Publish standalone chart idempotently
+        id: chart_standalone
+        shell: bash
+        run: |
+          chart_version="${{ steps.version.outputs.chart_version }}"
+          digest="$(./hack/publish-release-coordinate.sh publish-chart helm "$CHART_REGISTRY" \
+            stackdome-agent-standalone "$chart_version" \
+            "release-artifacts/stackdome-agent-standalone-$chart_version.tgz")"
+          echo "digest=$digest" >>"$GITHUB_OUTPUT"
+
+      - name: Record standalone chart publication
+        run: printf '%s\n' standalone-chart-push >>release-artifacts/publication-state.txt
+
+      - name: Publish umbrella chart idempotently
+        id: chart_umbrella
+        shell: bash
+        run: |
+          chart_version="${{ steps.version.outputs.chart_version }}"
+          digest="$(./hack/publish-release-coordinate.sh publish-chart helm "$CHART_REGISTRY" \
+            stackdome-agent "$chart_version" "release-artifacts/stackdome-agent-$chart_version.tgz")"
+          echo "digest=$digest" >>"$GITHUB_OUTPUT"
+
+      - name: Record umbrella chart publication
+        run: printf '%s\n' umbrella-chart-push >>release-artifacts/publication-state.txt
+
+      - name: Attest promoted agent digest
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
+        with:
+          subject-name: ${{ env.AGENT_IMAGE }}
+          subject-digest: ${{ steps.promote_agent.outputs.digest }}
+          push-to-registry: true
+
+      - name: Record agent attestation
+        run: printf '%s\n' agent-attestation >>release-artifacts/publication-state.txt
+
+      - name: Attest promoted reconciler digest
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
+        with:
+          subject-name: ${{ env.RECONCILER_IMAGE }}
+          subject-digest: ${{ steps.promote_reconciler.outputs.digest }}
+          push-to-registry: true
+
+      - name: Record reconciler attestation
+        run: printf '%s\n' reconciler-attestation >>release-artifacts/publication-state.txt
 
       - name: Bundle CRDs and record immutable release set
         shell: bash
@@ -387,12 +411,15 @@ jobs:
             --arg version "${{ steps.version.outputs.version }}" \
             --arg agent_image "$AGENT_IMAGE@${{ steps.promote_agent.outputs.digest }}" \
             --arg reconciler_image "$RECONCILER_IMAGE@${{ steps.promote_reconciler.outputs.digest }}" \
-            --arg standalone_chart "quay.io/stackdome/charts/stackdome-agent-standalone:${{ steps.version.outputs.chart_version }}@${{ steps.charts.outputs.standalone_digest }}" \
-            --arg umbrella_chart "quay.io/stackdome/charts/stackdome-agent:${{ steps.version.outputs.chart_version }}@${{ steps.charts.outputs.umbrella_digest }}" \
+            --arg standalone_chart "quay.io/stackdome/charts/stackdome-agent-standalone:${{ steps.version.outputs.chart_version }}@${{ steps.chart_standalone.outputs.digest }}" \
+            --arg umbrella_chart "quay.io/stackdome/charts/stackdome-agent:${{ steps.version.outputs.chart_version }}@${{ steps.chart_umbrella.outputs.digest }}" \
+            --arg reconciler_cloud_digest "${{ steps.promote_reconciler.outputs.digest }}" \
             --arg crd_bundle_sha256 "$crd_checksum" \
             --argjson api_versions "$api_versions" \
             --arg rollback_chart "quay.io/stackdome/charts/stackdome-agent:$ROLLBACK_CHART_VERSION@${{ steps.rollback.outputs.digest }}" \
-            --arg rollback_command 'helm rollback <release-name> <previous-revision> --namespace <namespace>' \
+            --arg rollback_crd_bundle_sha256 "${{ steps.rollback.outputs.crd_bundle_sha256 }}" \
+            --arg rollback_crd_apply 'kubectl apply --server-side --field-manager=stackdome-crd-rollback -f rollback-crds.yaml' \
+            --arg rollback_command 'helm rollback <release-name> <previous-revision> --namespace <namespace> --wait' \
             '{
               source_commit: $source_commit,
               module: $module,
@@ -400,25 +427,43 @@ jobs:
               api_versions: $api_versions,
               images: {agent: $agent_image, reconciler: $reconciler_image},
               charts: {standalone: $standalone_chart, umbrella: $umbrella_chart},
+              cloud_install: {
+                reconciler_digest: $reconciler_cloud_digest,
+                reconciler_digest_required: true
+              },
               crd_bundle_sha256: $crd_bundle_sha256,
               vulnerability_gate: "zero fixable CRITICAL on linux/amd64 and linux/arm64",
               sbom_formats: ["SPDX-JSON", "CycloneDX-JSON"],
               rollback_chart: $rollback_chart,
+              rollback_crd_bundle_sha256: $rollback_crd_bundle_sha256,
+              crd_compatibility: "backward-compatible gate passed; explicit prior-bundle recovery recorded",
+              rollback_crd_apply: $rollback_crd_apply,
               rollback_command: $rollback_command
             }' >release-artifacts/release-metadata.json
-          sha256sum release-artifacts/* >release-artifacts/SHA256SUMS
 
       - name: Attest standalone chart package
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
         with:
           subject-path: release-artifacts/stackdome-agent-standalone-${{ steps.version.outputs.chart_version }}.tgz
 
+      - name: Record standalone chart attestation
+        run: printf '%s\n' standalone-chart-attestation >>release-artifacts/publication-state.txt
+
       - name: Attest umbrella chart package
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
         with:
           subject-path: release-artifacts/stackdome-agent-${{ steps.version.outputs.chart_version }}.tgz
 
+      - name: Record umbrella chart attestation and release completion
+        run: |
+          printf '%s\n' umbrella-chart-attestation >>release-artifacts/publication-state.txt
+          printf '%s\n' complete >release-artifacts/release-complete
+          find release-artifacts -maxdepth 1 -type f ! -name SHA256SUMS -print0 \
+            | sort --zero-terminated \
+            | xargs --null sha256sum >release-artifacts/SHA256SUMS
+
       - name: Upload immutable release evidence
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-${{ github.ref_name }}

@@ -8,6 +8,14 @@ image:
 
 imagePullSecrets: []
 
+# The registry config reconciler writes containerd configuration on every node.
+# Cloud installations must set digest and requireDigest=true.
+registryConfigReconciler:
+  repository: quay.io/stackdome/registry-config-reconciler
+  tag: ""
+  digest: ""
+  requireDigest: false
+
 replicaCount: 1
 leaderElect: true
 platformTLSNamespace: stackdome-control-plane

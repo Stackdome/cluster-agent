@@ -6,6 +6,27 @@ Chart name.
 {{- end }}
 
 {{/*
+Privileged registry config reconciler image reference.
+*/}}
+{{- define "stackdome-agent-standalone.registryConfigReconcilerImage" -}}
+{{- if or (not (regexMatch "^[^@[:space:]]+$" .Values.registryConfigReconciler.repository)) (regexMatch "/[^/]+:" .Values.registryConfigReconciler.repository) }}
+{{- fail "registryConfigReconciler.repository must be an untagged image repository" }}
+{{- end }}
+{{- if .Values.registryConfigReconciler.digest }}
+{{- if not (regexMatch "^sha256:[0-9a-f]{64}$" .Values.registryConfigReconciler.digest) }}
+{{- fail "registryConfigReconciler.digest must be sha256:<64 lowercase hex characters>" }}
+{{- end }}
+{{- printf "%s@%s" .Values.registryConfigReconciler.repository .Values.registryConfigReconciler.digest }}
+{{- else }}
+{{- if .Values.registryConfigReconciler.requireDigest }}
+{{- fail "registryConfigReconciler.digest is required when registryConfigReconciler.requireDigest=true" }}
+{{- end }}
+{{- $tag := default .Chart.AppVersion .Values.registryConfigReconciler.tag }}
+{{- printf "%s:%s" .Values.registryConfigReconciler.repository $tag }}
+{{- end }}
+{{- end }}
+
+{{/*
 Fully qualified app name. Truncated to 63 chars because some Kubernetes name fields are limited.
 */}}
 {{- define "stackdome-agent-standalone.fullname" -}}

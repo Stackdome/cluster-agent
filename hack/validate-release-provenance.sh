@@ -88,6 +88,9 @@ ci_runs = ci_steps.map { |step| step["run"] }.compact.join("\n")
   "./hack/test-release-provenance.sh",
   "make test-integration",
   "config/docker/release.Dockerfile",
+  "docker buildx build",
+  "--platform linux/amd64,linux/arm64",
+  "./hack/validate-oci-index.rb",
 ].each do |command|
   fail_validation("CI is missing #{command}") unless ci_runs.include?(command)
 end
@@ -154,12 +157,35 @@ trust_index = step_index(steps, id: "trusted_source")
 version_index = step_index(steps, id: "version")
 verify_index = step_index(steps, name: "Verify tagged source before using release secrets")
 login_index = steps.index { |step| step.fetch("uses", "").start_with?("docker/login-action@") }
-unless [trust_index, version_index, verify_index, login_index].all? &&
-       trust_index < version_index && version_index < verify_index && verify_index < login_index
+trivy_install_index = step_index(steps, name: "Install checksum-verified Trivy before registry login")
+unless [trust_index, version_index, verify_index, trivy_install_index, login_index].all? &&
+       trust_index < version_index && version_index < verify_index &&
+       verify_index < trivy_install_index && trivy_install_index < login_index
   fail_validation("release secrets are available before source trust gates")
 end
 steps[0...login_index].each do |step|
   fail_validation("secret reference appears before trust gates") if step.to_s.include?("secrets.")
+end
+
+release_text = File.read(File.join(repo, ".github/workflows/release.yaml"))
+if release_text.include?("aquasecurity/trivy-action") || release_text.include?("aquasecurity/setup-trivy")
+  fail_validation("release must not execute Trivy composite actions")
+end
+trivy_install = steps.fetch(trivy_install_index)
+unless trivy_install.fetch("run", "").lines.map(&:strip).reject(&:empty?) == [
+  "set -euo pipefail",
+  './hack/install-trivy.sh "$RUNNER_TEMP/trivy-bin"',
+]
+  fail_validation("Trivy must be installed by the checksum-verified repository script")
+end
+installer = File.read(File.join(repo, "hack/install-trivy.sh"))
+unless installer.include?("v${version}/${archive_name}") &&
+       installer.include?("2edd39da482bb4e9831962487b68f68e3928ec3137794757f54d00383d79547b") &&
+       installer.include?("sha256sum --check")
+  fail_validation("Trivy installer is not pinned to the verified release archive")
+end
+if release_text.match?(/TRIVY_TEST_(?:ARCHIVE|SHA256)|STACKDOME_RELEASE_TOOL_TESTING/)
+  fail_validation("release workflow must not enable Trivy installer test overrides")
 end
 
 verify_run = steps.fetch(verify_index).fetch("run", "")
@@ -191,21 +217,31 @@ builds.each do |id, (image, command)|
   end
 end
 
-scan_ids = %w[
-  vulnerability_scan_agent_amd64
-  vulnerability_scan_agent_arm64
-  vulnerability_scan_reconciler_amd64
-  vulnerability_scan_reconciler_arm64
-]
-scan_ids.each do |id|
+index_step = steps.find { |step| step["name"] == "Verify published image indexes" } || {}
+index_lines = index_step.fetch("run", "")
+unless index_lines.include?('"${AGENT_IMAGE}@${{ steps.build_agent.outputs.digest }}"') &&
+       index_lines.include?('"${RECONCILER_IMAGE}@${{ steps.build_reconciler.outputs.digest }}"') &&
+       index_lines.scan(/validate-oci-index\.rb/).length == 2
+  fail_validation("release must validate both exact build digests as two-platform indexes")
+end
+
+scan_contracts = {
+  "vulnerability_scan_agent_amd64" => ["AGENT_IMAGE", "build_agent", "linux/amd64", "release-artifacts/trivy-agent-linux-amd64.json"],
+  "vulnerability_scan_agent_arm64" => ["AGENT_IMAGE", "build_agent", "linux/arm64", "release-artifacts/trivy-agent-linux-arm64.json"],
+  "vulnerability_scan_reconciler_amd64" => ["RECONCILER_IMAGE", "build_reconciler", "linux/amd64", "release-artifacts/trivy-reconciler-linux-amd64.json"],
+  "vulnerability_scan_reconciler_arm64" => ["RECONCILER_IMAGE", "build_reconciler", "linux/arm64", "release-artifacts/trivy-reconciler-linux-arm64.json"],
+}
+scan_contracts.each do |id, (image_env, build_id, platform, output)|
   step = steps.find { |candidate| candidate["id"] == id } || {}
-  with = step.fetch("with", {})
+  expected_lines = [
+    %Q{"$RUNNER_TEMP/trivy-bin" image --scanners vuln --platform #{platform} --format json \\},
+    %Q{--output #{output} \\},
+    %Q{--severity CRITICAL --ignore-unfixed --exit-code 1 \\},
+    %Q{"${#{image_env}}@${{ steps.#{build_id}.outputs.digest }}"},
+  ]
   unless step["continue-on-error"] == true &&
-         step.fetch("uses", "").start_with?("aquasecurity/trivy-action@") &&
-         with["version"] == "v0.64.1" && with["scan-type"] == "image" &&
-         with["format"] == "json" && with["severity"] == "CRITICAL" &&
-         with["ignore-unfixed"] == true && with["exit-code"] == 1 && with["cache"] == false &&
-         step.dig("env", "TRIVY_PLATFORM") == "linux/#{id.end_with?("amd64") ? "amd64" : "arm64"}"
+         step["shell"] == "bash" && !step.key?("uses") &&
+         step.fetch("run", "").lines.map(&:strip).reject(&:empty?) == expected_lines
     fail_validation("#{id} does not enforce the public-alpha scan contract")
   end
 end
@@ -214,17 +250,38 @@ validate_index = step_index(steps, name: "Validate SBOM and vulnerability report
 gate_index = step_index(steps, name: "Enforce public-alpha vulnerability gate")
 promote_agent_index = step_index(steps, id: "promote_agent")
 promote_reconciler_index = step_index(steps, id: "promote_reconciler")
-charts_index = step_index(steps, id: "charts")
+package_index = step_index(steps, id: "package_charts")
+preflight_index = step_index(steps, id: "publication_preflight")
+standalone_chart_index = step_index(steps, id: "chart_standalone")
+umbrella_chart_index = step_index(steps, id: "chart_umbrella")
 metadata_index = step_index(steps, name: "Bundle CRDs and record immutable release set")
-unless [validate_index, gate_index, promote_agent_index, promote_reconciler_index, charts_index, metadata_index].all? &&
-       validate_index < gate_index && gate_index < promote_agent_index && gate_index < promote_reconciler_index &&
-       promote_agent_index < charts_index && promote_reconciler_index < charts_index && charts_index < metadata_index
+completion_index = step_index(steps, name: "Record umbrella chart attestation and release completion")
+unless [validate_index, gate_index, package_index, preflight_index, promote_agent_index,
+        promote_reconciler_index, standalone_chart_index, umbrella_chart_index,
+        metadata_index, completion_index].all? &&
+       validate_index < gate_index && gate_index < package_index && package_index < preflight_index &&
+       preflight_index < promote_agent_index && promote_agent_index < promote_reconciler_index &&
+       promote_reconciler_index < standalone_chart_index && standalone_chart_index < umbrella_chart_index &&
+       umbrella_chart_index < metadata_index && metadata_index < completion_index
   fail_validation("release publication steps are out of order")
 end
 validation_run = steps.fetch(validate_index).fetch("run", "")
-unless validation_run.include?("*.spdx.json") && validation_run.include?("*.cyclonedx.json") &&
-       validation_run.include?("trivy-*.json") && validation_run.scan(/-eq 4/).length == 3
+unless validation_run.include?("./hack/validate-release-evidence.rb") &&
+       validation_run.include?('--agent-ref "${AGENT_IMAGE}@${{ steps.build_agent.outputs.digest }}"') &&
+       validation_run.include?('--reconciler-ref "${RECONCILER_IMAGE}@${{ steps.build_reconciler.outputs.digest }}"')
   fail_validation("release must validate all per-platform SBOM and scan reports")
+end
+
+sbom_step = steps.find { |step| step["name"] == "Generate per-platform SPDX and CycloneDX SBOMs" } || {}
+sbom_lines = sbom_step.fetch("run", "").lines.map(&:strip).reject(&:empty?)
+unless sbom_lines == [
+  "set -euo pipefail",
+  './hack/generate-release-sboms.sh "$RUNNER_TEMP/syft-bin" release-artifacts agent \\',
+  '"${AGENT_IMAGE}@${{ steps.build_agent.outputs.digest }}"',
+  './hack/generate-release-sboms.sh "$RUNNER_TEMP/syft-bin" release-artifacts reconciler \\',
+  '"${RECONCILER_IMAGE}@${{ steps.build_reconciler.outputs.digest }}"',
+]
+  fail_validation("SBOM generation is not bound to both exact build digests")
 end
 
 expected_gate = "steps.vulnerability_scan_agent_amd64.outcome != 'success' || steps.vulnerability_scan_agent_arm64.outcome != 'success' || steps.vulnerability_scan_reconciler_amd64.outcome != 'success' || steps.vulnerability_scan_reconciler_arm64.outcome != 'success'"
@@ -237,18 +294,33 @@ end
   step = steps.find { |candidate| candidate["id"] == id }
   fail_validation("#{id} must stop after any earlier failure") if step.key?("if")
   run = step.fetch("run", "")
-  unless run.include?("crane-bin\" tag") && run.include?('test "$promoted" = "$digest"')
-    fail_validation("#{id} must verify final-tag digest equality")
+  unless run.include?("./hack/publish-release-coordinate.sh publish-image") &&
+         run.include?(id == "promote_agent" ? "steps.build_agent.outputs.digest" : "steps.build_reconciler.outputs.digest")
+    fail_validation("#{id} must idempotently publish the exact build digest")
   end
 end
 
-charts = steps.fetch(charts_index)
-charts_run = charts.fetch("run", "")
-unless charts_run.scan(/go run \.\/cmd\/release-package/).length == 2 &&
-       charts_run.include?('source-date "${{ steps.version.outputs.source_date }}"') &&
-       charts_run.scan(/helm push/).length == 2 &&
-       charts_run.include?("standalone_digest") && charts_run.include?("umbrella_digest")
-  fail_validation("both charts must publish with captured OCI digests")
+package_run = steps.fetch(package_index).fetch("run", "")
+unless package_run.scan(/go run \.\/cmd\/release-package/).length == 2 &&
+       package_run.include?('source-date "${{ steps.version.outputs.source_date }}"') &&
+       !package_run.include?("helm push")
+  fail_validation("both charts must be packaged deterministically before publication preflight")
+end
+
+preflight_run = steps.fetch(preflight_index).fetch("run", "")
+unless preflight_run.scan(/publish-release-coordinate\.sh check-image/).length == 2 &&
+       preflight_run.scan(/publish-release-coordinate\.sh check-chart/).length == 2 &&
+       preflight_run.include?("steps.build_agent.outputs.digest") &&
+       preflight_run.include?("steps.build_reconciler.outputs.digest")
+  fail_validation("all four immutable coordinates must be preflighted before publication")
+end
+
+{"chart_standalone" => "stackdome-agent-standalone", "chart_umbrella" => "stackdome-agent"}.each do |id, chart_name|
+  chart_step = steps.find { |candidate| candidate["id"] == id } || {}
+  run = chart_step.fetch("run", "")
+  unless !chart_step.key?("if") && run.include?("publish-release-coordinate.sh publish-chart") && run.include?(chart_name)
+    fail_validation("#{id} must idempotently publish its deterministic chart archive")
+  end
 end
 
 dependency_builds = Dir.glob([
@@ -263,11 +335,11 @@ unless dependency_builds == 1 && File.read(File.join(repo, "hack/verify-release-
 end
 
 metadata_run = steps.fetch(metadata_index).fetch("run", "")
-%w[source_commit api_versions crd_bundle_sha256 vulnerability_gate rollback_chart rollback_command].each do |field|
+%w[source_commit api_versions crd_bundle_sha256 vulnerability_gate rollback_chart rollback_command
+   rollback_crd_bundle_sha256 rollback_crd_apply reconciler_digest_required].each do |field|
   fail_validation("release metadata is missing #{field}") unless metadata_run.include?(field)
 end
 
-release_text = File.read(File.join(repo, ".github/workflows/release.yaml"))
 [
   "d6400b579fa84dd383573b1d1ff6f081a37fc64d3ffaafdfdda95c4325f204be",
   "c1d593d01551f2c9a3df5ca0a0be4385a839bd9b86d4a76e18d7b17d16559127",
@@ -277,6 +349,30 @@ end
 
 attestations = steps.select { |step| step.fetch("uses", "").start_with?("actions/attest-build-provenance@") }
 fail_validation("both images and both charts need GitHub provenance") unless attestations.length == 4
+
+completion_run = steps.fetch(completion_index).fetch("run", "")
+unless completion_run.include?("umbrella-chart-attestation") && completion_run.include?("release-artifacts/release-complete") &&
+       attestations.all? { |attestation| steps.index(attestation) < completion_index }
+  fail_validation("release completion marker must follow every attestation")
+end
+
+publisher = File.read(File.join(repo, "hack/publish-release-coordinate.sh"))
+unless publisher.include?("use a new version") && publisher.include?('existing" != "$expected_digest') &&
+       publisher.include?('actual_sha" != "$expected_sha')
+  fail_validation("publication helper must reject mismatched immutable coordinates")
+end
+
+rollback_step = steps.find { |step| step["id"] == "rollback" } || {}
+rollback_run = rollback_step.fetch("run", "")
+unless rollback_run.include?("extract-chart-crds.sh") && rollback_run.include?("verify-crd-compatibility.rb") &&
+       rollback_run.include?("release-artifacts/rollback-crds.yaml")
+  fail_validation("rollback chart CRDs must be captured and compatibility-gated")
+end
+release_docs = File.read(File.join(repo, "RELEASING.md"))
+unless release_docs.include?("verify-installed-crds.rb") && release_docs.include?("controller scaled to zero") &&
+       release_docs.include?("release-complete")
+  fail_validation("release documentation is missing partial-publication or explicit CRD recovery")
+end
 
 puts "release provenance contract verified"
 RUBY

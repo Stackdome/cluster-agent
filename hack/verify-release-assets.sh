@@ -113,4 +113,19 @@ digest_image="$(helm template release-check charts/stackdome-agent-standalone \
   | ruby -ryaml -e 'puts YAML.load_stream(STDIN.read).compact.find { |item| item["kind"] == "Deployment" }.dig("spec", "template", "spec", "containers", 0, "image")')"
 test "$digest_image" = "${repository}@$digest"
 
+cloud_args="$(helm template release-check charts/stackdome-agent-standalone \
+  --namespace stackdome-control-plane \
+  --set-string "registryConfigReconciler.digest=$digest" \
+  --set "registryConfigReconciler.requireDigest=true" \
+  | ruby -ryaml -e 'deployment = YAML.load_stream(STDIN.read).compact.find { |item| item["kind"] == "Deployment" }; puts deployment.dig("spec", "template", "spec", "containers", 0, "args")')"
+grep -Fq -- "--registry-config-reconciler-image=${reconciler_image%:*}@$digest" <<<"$cloud_args"
+grep -Fq -- "--require-registry-config-reconciler-digest=true" <<<"$cloud_args"
+
+if helm template release-check charts/stackdome-agent-standalone \
+  --namespace stackdome-control-plane \
+  --set "registryConfigReconciler.requireDigest=true" >/dev/null 2>&1; then
+  echo "cloud render unexpectedly accepted a tagged reconciler image" >&2
+  exit 1
+fi
+
 echo "release assets verified for $app_version"
