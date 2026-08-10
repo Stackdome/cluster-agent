@@ -11,6 +11,7 @@ cat >"$tmp/bin/crane" <<'SH'
 set -euo pipefail
 case "$1" in
   digest)
+    [[ "$#" == 2 ]] || { printf 'unexpected crane digest arguments: %s\n' "$*" >&2; exit 64; }
     ref="$2"
     repository="${ref%:*}"
     version="${ref##*:}"
@@ -25,6 +26,7 @@ case "$1" in
     cat "$REMOTE_STATE/images/$key"
     ;;
   tag)
+    [[ "$#" == 3 ]] || { printf 'unexpected crane tag arguments: %s\n' "$*" >&2; exit 64; }
     digest="${2##*@}"; repository="${2%@*}"
     key="$(printf '%s' "$repository:$3" | tr '/:' '__')"
     mkdir -p "$REMOTE_STATE/images"
@@ -38,6 +40,10 @@ cat >"$tmp/bin/helm" <<'SH'
 set -euo pipefail
 case "$1" in
   pull)
+    [[ "$#" == 6 && "$3" == --version && "$5" == --destination ]] || {
+      printf 'unexpected helm pull arguments: %s\n' "$*" >&2
+      exit 64
+    }
     ref="$2"; version="$4"; destination="$6"; name="${ref##*/}"
     coordinate="${ref#oci://}"
     registry="${coordinate%%/*}"
@@ -45,7 +51,7 @@ case "$1" in
     manifest_version="${version//+/_}"
     key="$(printf '%s' "$name:$version" | tr '/:' '__')"
     [[ -f "$REMOTE_STATE/charts/$key.tgz" ]] || {
-      printf 'Error: failed to perform "FetchReference" on source: GET "https://%s/v2/%s/manifests/%s": response status code 404: manifest unknown: manifest unknown\n' \
+      printf 'Error: failed to perform "FetchReference" on source: %s/%s:%s: not found\n' \
         "$registry" "$repository" "$manifest_version" >&2
       exit 1
     }
@@ -53,6 +59,7 @@ case "$1" in
     printf 'Digest: %s\n' "$(cat "$REMOTE_STATE/charts/$key.digest")"
     ;;
   push)
+    [[ "$#" == 3 ]] || { printf 'unexpected helm push arguments: %s\n' "$*" >&2; exit 64; }
     archive="$2"; base="$(basename "$archive" .tgz)"
     version="$CHART_VERSION"; name="${base%-$version}"
     key="$(printf '%s' "$name:$version" | tr '/:' '__')"

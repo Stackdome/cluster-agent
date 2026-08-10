@@ -11,6 +11,7 @@ cat >"$tmp/bin/crane" <<'SH'
 set -euo pipefail
 case "$1" in
   digest)
+    [[ "$#" == 2 ]] || { printf 'unexpected crane digest arguments: %s\n' "$*" >&2; exit 64; }
     if [[ -n "${CLIENT_ERROR:-}" ]]; then printf '%s\n' "$CLIENT_ERROR" >&2; exit 1; fi
     ref="$2"
     repository="${ref%:*}"
@@ -27,6 +28,7 @@ case "$1" in
     cat "$STATE/$key"
     ;;
   tag)
+    [[ "$#" == 3 ]] || { printf 'unexpected crane tag arguments: %s\n' "$*" >&2; exit 64; }
     digest="${2##*@}"
     repository="${2%@*}"
     key="$(printf '%s' "$repository:$3" | tr '/:' '__')"
@@ -40,7 +42,15 @@ cat >"$tmp/bin/helm" <<'SH'
 set -euo pipefail
 case "$1" in
   pull)
+    [[ "$#" == 6 && "$3" == --version && "$5" == --destination ]] || {
+      printf 'unexpected helm pull arguments: %s\n' "$*" >&2
+      exit 64
+    }
     ref="$2"; version="$4"; destination="$6"; name="${ref##*/}"
+    if [[ -n "${EXPECTED_HELM_VERSION:-}" && "$version" != "$EXPECTED_HELM_VERSION" ]]; then
+      printf 'helm pull version was %s, expected %s\n' "$version" "$EXPECTED_HELM_VERSION" >&2
+      exit 64
+    fi
     coordinate="${ref#oci://}"
     registry="${coordinate%%/*}"
     repository="${coordinate#*/}"
@@ -48,7 +58,7 @@ case "$1" in
     key="$(printf '%s' "$name:$version" | tr '/:' '__')"
     if [[ -n "${CLIENT_ERROR:-}" ]]; then printf '%s\n' "$CLIENT_ERROR" >&2; exit 1; fi
     if [[ ! -f "$STATE/$key.tgz" ]]; then
-      printf 'Error: failed to perform "FetchReference" on source: GET "https://%s/v2/%s/manifests/%s": response status code 404: manifest unknown: manifest unknown\n' \
+      printf 'Error: failed to perform "FetchReference" on source: %s/%s:%s: not found\n' \
         "$registry" "$repository" "$manifest_version" >&2
       exit 1
     fi
@@ -61,6 +71,7 @@ case "$1" in
     esac
     ;;
   push)
+    [[ "$#" == 3 ]] || { printf 'unexpected helm push arguments: %s\n' "$*" >&2; exit 64; }
     archive="$2"; registry="$3"; base="$(basename "$archive" .tgz)"
     name="${base%-*}"; version="${base##*-}"
     key="$(printf '%s' "$name:$version" | tr '/:' '__')"
@@ -161,33 +172,46 @@ for error in \
     "$publisher" check-chart "$tmp/bin/helm" oci://quay.io/stackdome/charts \
     absent 1.0.0 "$tmp/stackdome-agent-1.0.0.tgz"
 done
-helm_absence='Error: failed to perform "FetchReference" on source: GET "https://quay.io/v2/stackdome/charts/absent/manifests/1.0.0": response status code 404: manifest unknown: manifest unknown'
+# Captured against Quay with Helm v3.18.4 (gd80839c). The Linux/amd64 archive
+# used by the release runner was checksum-verified as
+# f8180838c23d7c7d797b208861fecb591d9ce1690d8704ed1e4cb8e2add966c1.
+# The same output shape was confirmed on Linux/arm64 and Darwin/arm64.
+helm_absence='Error: failed to perform "FetchReference" on source: quay.io/stackdome/charts/absent:1.0.0: not found'
+CLIENT_ERROR="$helm_absence" \
+  "$publisher" check-chart "$tmp/bin/helm" oci://quay.io/stackdome/charts \
+  absent 1.0.0 "$tmp/stackdome-agent-1.0.0.tgz"
 for error in \
   "$helm_absence; unexpected EOF" \
   "$helm_absence; context deadline exceeded" \
   "$helm_absence; read: connection reset by peer" \
   "$helm_absence; lookup quay.io: no such host" \
   "$helm_absence; unexpected end of JSON input" \
-  "$helm_absence"$'\nMANIFEST_UNKNOWN: partial response'; do
+  "$helm_absence"$'\nMANIFEST_UNKNOWN: partial response' \
+  "$helm_absence"$'\n'"$helm_absence" \
+  $'transport failed\n'"$helm_absence"; do
   expect_failure "mixed chart absence response '$error'" env CLIENT_ERROR="$error" \
     "$publisher" check-chart "$tmp/bin/helm" oci://quay.io/stackdome/charts \
     absent 1.0.0 "$tmp/stackdome-agent-1.0.0.tgz"
 done
-CLIENT_ERROR='Error: failed to perform "FetchReference" on source: GET "https://quay.io/v2/stackdome/charts/absent/manifests/1.0.0": response status code 404: name unknown: repository name not known to registry' \
-  "$publisher" check-chart "$tmp/bin/helm" oci://quay.io/stackdome/charts \
-  absent 1.0.0 "$tmp/stackdome-agent-1.0.0.tgz"
 for error in \
-  'Error: failed to perform "FetchReference" on source: GET "https://quay.io/v2/stackdome/other/absent/manifests/1.0.0": response status code 404: manifest unknown: manifest unknown' \
-  'Error: failed to perform "FetchReference" on source: GET "https://quay.io/v2/stackdome/charts/other/manifests/1.0.0": response status code 404: manifest unknown: manifest unknown' \
-  'Error: failed to perform "FetchReference" on source: GET "https://quay.io/v2/stackdome/charts/absent-extra/manifests/1.0.0": response status code 404: manifest unknown: manifest unknown' \
-  'Error: failed to perform "FetchReference" on source: GET "https://quay.io/v2/stackdome/charts/absent/manifests/1.0.1": response status code 404: manifest unknown: manifest unknown' \
-  'Error: failed to perform "FetchReference" on source: GET "https://QUAY.io/v2/stackdome/charts/absent/manifests/1.0.0": response status code 404: manifest unknown: manifest unknown' \
-  'Error: failed to perform "FetchReference" on source: GET "https://quay.io/v2/stackdome/charts/absent/manifests/1.0.%30": response status code 404: manifest unknown: manifest unknown'; do
+  'Error: failed to perform "FetchReference" on source: quay.io/stackdome/other/absent:1.0.0: not found' \
+  'Error: failed to perform "FetchReference" on source: quay.io/stackdome/charts/other:1.0.0: not found' \
+  'Error: failed to perform "FetchReference" on source: quay.io/stackdome/charts/absent-extra:1.0.0: not found' \
+  'Error: failed to perform "FetchReference" on source: quay.io/stackdome/charts/absent:1.0.1: not found' \
+  'Error: failed to perform "FetchReference" on source: QUAY.io/stackdome/charts/absent:1.0.0: not found' \
+  'Error: failed to perform "FetchReference" on source: quay.io/stackdome/charts/absent:1.0.%30: not found' \
+  'Error: failed to perform "FetchReference" on source: GET "https://quay.io/v2/stackdome/charts/absent/manifests/1.0.0": response status code 404: manifest unknown: manifest unknown'; do
   expect_failure "chart absence for another coordinate '$error'" env CLIENT_ERROR="$error" \
     "$publisher" check-chart "$tmp/bin/helm" oci://quay.io/stackdome/charts \
     absent 1.0.0 "$tmp/stackdome-agent-1.0.0.tgz"
 done
-CLIENT_ERROR='Error: failed to perform "FetchReference" on source: GET "https://quay.io/v2/stackdome/charts/absent/manifests/1.0.0_build.1": response status code 404: manifest unknown: manifest unknown' \
+EXPECTED_HELM_VERSION='1.0.0+build.1' \
+  CLIENT_ERROR='Error: failed to perform "FetchReference" on source: quay.io/stackdome/charts/absent:1.0.0_build.1: not found' \
+  "$publisher" check-chart "$tmp/bin/helm" oci://quay.io/stackdome/charts \
+  absent 1.0.0+build.1 "$tmp/stackdome-agent-1.0.0.tgz"
+expect_failure "Helm absence without build metadata normalization" env \
+  EXPECTED_HELM_VERSION='1.0.0+build.1' \
+  CLIENT_ERROR='Error: failed to perform "FetchReference" on source: quay.io/stackdome/charts/absent:1.0.0+build.1: not found' \
   "$publisher" check-chart "$tmp/bin/helm" oci://quay.io/stackdome/charts \
   absent 1.0.0+build.1 "$tmp/stackdome-agent-1.0.0.tgz"
 "$publisher" check-chart "$tmp/bin/helm" oci://quay.io/stackdome/charts stackdome-agent 1.0.0 "$tmp/stackdome-agent-1.0.0.tgz"

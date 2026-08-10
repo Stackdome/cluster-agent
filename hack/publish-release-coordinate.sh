@@ -21,6 +21,21 @@ oci_manifest_url() {
   printf 'https://%s/v2/%s/manifests/%s\n' "$registry" "$repository" "$reference"
 }
 
+oci_tagged_reference() {
+  local coordinate="${1#oci://}" reference="$2"
+  local registry repository
+
+  [[ "$coordinate" == */* && "$coordinate" != *://* ]] || return 1
+  registry="${coordinate%%/*}"
+  repository="${coordinate#*/}"
+
+  [[ "$registry" =~ ^[A-Za-z0-9.-]+(:[0-9]+)?$ ]] || return 1
+  [[ "$repository" =~ ^[a-z0-9][a-z0-9._/-]*[a-z0-9]$ ]] || return 1
+  [[ "$reference" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]] || return 1
+
+  printf '%s:%s\n' "$coordinate" "$reference"
+}
+
 is_crane_manifest_absence() {
   local output="$1" expected_url="$2" terminal_url warning_url
   local terminal_pattern='^Error: GET (https://[^[:space:]]+): (MANIFEST_UNKNOWN: manifest unknown|NAME_UNKNOWN: repository name not known to registry)(; map\[\])?$'
@@ -44,11 +59,8 @@ is_crane_manifest_absence() {
 }
 
 is_helm_manifest_absence() {
-  local output="$1" expected_url="$2" response_url
-  local absence_pattern='^Error: failed to perform "FetchReference" on source: GET "(https://[^"]+)": response status code 404: (manifest unknown: manifest unknown|name unknown: repository name not known to registry)$'
-  [[ "$output" =~ $absence_pattern ]] || return 1
-  response_url="${BASH_REMATCH[1]}"
-  [[ "$response_url" == "$expected_url" ]]
+  local output="$1" expected_reference="$2"
+  [[ "$output" == "Error: failed to perform \"FetchReference\" on source: $expected_reference: not found" ]]
 }
 
 require_digest() {
@@ -102,11 +114,12 @@ check_image() {
 
 check_chart() {
   local helm="$1" registry="$2" name="$3" version="$4" archive="$5"
-  local expected_digest="${6:-}" tmp output pulled expected_sha actual_sha digest expected_url
+  local expected_digest="${6:-}" tmp output pulled expected_sha actual_sha digest expected_reference
   if [[ -n "$expected_digest" ]]; then
     require_digest "$expected_digest" "expected chart"
   fi
-  if ! expected_url="$(oci_manifest_url "$registry/$name" "${version//+/_}")"; then
+  # Helm preserves build metadata in --version but maps '+' to '_' in OCI tags.
+  if ! expected_reference="$(oci_tagged_reference "$registry/$name" "${version//+/_}")"; then
     echo "$registry/$name:$version is not a supported OCI chart coordinate" >&2
     return 1
   fi
@@ -140,7 +153,7 @@ check_chart() {
   fi
 
   rm -rf "$tmp"
-  if ! is_helm_manifest_absence "$output" "$expected_url"; then
+  if ! is_helm_manifest_absence "$output" "$expected_reference"; then
     printf '%s\n' "$output" >&2
     return 1
   fi
