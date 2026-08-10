@@ -2,30 +2,30 @@ apiVersion: v2
 name: stackdome-agent
 description: Stackdome spoke agent — full platform stack for spoke clusters
 type: application
-version: 0.1.0
-appVersion: "v0.4.9-alpha"
+version: 0.6.12-alpha-rc1
+appVersion: "v0.6.12-alpha-rc1"
 
 dependencies:
   - name: cert-manager
-    version: "~1.17.0"
+    version: "1.17.4"
     repository: "https://charts.jetstack.io"
     condition: cert-manager.enabled
 
   - name: cloudnative-pg
-    version: "~0.23.0"
+    version: "0.23.2"
     repository: "https://cloudnative-pg.github.io/charts"
     condition: cloudnative-pg.enabled
 
   - name: plugin-barman-cloud
-    version: "~0.6.0"
+    version: "0.6.0"
     repository: "https://cloudnative-pg.github.io/charts"
     condition: plugin-barman-cloud.enabled
 
   - name: traefik
-    version: "~34.0.0"
+    version: "34.0.0"
     repository: "https://traefik.github.io/charts"
     condition: traefik.enabled
 
   - name: stackdome-agent-standalone
-    version: "0.0.0-placeholder"
+    version: "0.6.12-alpha-rc1"
     repository: "file://../stackdome-agent-standalone"

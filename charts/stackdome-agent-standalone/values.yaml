@@ -3,6 +3,7 @@ createNamespace: false
 image:
   repository: quay.io/stackdome/cluster-agent/cluster-agent-manager
   tag: ""
+  digest: ""
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []

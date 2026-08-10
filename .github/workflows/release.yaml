@@ -1,0 +1,427 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: cluster-agent-release
+  cancel-in-progress: false
+
+env:
+  AGENT_IMAGE: quay.io/stackdome/cluster-agent/cluster-agent-manager
+  RECONCILER_IMAGE: quay.io/stackdome/registry-config-reconciler
+  CHART_REGISTRY: oci://quay.io/stackdome/charts
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: agent-release
+    env:
+      ROLLBACK_CHART_VERSION: ${{ vars.ROLLBACK_CHART_VERSION }}
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+          check-latest: false
+          cache: true
+
+      - name: Set up Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        with:
+          version: v3.18.4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+        with:
+          driver-opts: image=moby/buildkit@sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec
+
+      - name: Verify tagged commit is on the remote default branch
+        id: trusted_source
+        shell: bash
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$DEFAULT_BRANCH" ]]; then
+            echo "GitHub did not provide the repository default branch" >&2
+            exit 1
+          fi
+          tagged_commit="$(git rev-parse "${GITHUB_REF}^{commit}")"
+          test "$(git rev-parse HEAD)" = "$tagged_commit"
+          git merge-base --is-ancestor "$tagged_commit" "refs/remotes/origin/${DEFAULT_BRANCH}"
+          echo "commit=$tagged_commit" >>"$GITHUB_OUTPUT"
+
+      - name: Validate release and rollback coordinates
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./hack/verify-release-assets.sh "$GITHUB_REF_NAME"
+          if [[ ! "$ROLLBACK_CHART_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+[-+0-9A-Za-z.]*$ ]]; then
+            echo "agent-release must define a valid ROLLBACK_CHART_VERSION" >&2
+            exit 1
+          fi
+          if [[ "v$ROLLBACK_CHART_VERSION" = "$GITHUB_REF_NAME" ]]; then
+            echo "rollback chart must differ from the release" >&2
+            exit 1
+          fi
+          echo "version=$GITHUB_REF_NAME" >>"$GITHUB_OUTPUT"
+          echo "chart_version=${GITHUB_REF_NAME#v}" >>"$GITHUB_OUTPUT"
+          echo "source_date=$(git show -s --format=%ct '${{ steps.trusted_source.outputs.commit }}')" >>"$GITHUB_OUTPUT"
+
+      - name: Verify tagged source before using release secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          required_go="$(awk '$1 == "go" { print $2 }' go.mod)"
+          test "$(go env GOVERSION)" = "go$required_go"
+          make test
+          git diff --exit-code
+          ./hack/test-release-provenance.sh
+          helm lint charts/stackdome-agent-standalone
+          helm lint charts/stackdome-agent
+
+      - name: Log in to Quay
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: quay.io
+          username: ${{ secrets.QUAY_USER }}
+          password: ${{ secrets.QUAY_TOKEN }}
+
+      - name: Resolve rollback chart
+        id: rollback
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/rollback"
+          output="$(helm pull oci://quay.io/stackdome/charts/stackdome-agent \
+            --version "$ROLLBACK_CHART_VERSION" \
+            --destination "$RUNNER_TEMP/rollback" 2>&1)"
+          printf '%s\n' "$output"
+          digest="$(sed -n 's/^Digest: \(sha256:[0-9a-f]\{64\}\)$/\1/p' <<<"$output")"
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Helm did not resolve the rollback chart digest" >&2
+            exit 1
+          fi
+          echo "digest=$digest" >>"$GITHUB_OUTPUT"
+
+      - name: Build and push content-addressed agent image
+        id: build_agent
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: .
+          file: config/docker/release.Dockerfile
+          platforms: linux/amd64,linux/arm64
+          pull: true
+          build-args: |
+            COMMAND=cluster-agent-manager
+            VERSION=${{ steps.version.outputs.version }}
+            COMMIT=${{ steps.trusted_source.outputs.commit }}
+            BUILD_DATE=${{ steps.version.outputs.source_date }}
+          outputs: type=image,name=${{ env.AGENT_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          provenance: false
+          sbom: false
+
+      - name: Build and push content-addressed reconciler image
+        id: build_reconciler
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: .
+          file: config/docker/release.Dockerfile
+          platforms: linux/amd64,linux/arm64
+          pull: true
+          build-args: |
+            COMMAND=containerd-config-reconciler
+            VERSION=${{ steps.version.outputs.version }}
+            COMMIT=${{ steps.trusted_source.outputs.commit }}
+            BUILD_DATE=${{ steps.version.outputs.source_date }}
+          outputs: type=image,name=${{ env.RECONCILER_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          provenance: false
+          sbom: false
+
+      - name: Install pinned Syft
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive=syft_1.32.0_linux_amd64.tar.gz
+          curl --fail --location --silent --show-error \
+            "https://github.com/anchore/syft/releases/download/v1.32.0/$archive" \
+            --output "$RUNNER_TEMP/$archive"
+          echo "d6400b579fa84dd383573b1d1ff6f081a37fc64d3ffaafdfdda95c4325f204be  $RUNNER_TEMP/$archive" \
+            | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" syft
+          install -m 0755 "$RUNNER_TEMP/syft" "$RUNNER_TEMP/syft-bin"
+
+      - name: Generate per-platform SPDX and CycloneDX SBOMs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-artifacts
+          for item in \
+            "agent|${AGENT_IMAGE}@${{ steps.build_agent.outputs.digest }}" \
+            "reconciler|${RECONCILER_IMAGE}@${{ steps.build_reconciler.outputs.digest }}"; do
+            name="${item%%|*}"
+            image="${item#*|}"
+            for arch in amd64 arm64; do
+              "$RUNNER_TEMP/syft-bin" "registry:$image" \
+                --platform "linux/$arch" \
+                --output "spdx-json=release-artifacts/$name-linux-$arch.spdx.json" \
+                --output "cyclonedx-json=release-artifacts/$name-linux-$arch.cyclonedx.json"
+            done
+          done
+
+      - name: Scan agent linux/amd64
+        id: vulnerability_scan_agent_amd64
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@dc5a429b52fcf669ce959baa2c2dd26090d2a6c4 # v0.32.0
+        env:
+          TRIVY_PLATFORM: linux/amd64
+        with:
+          version: v0.64.1
+          scan-type: image
+          image-ref: ${{ env.AGENT_IMAGE }}@${{ steps.build_agent.outputs.digest }}
+          format: json
+          output: release-artifacts/trivy-agent-linux-amd64.json
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: 1
+          cache: false
+
+      - name: Scan agent linux/arm64
+        id: vulnerability_scan_agent_arm64
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@dc5a429b52fcf669ce959baa2c2dd26090d2a6c4 # v0.32.0
+        env:
+          TRIVY_PLATFORM: linux/arm64
+        with:
+          version: v0.64.1
+          scan-type: image
+          image-ref: ${{ env.AGENT_IMAGE }}@${{ steps.build_agent.outputs.digest }}
+          format: json
+          output: release-artifacts/trivy-agent-linux-arm64.json
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: 1
+          cache: false
+
+      - name: Scan reconciler linux/amd64
+        id: vulnerability_scan_reconciler_amd64
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@dc5a429b52fcf669ce959baa2c2dd26090d2a6c4 # v0.32.0
+        env:
+          TRIVY_PLATFORM: linux/amd64
+        with:
+          version: v0.64.1
+          scan-type: image
+          image-ref: ${{ env.RECONCILER_IMAGE }}@${{ steps.build_reconciler.outputs.digest }}
+          format: json
+          output: release-artifacts/trivy-reconciler-linux-amd64.json
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: 1
+          cache: false
+
+      - name: Scan reconciler linux/arm64
+        id: vulnerability_scan_reconciler_arm64
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@dc5a429b52fcf669ce959baa2c2dd26090d2a6c4 # v0.32.0
+        env:
+          TRIVY_PLATFORM: linux/arm64
+        with:
+          version: v0.64.1
+          scan-type: image
+          image-ref: ${{ env.RECONCILER_IMAGE }}@${{ steps.build_reconciler.outputs.digest }}
+          format: json
+          output: release-artifacts/trivy-reconciler-linux-arm64.json
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: 1
+          cache: false
+
+      - name: Validate SBOM and vulnerability reports
+        shell: bash
+        run: |
+          set -euo pipefail
+          for report in release-artifacts/*.spdx.json; do
+            test -s "$report"
+            jq --exit-status '.spdxVersion | startswith("SPDX-")' "$report" >/dev/null
+          done
+          test "$(find release-artifacts -name '*.spdx.json' | wc -l)" -eq 4
+          for report in release-artifacts/*.cyclonedx.json; do
+            test -s "$report"
+            jq --exit-status '.bomFormat == "CycloneDX"' "$report" >/dev/null
+          done
+          test "$(find release-artifacts -name '*.cyclonedx.json' | wc -l)" -eq 4
+          for report in release-artifacts/trivy-*.json; do
+            test -s "$report"
+            jq --exit-status '.SchemaVersion == 2 and (.Results | type == "array")' "$report" >/dev/null
+          done
+          test "$(find release-artifacts -name 'trivy-*.json' | wc -l)" -eq 4
+
+      - name: Upload vulnerability evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: vulnerability-evidence-${{ github.ref_name }}
+          path: |
+            release-artifacts/*.spdx.json
+            release-artifacts/*.cyclonedx.json
+            release-artifacts/trivy-*.json
+          if-no-files-found: error
+
+      - name: Enforce public-alpha vulnerability gate
+        if: steps.vulnerability_scan_agent_amd64.outcome != 'success' || steps.vulnerability_scan_agent_arm64.outcome != 'success' || steps.vulnerability_scan_reconciler_amd64.outcome != 'success' || steps.vulnerability_scan_reconciler_arm64.outcome != 'success'
+        run: |
+          echo "public-alpha gate failed: a release image contains a fixable CRITICAL vulnerability" >&2
+          exit 1
+
+      - name: Install pinned crane
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive=go-containerregistry_Linux_x86_64.tar.gz
+          curl --fail --location --silent --show-error \
+            "https://github.com/google/go-containerregistry/releases/download/v0.20.6/$archive" \
+            --output "$RUNNER_TEMP/$archive"
+          echo "c1d593d01551f2c9a3df5ca0a0be4385a839bd9b86d4a76e18d7b17d16559127  $RUNNER_TEMP/$archive" \
+            | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" crane
+          install -m 0755 "$RUNNER_TEMP/crane" "$RUNNER_TEMP/crane-bin"
+
+      - name: Promote verified agent digest
+        id: promote_agent
+        shell: bash
+        run: |
+          set -euo pipefail
+          digest="${{ steps.build_agent.outputs.digest }}"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          "$RUNNER_TEMP/crane-bin" tag "$AGENT_IMAGE@$digest" "${{ steps.version.outputs.version }}"
+          promoted="$("$RUNNER_TEMP/crane-bin" digest "$AGENT_IMAGE:${{ steps.version.outputs.version }}")"
+          test "$promoted" = "$digest"
+          echo "digest=$promoted" >>"$GITHUB_OUTPUT"
+
+      - name: Promote verified reconciler digest
+        id: promote_reconciler
+        shell: bash
+        run: |
+          set -euo pipefail
+          digest="${{ steps.build_reconciler.outputs.digest }}"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          "$RUNNER_TEMP/crane-bin" tag "$RECONCILER_IMAGE@$digest" "${{ steps.version.outputs.version }}"
+          promoted="$("$RUNNER_TEMP/crane-bin" digest "$RECONCILER_IMAGE:${{ steps.version.outputs.version }}")"
+          test "$promoted" = "$digest"
+          echo "digest=$promoted" >>"$GITHUB_OUTPUT"
+
+      - name: Attest promoted agent digest
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
+        with:
+          subject-name: ${{ env.AGENT_IMAGE }}
+          subject-digest: ${{ steps.promote_agent.outputs.digest }}
+          push-to-registry: true
+
+      - name: Attest promoted reconciler digest
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
+        with:
+          subject-name: ${{ env.RECONCILER_IMAGE }}
+          subject-digest: ${{ steps.promote_reconciler.outputs.digest }}
+          push-to-registry: true
+
+      - name: Package and publish standalone and umbrella charts
+        id: charts
+        shell: bash
+        run: |
+          set -euo pipefail
+          chart_version="${{ steps.version.outputs.chart_version }}"
+          go run ./cmd/release-package \
+            --chart charts/stackdome-agent-standalone \
+            --destination release-artifacts \
+            --source-date "${{ steps.version.outputs.source_date }}"
+          cp "release-artifacts/stackdome-agent-standalone-$chart_version.tgz" \
+            "charts/stackdome-agent/charts/stackdome-agent-standalone-$chart_version.tgz"
+          go run ./cmd/release-package \
+            --chart charts/stackdome-agent \
+            --destination release-artifacts \
+            --source-date "${{ steps.version.outputs.source_date }}"
+          helm lint "release-artifacts/stackdome-agent-standalone-$chart_version.tgz"
+          helm lint "release-artifacts/stackdome-agent-$chart_version.tgz"
+
+          standalone_output="$(helm push "release-artifacts/stackdome-agent-standalone-$chart_version.tgz" "$CHART_REGISTRY")"
+          umbrella_output="$(helm push "release-artifacts/stackdome-agent-$chart_version.tgz" "$CHART_REGISTRY")"
+          printf '%s\n%s\n' "$standalone_output" "$umbrella_output"
+          standalone_digest="$(sed -n 's/^Digest: \(sha256:[0-9a-f]\{64\}\)$/\1/p' <<<"$standalone_output")"
+          umbrella_digest="$(sed -n 's/^Digest: \(sha256:[0-9a-f]\{64\}\)$/\1/p' <<<"$umbrella_output")"
+          [[ "$standalone_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$umbrella_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "standalone_digest=$standalone_digest" >>"$GITHUB_OUTPUT"
+          echo "umbrella_digest=$umbrella_digest" >>"$GITHUB_OUTPUT"
+
+      - name: Bundle CRDs and record immutable release set
+        shell: bash
+        run: |
+          set -euo pipefail
+          for file in $(find config/deploy/crds -type f -name '*.yaml' | sort); do
+            printf '%s\n' '---'
+            cat "$file"
+          done >release-artifacts/crds.yaml
+          crd_checksum="$(sha256sum release-artifacts/crds.yaml | awk '{print $1}')"
+          api_versions="$(ruby -ryaml -rjson -e 'puts YAML.load_stream(ARGF.read).compact.flat_map { |crd| crd.dig("spec", "versions").to_a.map { |version| version["name"] } }.uniq.sort.to_json' config/deploy/crds/*.yaml)"
+
+          jq --null-input \
+            --arg source_commit "${{ steps.trusted_source.outputs.commit }}" \
+            --arg module "$(go list -m)" \
+            --arg version "${{ steps.version.outputs.version }}" \
+            --arg agent_image "$AGENT_IMAGE@${{ steps.promote_agent.outputs.digest }}" \
+            --arg reconciler_image "$RECONCILER_IMAGE@${{ steps.promote_reconciler.outputs.digest }}" \
+            --arg standalone_chart "quay.io/stackdome/charts/stackdome-agent-standalone:${{ steps.version.outputs.chart_version }}@${{ steps.charts.outputs.standalone_digest }}" \
+            --arg umbrella_chart "quay.io/stackdome/charts/stackdome-agent:${{ steps.version.outputs.chart_version }}@${{ steps.charts.outputs.umbrella_digest }}" \
+            --arg crd_bundle_sha256 "$crd_checksum" \
+            --argjson api_versions "$api_versions" \
+            --arg rollback_chart "quay.io/stackdome/charts/stackdome-agent:$ROLLBACK_CHART_VERSION@${{ steps.rollback.outputs.digest }}" \
+            --arg rollback_command 'helm rollback <release-name> <previous-revision> --namespace <namespace>' \
+            '{
+              source_commit: $source_commit,
+              module: $module,
+              version: $version,
+              api_versions: $api_versions,
+              images: {agent: $agent_image, reconciler: $reconciler_image},
+              charts: {standalone: $standalone_chart, umbrella: $umbrella_chart},
+              crd_bundle_sha256: $crd_bundle_sha256,
+              vulnerability_gate: "zero fixable CRITICAL on linux/amd64 and linux/arm64",
+              sbom_formats: ["SPDX-JSON", "CycloneDX-JSON"],
+              rollback_chart: $rollback_chart,
+              rollback_command: $rollback_command
+            }' >release-artifacts/release-metadata.json
+          sha256sum release-artifacts/* >release-artifacts/SHA256SUMS
+
+      - name: Attest standalone chart package
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
+        with:
+          subject-path: release-artifacts/stackdome-agent-standalone-${{ steps.version.outputs.chart_version }}.tgz
+
+      - name: Attest umbrella chart package
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
+        with:
+          subject-path: release-artifacts/stackdome-agent-${{ steps.version.outputs.chart_version }}.tgz
+
+      - name: Upload immutable release evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-${{ github.ref_name }}
+          path: release-artifacts/
+          if-no-files-found: error
+          retention-days: 90

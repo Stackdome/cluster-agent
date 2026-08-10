@@ -9,7 +9,7 @@ const (
 	// node hits disk-pressure eviction. v2.1.8 added compat.IsCompatibleManifestMediaType
 	// to that path.
 	ZotImage                      = "ghcr.io/project-zot/zot-linux-amd64:v2.1.18"
-	RegistryConfigReconcilerImage = "quay.io/stackdome/registry-config-reconciler:v0.0.9"
+	RegistryConfigReconcilerImage = "quay.io/stackdome/registry-config-reconciler:v0.6.12-alpha-rc1"
 	NfsServerImage                = "adnanhodzic/nfs-server-k8s:0.1"
 	// v1.28.0
 	// Fork of kaniko.

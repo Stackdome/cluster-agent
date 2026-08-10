@@ -4,6 +4,7 @@ stackdome-agent-standalone:
   image:
     repository: quay.io/stackdome/cluster-agent/cluster-agent-manager
     tag: ""
+    digest: ""
   replicaCount: 1
   leaderElect: true
   platformTLSNamespace: stackdome-control-plane

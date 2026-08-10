@@ -27,7 +27,7 @@ rules:
   resources:
     - imagebuilds
     - imagebuilds/status
-  # TODO Add finalizers
+    - imagebuilds/finalizers
   verbs:
     - get
     - list
@@ -55,6 +55,8 @@ rules:
   resources:
     - nfsservers
     - nfsservers/status
+    - objectstorages
+    - objectstorages/status
     - storages
     - storages/status
     - volumes
@@ -86,6 +88,7 @@ rules:
     - batch
   resources:
     - jobs
+    - cronjobs
   verbs:
     - get
     - watch
@@ -93,6 +96,7 @@ rules:
     - list
     - patch
     - create
+    - delete
 - apiGroups:
     - addons.stackdome.io
   resources:

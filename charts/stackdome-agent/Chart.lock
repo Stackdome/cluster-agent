@@ -1,0 +1,18 @@
+dependencies:
+- name: cert-manager
+  repository: https://charts.jetstack.io
+  version: v1.17.4
+- name: cloudnative-pg
+  repository: https://cloudnative-pg.github.io/charts
+  version: 0.23.2
+- name: plugin-barman-cloud
+  repository: https://cloudnative-pg.github.io/charts
+  version: 0.6.0
+- name: traefik
+  repository: https://traefik.github.io/charts
+  version: 34.0.0
+- name: stackdome-agent-standalone
+  repository: file://../stackdome-agent-standalone
+  version: 0.6.12-alpha-rc1
+digest: sha256:b5f725f96e4c807b868e6a3499fccbee6bd8351eb4216fd8b8b1df6975c7bf96
+generated: "2026-08-10T06:53:32.645555+05:30"
