@@ -11,9 +11,15 @@ cat >"$tmp/bin/crane" <<'SH'
 set -euo pipefail
 case "$1" in
   digest)
+    ref="$2"
+    repository="${ref%:*}"
+    version="${ref##*:}"
+    registry="${repository%%/*}"
+    repository_path="${repository#*/}"
     key="$(printf '%s' "$2" | tr '/:' '__')"
     [[ -f "$REMOTE_STATE/images/$key" ]] || {
-      echo 'Error: GET https://quay.io/v2/stackdome/absent/manifests/v1: MANIFEST_UNKNOWN: manifest unknown; map[]' >&2
+      printf 'Error: GET https://%s/v2/%s/manifests/%s: MANIFEST_UNKNOWN: manifest unknown; map[]\n' \
+        "$registry" "$repository_path" "$version" >&2
       exit 1
     }
     cat "$REMOTE_STATE/images/$key"
@@ -33,9 +39,14 @@ set -euo pipefail
 case "$1" in
   pull)
     ref="$2"; version="$4"; destination="$6"; name="${ref##*/}"
+    coordinate="${ref#oci://}"
+    registry="${coordinate%%/*}"
+    repository="${coordinate#*/}"
+    manifest_version="${version//+/_}"
     key="$(printf '%s' "$name:$version" | tr '/:' '__')"
     [[ -f "$REMOTE_STATE/charts/$key.tgz" ]] || {
-      echo 'Error: failed to perform "FetchReference" on source: GET "https://quay.io/v2/stackdome/charts/manifests/1.0.0": response status code 404: manifest unknown: manifest unknown' >&2
+      printf 'Error: failed to perform "FetchReference" on source: GET "https://%s/v2/%s/manifests/%s": response status code 404: manifest unknown: manifest unknown\n' \
+        "$registry" "$repository" "$manifest_version" >&2
       exit 1
     }
     cp "$REMOTE_STATE/charts/$key.tgz" "$destination/$name-$version.tgz"

@@ -4,8 +4,25 @@ set -euo pipefail
 mode="${1:?usage: publish-release-coordinate.sh <check-image|publish-image|check-chart|publish-chart> ...}"
 shift
 
+oci_manifest_url() {
+  local coordinate="${1#oci://}" reference="$2"
+  local registry repository
+
+  [[ "$coordinate" == */* && "$coordinate" != *://* ]] || return 1
+  registry="${coordinate%%/*}"
+  repository="${coordinate#*/}"
+
+  # These are the URL-path-safe character sets accepted by the pinned clients.
+  # Rejecting anything else also rejects alternate percent-encoded spellings.
+  [[ "$registry" =~ ^[A-Za-z0-9.-]+(:[0-9]+)?$ ]] || return 1
+  [[ "$repository" =~ ^[a-z0-9][a-z0-9._/-]*[a-z0-9]$ ]] || return 1
+  [[ "$reference" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]] || return 1
+
+  printf 'https://%s/v2/%s/manifests/%s\n' "$registry" "$repository" "$reference"
+}
+
 is_crane_manifest_absence() {
-  local output="$1" terminal_url warning_url
+  local output="$1" expected_url="$2" terminal_url warning_url
   local terminal_pattern='^Error: GET (https://[^[:space:]]+): (MANIFEST_UNKNOWN: manifest unknown|NAME_UNKNOWN: repository name not known to registry)(; map\[\])?$'
   local warning_pattern='^[0-9]{4}/[0-9]{2}/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} HEAD request failed, falling back on GET: HEAD (https://[^[:space:]]+): unexpected status code 404 Not Found \(HEAD responses have no body, use GET for details\)$'
   local line
@@ -18,6 +35,7 @@ is_crane_manifest_absence() {
   [[ "${#lines[@]}" == 1 || "${#lines[@]}" == 2 ]] || return 1
   [[ "${lines[$((${#lines[@]} - 1))]}" =~ $terminal_pattern ]] || return 1
   terminal_url="${BASH_REMATCH[1]}"
+  [[ "$terminal_url" == "$expected_url" ]] || return 1
   if [[ "${#lines[@]}" == 2 ]]; then
     [[ "${lines[0]}" =~ $warning_pattern ]] || return 1
     warning_url="${BASH_REMATCH[1]}"
@@ -26,9 +44,11 @@ is_crane_manifest_absence() {
 }
 
 is_helm_manifest_absence() {
-  local output="$1"
-  local absence_pattern='^Error: failed to perform "FetchReference" on source: GET "https://[^"]+": response status code 404: (manifest unknown: manifest unknown|name unknown: repository name not known to registry)$'
-  [[ "$output" =~ $absence_pattern ]]
+  local output="$1" expected_url="$2" response_url
+  local absence_pattern='^Error: failed to perform "FetchReference" on source: GET "(https://[^"]+)": response status code 404: (manifest unknown: manifest unknown|name unknown: repository name not known to registry)$'
+  [[ "$output" =~ $absence_pattern ]] || return 1
+  response_url="${BASH_REMATCH[1]}"
+  [[ "$response_url" == "$expected_url" ]]
 }
 
 require_digest() {
@@ -53,8 +73,12 @@ parse_helm_digest() {
 
 check_image() {
   local crane="$1" repository="$2" version="$3" expected_digest="$4"
-  local error_file existing
+  local error error_file existing expected_url
   require_digest "$expected_digest" "expected image"
+  if ! expected_url="$(oci_manifest_url "$repository" "$version")"; then
+    echo "$repository:$version is not a supported OCI image coordinate" >&2
+    return 1
+  fi
   error_file="$(mktemp)"
   if existing="$("$crane" digest "$repository:$version" 2>"$error_file")"; then
     rm -f "$error_file"
@@ -69,7 +93,7 @@ check_image() {
 
   error="$(cat "$error_file")"
   rm -f "$error_file"
-  if ! is_crane_manifest_absence "$error"; then
+  if ! is_crane_manifest_absence "$error" "$expected_url"; then
     printf '%s\n' "$error" >&2
     return 1
   fi
@@ -78,9 +102,13 @@ check_image() {
 
 check_chart() {
   local helm="$1" registry="$2" name="$3" version="$4" archive="$5"
-  local expected_digest="${6:-}" tmp output pulled expected_sha actual_sha digest
+  local expected_digest="${6:-}" tmp output pulled expected_sha actual_sha digest expected_url
   if [[ -n "$expected_digest" ]]; then
     require_digest "$expected_digest" "expected chart"
+  fi
+  if ! expected_url="$(oci_manifest_url "$registry/$name" "${version//+/_}")"; then
+    echo "$registry/$name:$version is not a supported OCI chart coordinate" >&2
+    return 1
   fi
 
   tmp="$(mktemp -d)"
@@ -112,7 +140,7 @@ check_chart() {
   fi
 
   rm -rf "$tmp"
-  if ! is_helm_manifest_absence "$output"; then
+  if ! is_helm_manifest_absence "$output" "$expected_url"; then
     printf '%s\n' "$output" >&2
     return 1
   fi
