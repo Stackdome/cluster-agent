@@ -9,13 +9,14 @@ new_fixture() {
   mkdir -p "$fixture/.github/workflows" "$fixture/config/docker" \
     "$fixture/charts/stackdome-agent-standalone" "$fixture/charts/stackdome-agent" "$fixture/hack"
   cp "$repo_root/go.mod" "$repo_root/.dockerignore" "$repo_root/.golangci.yml" \
-    "$repo_root/Makefile" "$fixture/"
+    "$repo_root/Makefile" "$repo_root/RELEASING.md" "$fixture/"
   cp "$repo_root/.github/workflows/"*.yaml "$fixture/.github/workflows/"
   cp "$repo_root/config/docker/"*.Dockerfile "$fixture/config/docker/"
   cp "$repo_root/charts/stackdome-agent-standalone/Chart.yaml" "$fixture/charts/stackdome-agent-standalone/"
   cp "$repo_root/charts/stackdome-agent/Chart.yaml" "$fixture/charts/stackdome-agent/"
   cp "$repo_root/hack/validate-release-provenance.sh" \
     "$repo_root/hack/install-trivy.sh" \
+    "$repo_root/hack/publish-release-coordinate.sh" \
     "$repo_root/hack/verify-release-assets.sh" \
     "$fixture/hack/"
   printf '%s\n' "$fixture"
@@ -80,6 +81,15 @@ expect_failure "$fixture" "trusted-source ancestry check is missing"
 fixture="$(new_fixture)"
 sed -i.bak "/^        if: steps.vulnerability_scan_agent_amd64/ s/$/ \&\& false/" "$fixture/.github/workflows/release.yaml"
 expect_failure "$fixture" "public-alpha vulnerability gate condition must be exact"
+
+fixture="$(new_fixture)"
+sed -i.bak 's#release-artifacts/agent-index.json#release-artifacts/reconciler-index.json#' \
+  "$fixture/.github/workflows/release.yaml"
+expect_failure "$fixture" "scanner evidence generation is not bound to both exact indexes"
+
+fixture="$(new_fixture)"
+sed -i.bak '/release-artifacts\/\*\.syft\.json/d' "$fixture/.github/workflows/release.yaml"
+expect_failure "$fixture" "uploaded vulnerability evidence must retain scanner output and raw indexes"
 
 mutate_scan() {
   local old="$1"
@@ -150,6 +160,44 @@ fixture="$(new_fixture)"
 ruby - "$fixture/.github/workflows/release.yaml" <<'RUBY'
 path = ARGV.fetch(0)
 text = File.read(path)
+pattern = /(^      - name: Promote verified agent digest\n.*?)(?=^      - name:)/m
+block = text[pattern]
+abort "agent promotion block not found" unless block
+target = '"${{ steps.version.outputs.version }}"'
+abort "agent promotion version argument not found" unless block.sub!(target, 'latest')
+text.sub!(pattern, block)
+File.write(path, text)
+RUBY
+expect_failure "$fixture" "promote_agent must publish the exact release version and digest"
+
+fixture="$(new_fixture)"
+ruby - "$fixture/.github/workflows/release.yaml" <<'RUBY'
+path = ARGV.fetch(0)
+text = File.read(path)
+pattern = /(^      - name: Publish standalone chart idempotently\n.*?)(?=^      - name:)/m
+block = text[pattern]
+abort "standalone chart publication block not found" unless block
+target = 'chart_version="${{ steps.version.outputs.chart_version }}"'
+abort "standalone chart version argument not found" unless block.sub!(target, 'chart_version=latest')
+text.sub!(pattern, block)
+File.write(path, text)
+RUBY
+expect_failure "$fixture" "chart_standalone must publish the exact chart version and deterministic archive"
+
+fixture="$(new_fixture)"
+sed -i.bak 's/agent-image-tag "$AGENT_IMAGE:$version"/agent-image-tag "$AGENT_IMAGE"/' \
+  "$fixture/.github/workflows/release.yaml"
+expect_failure "$fixture" "Record agent image publication must retain its exact tagged OCI coordinate"
+
+fixture="$(new_fixture)"
+sed -i.bak 's/--arg agent_image "$AGENT_IMAGE:${{ steps.version.outputs.version }}@/--arg agent_image "$AGENT_IMAGE@/' \
+  "$fixture/.github/workflows/release.yaml"
+expect_failure "$fixture" "release metadata must retain all four tagged publication coordinates"
+
+fixture="$(new_fixture)"
+ruby - "$fixture/.github/workflows/release.yaml" <<'RUBY'
+path = ARGV.fetch(0)
+text = File.read(path)
 marker = "          outputs: type=image,name=${{ env.AGENT_IMAGE }},push-by-digest=true,name-canonical=true,push=true\n"
 abort "agent output marker not found" unless text.sub!(marker, marker + "          tags: unsafe:latest\n")
 File.write(path, text)
@@ -185,8 +233,8 @@ mutate_attestation attest_chart_standalone \
   'subject-digest: ${{ steps.chart_umbrella.outputs.digest }}' \
   'attest_chart_standalone must attest its exact published OCI subject'
 mutate_attestation attest_chart_umbrella \
+  'subject-name: quay.io/stackdome/charts/stackdome-agent' \
   'subject-name: quay.io/stackdome/charts/stackdome-agent:${{ steps.version.outputs.chart_version }}' \
-  'subject-path: release-artifacts/stackdome-agent-${{ steps.version.outputs.chart_version }}.tgz' \
   'attest_chart_umbrella must attest its exact published OCI subject'
 
 fixture="$(new_fixture)"
@@ -195,11 +243,32 @@ sed -i.bak 's/steps.attest_agent.outputs.bundle-path/steps.attest_reconciler.out
 expect_failure "$fixture" "Record agent attestation must retain and verify exact attestation evidence"
 
 fixture="$(new_fixture)"
+sed -i.bak 's#"oci://\$subject@${{ steps.chart_standalone.outputs.digest }}"#"oci://$subject:latest@${{ steps.chart_standalone.outputs.digest }}"#' \
+  "$fixture/.github/workflows/release.yaml"
+expect_failure "$fixture" "Record standalone chart attestation must retain and verify exact attestation evidence"
+
+fixture="$(new_fixture)"
 sed -i.bak 's/appVersion: "v0.6.12-alpha-rc1"/appVersion: "v0.6.11-alpha-rc6"/' "$fixture/charts/stackdome-agent-standalone/Chart.yaml"
 expect_failure "$fixture" "chart versions differ from the released app version"
 
 fixture="$(new_fixture)"
 sed -i.bak 's/crd_bundle_sha256/crd_checksum/g' "$fixture/.github/workflows/release.yaml"
 expect_failure "$fixture" "release metadata is missing crd_bundle_sha256"
+
+fixture="$(new_fixture)"
+sed -i.bak 's/Syft-JSON schema 16.0.39/Syft-JSON schema unknown/' "$fixture/.github/workflows/release.yaml"
+expect_failure "$fixture" "release metadata must identify the exact pinned scanner evidence schema"
+
+fixture="$(new_fixture)"
+sed -i.bak 's#./hack/test-release-recovery.sh#./hack/test-release-recovery.rb#' "$fixture/RELEASING.md"
+expect_failure "$fixture" "release documentation must invoke the current recovery test"
+
+fixture="$(new_fixture)"
+sed -i.bak 's/plural = crd.dig("spec", "names", "plural")/plural = "stacks"/' "$fixture/RELEASING.md"
+expect_failure "$fixture" "CRD rollback must verify every protected resource and data-plane backup before mutation"
+
+fixture="$(new_fixture)"
+sed -i.bak '/sha256sum --check pre-rollback-backups.sha256/d' "$fixture/RELEASING.md"
+expect_failure "$fixture" "CRD rollback must verify every protected resource and data-plane backup before mutation"
 
 echo "release provenance mutation tests passed"

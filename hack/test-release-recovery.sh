@@ -12,7 +12,10 @@ set -euo pipefail
 case "$1" in
   digest)
     key="$(printf '%s' "$2" | tr '/:' '__')"
-    [[ -f "$REMOTE_STATE/images/$key" ]] || { echo MANIFEST_UNKNOWN >&2; exit 1; }
+    [[ -f "$REMOTE_STATE/images/$key" ]] || {
+      echo 'Error: GET https://quay.io/v2/stackdome/absent/manifests/v1: MANIFEST_UNKNOWN: manifest unknown; map[]' >&2
+      exit 1
+    }
     cat "$REMOTE_STATE/images/$key"
     ;;
   tag)
@@ -31,7 +34,10 @@ case "$1" in
   pull)
     ref="$2"; version="$4"; destination="$6"; name="${ref##*/}"
     key="$(printf '%s' "$name:$version" | tr '/:' '__')"
-    [[ -f "$REMOTE_STATE/charts/$key.tgz" ]] || { echo MANIFEST_UNKNOWN >&2; exit 1; }
+    [[ -f "$REMOTE_STATE/charts/$key.tgz" ]] || {
+      echo 'Error: failed to perform "FetchReference" on source: GET "https://quay.io/v2/stackdome/charts/manifests/1.0.0": response status code 404: manifest unknown: manifest unknown' >&2
+      exit 1
+    }
     cp "$REMOTE_STATE/charts/$key.tgz" "$destination/$name-$version.tgz"
     printf 'Digest: %s\n' "$(cat "$REMOTE_STATE/charts/$key.digest")"
     ;;
@@ -52,6 +58,10 @@ cat >"$tmp/bin/attest" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
 subject="$1"; digest="$2"; bundle="$3"
+if [[ "$subject" != */* || "$subject" == *"@"* || "${subject##*/}" == *":"* || "$subject" =~ [[:space:]] ]]; then
+  echo "Invalid image name: $subject" >&2
+  exit 64
+fi
 key="$(printf '%s@%s' "$subject" "$digest" | shasum -a 256 | awk '{print $1}')"
 mkdir -p "$REMOTE_STATE/attestations"
 printf '%s\n' "$subject@$digest" >"$REMOTE_STATE/attestations/$key"
@@ -81,8 +91,12 @@ chart_version="0.6.12-alpha-rc1"
 export CHART_VERSION="$chart_version"
 agent_name="quay.io/stackdome/cluster-agent/cluster-agent-manager"
 reconciler_name="quay.io/stackdome/registry-config-reconciler"
-standalone_name="quay.io/stackdome/charts/stackdome-agent-standalone:$chart_version"
-umbrella_name="quay.io/stackdome/charts/stackdome-agent:$chart_version"
+agent_publication="$agent_name:$version"
+reconciler_publication="$reconciler_name:$version"
+standalone_name="quay.io/stackdome/charts/stackdome-agent-standalone"
+umbrella_name="quay.io/stackdome/charts/stackdome-agent"
+standalone_publication="$standalone_name:$chart_version"
+umbrella_publication="$umbrella_name:$chart_version"
 agent_digest="sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 reconciler_digest="sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
@@ -111,28 +125,28 @@ run_release() {
     stackdome-agent "$chart_version" "$artifacts/stackdome-agent-$chart_version.tgz" >/dev/null
 
   digest="$("$publisher" publish-image "$tmp/bin/crane" "$agent_name" "$version" "$agent_digest")"
-  "$state_helper" record-publication "$artifacts/publication-state.json" agent-image-tag "$agent_name" "$digest"
+  "$state_helper" record-publication "$artifacts/publication-state.json" agent-image-tag "$agent_publication" "$digest"
   checkpoint || return $?
 
   digest="$("$publisher" publish-image "$tmp/bin/crane" "$reconciler_name" "$version" "$reconciler_digest")"
-  "$state_helper" record-publication "$artifacts/publication-state.json" reconciler-image-tag "$reconciler_name" "$digest"
+  "$state_helper" record-publication "$artifacts/publication-state.json" reconciler-image-tag "$reconciler_publication" "$digest"
   checkpoint || return $?
 
   standalone_digest="$("$publisher" publish-chart "$tmp/bin/helm" oci://quay.io/stackdome/charts \
     stackdome-agent-standalone "$chart_version" "$artifacts/stackdome-agent-standalone-$chart_version.tgz" 2>/dev/null)"
-  "$state_helper" record-publication "$artifacts/publication-state.json" standalone-chart-push "$standalone_name" "$standalone_digest"
+  "$state_helper" record-publication "$artifacts/publication-state.json" standalone-chart-push "$standalone_publication" "$standalone_digest"
   checkpoint || return $?
 
   umbrella_digest="$("$publisher" publish-chart "$tmp/bin/helm" oci://quay.io/stackdome/charts \
     stackdome-agent "$chart_version" "$artifacts/stackdome-agent-$chart_version.tgz" 2>/dev/null)"
-  "$state_helper" record-publication "$artifacts/publication-state.json" umbrella-chart-push "$umbrella_name" "$umbrella_digest"
+  "$state_helper" record-publication "$artifacts/publication-state.json" umbrella-chart-push "$umbrella_publication" "$umbrella_digest"
   checkpoint || return $?
 
   jq -n \
-    --arg agent "$agent_name@$agent_digest" \
-    --arg reconciler "$reconciler_name@$reconciler_digest" \
-    --arg standalone "$standalone_name@$standalone_digest" \
-    --arg umbrella "$umbrella_name@$umbrella_digest" \
+    --arg agent "$agent_publication@$agent_digest" \
+    --arg reconciler "$reconciler_publication@$reconciler_digest" \
+    --arg standalone "$standalone_publication@$standalone_digest" \
+    --arg umbrella "$umbrella_publication@$umbrella_digest" \
     '{images:{agent:$agent,reconciler:$reconciler},charts:{standalone:$standalone,umbrella:$umbrella}}' \
     >"$artifacts/release-metadata.json"
 
@@ -204,6 +218,21 @@ fi
 export REMOTE_STATE="$tmp/remote-negative"
 mkdir -p "$REMOTE_STATE"
 "$state_helper" init "$tmp/negative-state.json"
+if "$state_helper" record-publication "$tmp/negative-state.json" agent-image-tag \
+  "$agent_name" "$agent_digest" >/dev/null 2>&1; then
+  echo "untagged publication coordinate unexpectedly passed state recording" >&2
+  exit 1
+fi
+if "$tmp/bin/attest" "$standalone_publication" "$agent_digest" "$tmp/tagged-bundle.json" >/dev/null 2>&1; then
+  echo "tagged attestation subject unexpectedly passed the production parser contract" >&2
+  exit 1
+fi
+if "$state_helper" record-attestation "$tmp/negative-state.json" agent-attestation \
+  "$agent_publication" "$agent_digest" attestation-tagged "$tmp/missing-bundle.json" \
+  "$tmp/tagged-retained.json" >/dev/null 2>&1; then
+  echo "tagged attestation subject unexpectedly passed state recording" >&2
+  exit 1
+fi
 "$tmp/bin/attest" "$reconciler_name" "$reconciler_digest" "$tmp/wrong-bundle.json" >/dev/null
 if "$state_helper" record-attestation "$tmp/negative-state.json" agent-attestation \
   "$agent_name" "$agent_digest" attestation-wrong "$tmp/wrong-bundle.json" "$tmp/retained.json" >/dev/null 2>&1; then

@@ -13,7 +13,10 @@ case "$1" in
   digest)
     if [[ -n "${CLIENT_ERROR:-}" ]]; then printf '%s\n' "$CLIENT_ERROR" >&2; exit 1; fi
     key="$(printf '%s' "$2" | tr '/:' '__')"
-    if [[ ! -f "$STATE/$key" ]]; then echo MANIFEST_UNKNOWN >&2; exit 1; fi
+    if [[ ! -f "$STATE/$key" ]]; then
+      echo 'Error: GET https://quay.io/v2/stackdome/absent/manifests/v1: MANIFEST_UNKNOWN: manifest unknown; map[]' >&2
+      exit 1
+    fi
     if [[ -n "${CRANE_DIGEST_OUTPUT:-}" ]]; then printf '%s\n' "$CRANE_DIGEST_OUTPUT"; exit 0; fi
     cat "$STATE/$key"
     ;;
@@ -34,7 +37,10 @@ case "$1" in
     ref="$2"; version="$4"; destination="$6"; name="${ref##*/}"
     key="$(printf '%s' "$name:$version" | tr '/:' '__')"
     if [[ -n "${CLIENT_ERROR:-}" ]]; then printf '%s\n' "$CLIENT_ERROR" >&2; exit 1; fi
-    if [[ ! -f "$STATE/$key.tgz" ]]; then echo 'MANIFEST_UNKNOWN: manifest unknown' >&2; exit 1; fi
+    if [[ ! -f "$STATE/$key.tgz" ]]; then
+      echo 'Error: failed to perform "FetchReference" on source: GET "https://quay.io/v2/stackdome/charts/manifests/1.0.0": response status code 404: manifest unknown: manifest unknown' >&2
+      exit 1
+    fi
     cp "$STATE/$key.tgz" "$destination/$name-$version.tgz"
     case "${HELM_PULL_DIGEST_MODE:-valid}" in
       valid) printf 'Digest: %s\n' "$(cat "$STATE/$key.digest")" ;;
@@ -88,6 +94,26 @@ for error in \
     "$publisher" check-image "$tmp/bin/crane" quay.io/stackdome/absent v1 "$image_digest"
 done
 
+crane_absence='Error: GET https://quay.io/v2/stackdome/absent/manifests/v1: MANIFEST_UNKNOWN: manifest unknown; map[]'
+for error in \
+  "$crane_absence; unexpected EOF" \
+  "$crane_absence; context deadline exceeded" \
+  "$crane_absence; read: connection reset by peer" \
+  "$crane_absence; lookup quay.io: no such host" \
+  "$crane_absence; unexpected end of JSON input" \
+  "$crane_absence"$'\nMANIFEST_UNKNOWN: partial response'; do
+  expect_failure "mixed image absence response '$error'" env CLIENT_ERROR="$error" \
+    "$publisher" check-image "$tmp/bin/crane" quay.io/stackdome/absent v1 "$image_digest"
+done
+
+CLIENT_ERROR=$'2026/08/10 12:34:56 HEAD request failed, falling back on GET: HEAD https://quay.io/v2/stackdome/absent/manifests/v1: unexpected status code 404 Not Found (HEAD responses have no body, use GET for details)\nError: GET https://quay.io/v2/stackdome/absent/manifests/v1: MANIFEST_UNKNOWN: manifest unknown; map[]' \
+  "$publisher" check-image "$tmp/bin/crane" quay.io/stackdome/absent v1 "$image_digest"
+CLIENT_ERROR='Error: GET https://quay.io/v2/stackdome/absent/manifests/v1: NAME_UNKNOWN: repository name not known to registry; map[]' \
+  "$publisher" check-image "$tmp/bin/crane" quay.io/stackdome/absent v1 "$image_digest"
+expect_failure "Crane HEAD and GET responses for different coordinates" env \
+  CLIENT_ERROR=$'2026/08/10 12:34:56 HEAD request failed, falling back on GET: HEAD https://quay.io/v2/stackdome/other/manifests/v1: unexpected status code 404 Not Found (HEAD responses have no body, use GET for details)\nError: GET https://quay.io/v2/stackdome/absent/manifests/v1: MANIFEST_UNKNOWN: manifest unknown; map[]' \
+  "$publisher" check-image "$tmp/bin/crane" quay.io/stackdome/absent v1 "$image_digest"
+
 "$publisher" check-image "$tmp/bin/crane" quay.io/stackdome/agent v1 "$image_digest"
 test "$("$publisher" publish-image "$tmp/bin/crane" quay.io/stackdome/agent v1 "$image_digest")" = "$image_digest"
 expect_failure "malformed image digest" env CRANE_DIGEST_OUTPUT=not-a-digest \
@@ -115,6 +141,21 @@ for error in \
     "$publisher" check-chart "$tmp/bin/helm" oci://quay.io/stackdome/charts \
     absent 1.0.0 "$tmp/stackdome-agent-1.0.0.tgz"
 done
+helm_absence='Error: failed to perform "FetchReference" on source: GET "https://quay.io/v2/stackdome/charts/manifests/1.0.0": response status code 404: manifest unknown: manifest unknown'
+for error in \
+  "$helm_absence; unexpected EOF" \
+  "$helm_absence; context deadline exceeded" \
+  "$helm_absence; read: connection reset by peer" \
+  "$helm_absence; lookup quay.io: no such host" \
+  "$helm_absence; unexpected end of JSON input" \
+  "$helm_absence"$'\nMANIFEST_UNKNOWN: partial response'; do
+  expect_failure "mixed chart absence response '$error'" env CLIENT_ERROR="$error" \
+    "$publisher" check-chart "$tmp/bin/helm" oci://quay.io/stackdome/charts \
+    absent 1.0.0 "$tmp/stackdome-agent-1.0.0.tgz"
+done
+CLIENT_ERROR='Error: failed to perform "FetchReference" on source: GET "https://quay.io/v2/stackdome/charts/manifests/1.0.0": response status code 404: name unknown: repository name not known to registry' \
+  "$publisher" check-chart "$tmp/bin/helm" oci://quay.io/stackdome/charts \
+  absent 1.0.0 "$tmp/stackdome-agent-1.0.0.tgz"
 "$publisher" check-chart "$tmp/bin/helm" oci://quay.io/stackdome/charts stackdome-agent 1.0.0 "$tmp/stackdome-agent-1.0.0.tgz"
 chart_digest="$("$publisher" publish-chart "$tmp/bin/helm" oci://quay.io/stackdome/charts stackdome-agent 1.0.0 "$tmp/stackdome-agent-1.0.0.tgz")"
 test "$chart_digest" = "$("$publisher" publish-chart "$tmp/bin/helm" oci://quay.io/stackdome/charts stackdome-agent 1.0.0 "$tmp/stackdome-agent-1.0.0.tgz")"

@@ -201,14 +201,16 @@ jobs:
           tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" syft
           install -m 0755 "$RUNNER_TEMP/syft" "$RUNNER_TEMP/syft-bin"
 
-      - name: Generate per-platform SPDX and CycloneDX SBOMs
+      - name: Generate per-platform scanner evidence
         shell: bash
         run: |
           set -euo pipefail
           ./hack/generate-release-sboms.sh "$RUNNER_TEMP/syft-bin" release-artifacts agent \
-            "${AGENT_IMAGE}@${{ steps.build_agent.outputs.digest }}"
+            "${AGENT_IMAGE}@${{ steps.build_agent.outputs.digest }}" \
+            release-artifacts/agent-index.json
           ./hack/generate-release-sboms.sh "$RUNNER_TEMP/syft-bin" release-artifacts reconciler \
-            "${RECONCILER_IMAGE}@${{ steps.build_reconciler.outputs.digest }}"
+            "${RECONCILER_IMAGE}@${{ steps.build_reconciler.outputs.digest }}" \
+            release-artifacts/reconciler-index.json
 
       - name: Scan agent linux/amd64
         id: vulnerability_scan_agent_amd64
@@ -267,6 +269,7 @@ jobs:
           path: |
             release-artifacts/*.spdx.json
             release-artifacts/*.cyclonedx.json
+            release-artifacts/*.syft.json
             release-artifacts/trivy-*.json
             release-artifacts/*-index.json
           if-no-files-found: error
@@ -337,8 +340,9 @@ jobs:
 
       - name: Record agent image publication
         run: |
+          version="${{ steps.version.outputs.version }}"
           ./hack/release-state.rb record-publication release-artifacts/publication-state.json \
-            agent-image-tag "$AGENT_IMAGE" "${{ steps.promote_agent.outputs.digest }}"
+            agent-image-tag "$AGENT_IMAGE:$version" "${{ steps.promote_agent.outputs.digest }}"
 
       - name: Promote verified reconciler digest
         id: promote_reconciler
@@ -351,13 +355,16 @@ jobs:
 
       - name: Record reconciler image publication
         run: |
+          version="${{ steps.version.outputs.version }}"
           ./hack/release-state.rb record-publication release-artifacts/publication-state.json \
-            reconciler-image-tag "$RECONCILER_IMAGE" "${{ steps.promote_reconciler.outputs.digest }}"
+            reconciler-image-tag "$RECONCILER_IMAGE:$version" \
+            "${{ steps.promote_reconciler.outputs.digest }}"
 
       - name: Publish standalone chart idempotently
         id: chart_standalone
         shell: bash
         run: |
+          set -euo pipefail
           chart_version="${{ steps.version.outputs.chart_version }}"
           digest="$(./hack/publish-release-coordinate.sh publish-chart helm "$CHART_REGISTRY" \
             stackdome-agent-standalone "$chart_version" \
@@ -376,6 +383,7 @@ jobs:
         id: chart_umbrella
         shell: bash
         run: |
+          set -euo pipefail
           chart_version="${{ steps.version.outputs.chart_version }}"
           digest="$(./hack/publish-release-coordinate.sh publish-chart helm "$CHART_REGISTRY" \
             stackdome-agent "$chart_version" "release-artifacts/stackdome-agent-$chart_version.tgz")"
@@ -448,8 +456,8 @@ jobs:
             --arg source_commit "${{ steps.trusted_source.outputs.commit }}" \
             --arg module "$(go list -m)" \
             --arg version "${{ steps.version.outputs.version }}" \
-            --arg agent_image "$AGENT_IMAGE@${{ steps.promote_agent.outputs.digest }}" \
-            --arg reconciler_image "$RECONCILER_IMAGE@${{ steps.promote_reconciler.outputs.digest }}" \
+            --arg agent_image "$AGENT_IMAGE:${{ steps.version.outputs.version }}@${{ steps.promote_agent.outputs.digest }}" \
+            --arg reconciler_image "$RECONCILER_IMAGE:${{ steps.version.outputs.version }}@${{ steps.promote_reconciler.outputs.digest }}" \
             --arg standalone_chart "quay.io/stackdome/charts/stackdome-agent-standalone:${{ steps.version.outputs.chart_version }}@${{ steps.chart_standalone.outputs.digest }}" \
             --arg umbrella_chart "quay.io/stackdome/charts/stackdome-agent:${{ steps.version.outputs.chart_version }}@${{ steps.chart_umbrella.outputs.digest }}" \
             --arg reconciler_cloud_digest "${{ steps.promote_reconciler.outputs.digest }}" \
@@ -473,6 +481,7 @@ jobs:
               crd_bundle_sha256: $crd_bundle_sha256,
               vulnerability_gate: "zero fixable CRITICAL on linux/amd64 and linux/arm64",
               sbom_formats: ["SPDX-JSON", "CycloneDX-JSON"],
+              scanner_identity: "Syft-JSON schema 16.0.39",
               rollback_chart: $rollback_chart,
               rollback_crd_bundle_sha256: $rollback_crd_bundle_sha256,
               crd_compatibility: "candidate specs exactly match the protected rollback release after documented API-server defaults",
@@ -484,13 +493,13 @@ jobs:
         id: attest_chart_standalone
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
         with:
-          subject-name: quay.io/stackdome/charts/stackdome-agent-standalone:${{ steps.version.outputs.chart_version }}
+          subject-name: quay.io/stackdome/charts/stackdome-agent-standalone
           subject-digest: ${{ steps.chart_standalone.outputs.digest }}
           push-to-registry: true
 
       - name: Record standalone chart attestation
         run: |
-          subject="quay.io/stackdome/charts/stackdome-agent-standalone:${{ steps.version.outputs.chart_version }}"
+          subject="quay.io/stackdome/charts/stackdome-agent-standalone"
           ./hack/release-state.rb record-attestation release-artifacts/publication-state.json \
             standalone-chart-attestation "$subject" "${{ steps.chart_standalone.outputs.digest }}" \
             "${{ steps.attest_chart_standalone.outputs.attestation-id }}" \
@@ -508,13 +517,13 @@ jobs:
         id: attest_chart_umbrella
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
         with:
-          subject-name: quay.io/stackdome/charts/stackdome-agent:${{ steps.version.outputs.chart_version }}
+          subject-name: quay.io/stackdome/charts/stackdome-agent
           subject-digest: ${{ steps.chart_umbrella.outputs.digest }}
           push-to-registry: true
 
       - name: Record umbrella chart attestation
         run: |
-          subject="quay.io/stackdome/charts/stackdome-agent:${{ steps.version.outputs.chart_version }}"
+          subject="quay.io/stackdome/charts/stackdome-agent"
           ./hack/release-state.rb record-attestation release-artifacts/publication-state.json \
             umbrella-chart-attestation "$subject" "${{ steps.chart_umbrella.outputs.digest }}" \
             "${{ steps.attest_chart_umbrella.outputs.attestation-id }}" \

@@ -4,19 +4,31 @@ set -euo pipefail
 mode="${1:?usage: publish-release-coordinate.sh <check-image|publish-image|check-chart|publish-chart> ...}"
 shift
 
-is_explicit_manifest_absence() {
-  local output="$1" line saw_code=false
-  if grep -Eqi 'UNAUTHORIZED|DENIED|TOOMANYREQUESTS|rate[ -]?limit|x509|certificate|TLS|dial tcp|network|credential|malformed' <<<"$output"; then
-    return 1
-  fi
+is_crane_manifest_absence() {
+  local output="$1" terminal_url warning_url
+  local terminal_pattern='^Error: GET (https://[^[:space:]]+): (MANIFEST_UNKNOWN: manifest unknown|NAME_UNKNOWN: repository name not known to registry)(; map\[\])?$'
+  local warning_pattern='^[0-9]{4}/[0-9]{2}/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} HEAD request failed, falling back on GET: HEAD (https://[^[:space:]]+): unexpected status code 404 Not Found \(HEAD responses have no body, use GET for details\)$'
+  local line
+  local -a lines
+  lines=()
   while IFS= read -r line; do
-    [[ -z "$line" ]] && continue
-    if [[ ! "$line" =~ (^|[^A-Z_])(MANIFEST_UNKNOWN|NAME_UNKNOWN)([^A-Z_]|$) ]]; then
-      return 1
-    fi
-    saw_code=true
+    lines[${#lines[@]}]="$line"
   done <<<"$output"
-  [[ "$saw_code" == true ]]
+
+  [[ "${#lines[@]}" == 1 || "${#lines[@]}" == 2 ]] || return 1
+  [[ "${lines[$((${#lines[@]} - 1))]}" =~ $terminal_pattern ]] || return 1
+  terminal_url="${BASH_REMATCH[1]}"
+  if [[ "${#lines[@]}" == 2 ]]; then
+    [[ "${lines[0]}" =~ $warning_pattern ]] || return 1
+    warning_url="${BASH_REMATCH[1]}"
+    [[ "$warning_url" == "$terminal_url" ]] || return 1
+  fi
+}
+
+is_helm_manifest_absence() {
+  local output="$1"
+  local absence_pattern='^Error: failed to perform "FetchReference" on source: GET "https://[^"]+": response status code 404: (manifest unknown: manifest unknown|name unknown: repository name not known to registry)$'
+  [[ "$output" =~ $absence_pattern ]]
 }
 
 require_digest() {
@@ -57,7 +69,7 @@ check_image() {
 
   error="$(cat "$error_file")"
   rm -f "$error_file"
-  if ! is_explicit_manifest_absence "$error"; then
+  if ! is_crane_manifest_absence "$error"; then
     printf '%s\n' "$error" >&2
     return 1
   fi
@@ -100,7 +112,7 @@ check_chart() {
   fi
 
   rm -rf "$tmp"
-  if ! is_explicit_manifest_absence "$output"; then
+  if ! is_helm_manifest_absence "$output"; then
     printf '%s\n' "$output" >&2
     return 1
   fi

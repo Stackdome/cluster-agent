@@ -15,7 +15,7 @@ Use a pull request to update all release inputs before creating a tag:
 6. Update `hack/release-dependency-checksums.txt` from trusted upstream archives.
 7. Run `make test`, `./hack/verify-release-assets.sh`,
    `./hack/test-release-provenance.sh`, `./hack/test-release-evidence.sh`,
-   `./hack/test-release-publication.sh`, `./hack/test-release-recovery.rb`, and
+   `./hack/test-release-publication.sh`, `./hack/test-release-recovery.sh`, and
    `./hack/test-crd-compatibility.sh`.
 
 Merge the reviewed release inputs to the protected default branch. Create the
@@ -49,14 +49,17 @@ those hosted settings by itself.
 ## Published evidence
 
 The workflow first pushes untagged linux/amd64 and linux/arm64 image content.
-It generates SPDX and CycloneDX SBOMs and rejects any fixable CRITICAL
-vulnerability. Only then does it assign the final image tags and publish the
-standalone and umbrella charts.
+It preserves Syft's SPDX, CycloneDX, and native JSON output and rejects any
+fixable CRITICAL vulnerability. Only then does it assign the final image tags
+and publish the standalone and umbrella charts.
 
 Trivy is downloaded and checksum-verified before Quay login. The release does
 not execute Trivy composite actions or source installer code from the archive.
-Each SBOM and scan report is validated against its exact image index digest and
-linux architecture before publication.
+Each SPDX document's scanner-native OCI purl is validated against the exact
+platform manifest in the retained raw image index. The raw CycloneDX root is
+bound to that index through the Syft JSON produced by the same scanner
+invocation, which records the selected manifest digest, OS, and architecture.
+No subject identity is added to or changed in the SBOM files after scanning.
 
 The release artifact records source commit, module and API versions, both image
 digests, both chart digests, the CRD bundle checksum, SBOM and scan results, and
@@ -108,9 +111,60 @@ after canonicalizing only the documented API-server defaults recorded in
 directory. The repository test is not a substitute for this live drill. Run it
 against the exact alpha cluster before approving the release:
 
+Before this drill, complete and verify controller-specific data-plane backups.
+This includes a restorable PostgreSQL backup for every `PostgresCluster` and
+provider snapshots or equivalent backups for registry, object-storage, NFS,
+and persistent-volume data. Record the backup identifiers and restore-check
+results in the launch log. Kubernetes custom-resource exports do not contain
+that data and are not a substitute for these backups.
+
 ```bash
-# Back up tenant custom resources and capture the installed controller revision.
-kubectl get clusterregistries,stacks,stackresources,imagebuilds -A -o yaml >pre-rollback-custom-resources.yaml
+set -euo pipefail
+
+# Derive every protected resource from the exact rollback CRD bundle. The
+# fully qualified resource name avoids relying on kubectl short-name aliases.
+ruby -ryaml -e '
+  YAML.load_stream(File.read(ARGV.fetch(0))).compact.each do |crd|
+    name = crd.dig("metadata", "name")
+    group = crd.dig("spec", "group")
+    plural = crd.dig("spec", "names", "plural")
+    abort "rollback bundle contains an incomplete CRD" unless name && group && plural
+    puts [name, "#{plural}.#{group}"].join("\t")
+  end
+' rollback-crds.yaml >protected-crd-resources.tsv
+test -s protected-crd-resources.tsv
+
+# Export every protected custom resource and capture the installed controller
+# before any CRD mutation. Empty resource kinds still produce a valid List.
+rm -rf pre-rollback-custom-resources
+mkdir -p pre-rollback-custom-resources
+while IFS=$'\t' read -r crd_name resource; do
+  kubectl get "$resource" --all-namespaces -o yaml \
+    >"pre-rollback-custom-resources/$crd_name.yaml"
+done <protected-crd-resources.tsv
+kubectl get deployment/<agent-deployment> -n <namespace> -o yaml \
+  >pre-rollback-controller.yaml
+
+# Verify every CRD from the bundle has one readable List export, then checksum
+# the backup before changing the installed CRDs.
+ruby -ryaml -e '
+  rows = File.readlines(ARGV.fetch(0), chomp: true).reject(&:empty?)
+  abort "rollback bundle contains no protected resources" if rows.empty?
+  rows.each do |row|
+    crd_name, resource = row.split("\t", 2)
+    abort "invalid protected resource row: #{row}" unless crd_name && resource
+    path = File.join(ARGV.fetch(1), "#{crd_name}.yaml")
+    export = YAML.safe_load(File.read(path))
+    unless export.is_a?(Hash) && export["kind"].to_s.end_with?("List") && export["items"].is_a?(Array)
+      abort "#{path} is not a Kubernetes List export"
+    end
+  end
+' protected-crd-resources.tsv pre-rollback-custom-resources
+tar -czf pre-rollback-custom-resources.tar.gz pre-rollback-custom-resources
+sha256sum pre-rollback-custom-resources.tar.gz pre-rollback-controller.yaml \
+  >pre-rollback-backups.sha256
+sha256sum --check pre-rollback-backups.sha256
+
 kubectl scale deployment/<agent-deployment> --replicas=0 -n <namespace>
 
 crd_names="$(ruby -ryaml -e 'puts YAML.load_stream(File.read(ARGV[0])).compact.map { |crd| crd.dig("metadata", "name") }.join(" ")' rollback-crds.yaml)"
@@ -143,7 +197,8 @@ migration procedure, capture a fresh backup, and restart this drill. Never edit
 Finally create, read, update, and delete one disposable resource for every CRD
 reconciled by the previous controller and confirm existing tenant resources
 still reconcile. Attach the commands, controller logs, CRD verification output,
-and backup checksum to the launch log. If the prior bundle cannot be applied or
-the smoke test fails, keep the controller scaled to zero, restore the backed-up
-custom resources and cluster control-plane backup, and do not deploy that
+custom-resource export checksum, and data-plane backup verification to the
+launch log. If the prior bundle cannot be applied or the smoke test fails, keep
+the controller scaled to zero, restore the custom resources, controller-specific
+data-plane backups, and cluster control-plane backup, and do not deploy that
 release.

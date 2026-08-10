@@ -289,16 +289,30 @@ unless validation_run.include?("./hack/validate-release-evidence.rb") &&
   fail_validation("release must validate all per-platform SBOM and scan reports")
 end
 
-sbom_step = steps.find { |step| step["name"] == "Generate per-platform SPDX and CycloneDX SBOMs" } || {}
+sbom_step = steps.find { |step| step["name"] == "Generate per-platform scanner evidence" } || {}
 sbom_lines = sbom_step.fetch("run", "").lines.map(&:strip).reject(&:empty?)
 unless sbom_lines == [
   "set -euo pipefail",
   './hack/generate-release-sboms.sh "$RUNNER_TEMP/syft-bin" release-artifacts agent \\',
-  '"${AGENT_IMAGE}@${{ steps.build_agent.outputs.digest }}"',
+  '"${AGENT_IMAGE}@${{ steps.build_agent.outputs.digest }}" \\',
+  "release-artifacts/agent-index.json",
   './hack/generate-release-sboms.sh "$RUNNER_TEMP/syft-bin" release-artifacts reconciler \\',
-  '"${RECONCILER_IMAGE}@${{ steps.build_reconciler.outputs.digest }}"',
+  '"${RECONCILER_IMAGE}@${{ steps.build_reconciler.outputs.digest }}" \\',
+  "release-artifacts/reconciler-index.json",
 ]
-  fail_validation("SBOM generation is not bound to both exact build digests")
+  fail_validation("scanner evidence generation is not bound to both exact indexes")
+end
+
+evidence_upload = steps.find { |step| step["name"] == "Upload vulnerability evidence" } || {}
+expected_evidence_paths = [
+  "release-artifacts/*.spdx.json",
+  "release-artifacts/*.cyclonedx.json",
+  "release-artifacts/*.syft.json",
+  "release-artifacts/trivy-*.json",
+  "release-artifacts/*-index.json",
+]
+unless evidence_upload.dig("with", "path").to_s.lines.map(&:strip).reject(&:empty?) == expected_evidence_paths
+  fail_validation("uploaded vulnerability evidence must retain scanner output and raw indexes")
 end
 
 expected_gate = "steps.vulnerability_scan_agent_amd64.outcome != 'success' || steps.vulnerability_scan_agent_arm64.outcome != 'success' || steps.vulnerability_scan_reconciler_amd64.outcome != 'success' || steps.vulnerability_scan_reconciler_arm64.outcome != 'success'"
@@ -307,13 +321,21 @@ unless gate["if"] == expected_gate && gate.fetch("run", "").include?("exit 1")
   fail_validation("public-alpha vulnerability gate condition must be exact")
 end
 
-%w[promote_agent promote_reconciler].each do |id|
-  step = steps.find { |candidate| candidate["id"] == id }
+promotion_contracts = {
+  "promote_agent" => ["AGENT_IMAGE", "build_agent"],
+  "promote_reconciler" => ["RECONCILER_IMAGE", "build_reconciler"],
+}
+promotion_contracts.each do |id, (repository, build_id)|
+  step = steps.find { |candidate| candidate["id"] == id } || {}
   fail_validation("#{id} must stop after any earlier failure") if step.key?("if")
-  run = step.fetch("run", "")
-  unless run.include?("./hack/publish-release-coordinate.sh publish-image") &&
-         run.include?(id == "promote_agent" ? "steps.build_agent.outputs.digest" : "steps.build_reconciler.outputs.digest")
-    fail_validation("#{id} must idempotently publish the exact build digest")
+  expected_lines = [
+    "set -euo pipefail",
+    'promoted="$(./hack/publish-release-coordinate.sh publish-image "$RUNNER_TEMP/crane-bin" \\',
+    %Q{"$#{repository}" "${{ steps.version.outputs.version }}" "${{ steps.#{build_id}.outputs.digest }}")"},
+    'echo "digest=$promoted" >>"$GITHUB_OUTPUT"',
+  ]
+  unless step.fetch("run", "").lines.map(&:strip).reject(&:empty?) == expected_lines
+    fail_validation("#{id} must publish the exact release version and digest")
   end
 end
 
@@ -325,37 +347,80 @@ unless package_run.scan(/go run \.\/cmd\/release-package/).length == 2 &&
 end
 
 preflight_run = steps.fetch(preflight_index).fetch("run", "")
-unless preflight_run.scan(/publish-release-coordinate\.sh check-image/).length == 2 &&
-       preflight_run.scan(/publish-release-coordinate\.sh check-chart/).length == 2 &&
-       preflight_run.include?("steps.build_agent.outputs.digest") &&
-       preflight_run.include?("steps.build_reconciler.outputs.digest") &&
-       preflight_run.include?("release-state.rb init release-artifacts/publication-state.json")
+expected_preflight_lines = [
+  "set -euo pipefail",
+  'chart_version="${{ steps.version.outputs.chart_version }}"',
+  './hack/publish-release-coordinate.sh check-image "$RUNNER_TEMP/crane-bin" \\',
+  '"$AGENT_IMAGE" "${{ steps.version.outputs.version }}" "${{ steps.build_agent.outputs.digest }}"',
+  './hack/publish-release-coordinate.sh check-image "$RUNNER_TEMP/crane-bin" \\',
+  '"$RECONCILER_IMAGE" "${{ steps.version.outputs.version }}" "${{ steps.build_reconciler.outputs.digest }}"',
+  './hack/publish-release-coordinate.sh check-chart helm "$CHART_REGISTRY" \\',
+  'stackdome-agent-standalone "$chart_version" \\',
+  '"release-artifacts/stackdome-agent-standalone-$chart_version.tgz"',
+  './hack/publish-release-coordinate.sh check-chart helm "$CHART_REGISTRY" \\',
+  'stackdome-agent "$chart_version" "release-artifacts/stackdome-agent-$chart_version.tgz"',
+  './hack/release-state.rb init release-artifacts/publication-state.json',
+]
+unless preflight_run.lines.map(&:strip).reject(&:empty?) == expected_preflight_lines
   fail_validation("all four immutable coordinates must be preflighted before publication")
 end
 
-{"chart_standalone" => "stackdome-agent-standalone", "chart_umbrella" => "stackdome-agent"}.each do |id, chart_name|
+chart_publication_contracts = {
+  "chart_standalone" => [
+    "set -euo pipefail",
+    'chart_version="${{ steps.version.outputs.chart_version }}"',
+    'digest="$(./hack/publish-release-coordinate.sh publish-chart helm "$CHART_REGISTRY" \\',
+    'stackdome-agent-standalone "$chart_version" \\',
+    '"release-artifacts/stackdome-agent-standalone-$chart_version.tgz")"',
+    'echo "digest=$digest" >>"$GITHUB_OUTPUT"',
+  ],
+  "chart_umbrella" => [
+    "set -euo pipefail",
+    'chart_version="${{ steps.version.outputs.chart_version }}"',
+    'digest="$(./hack/publish-release-coordinate.sh publish-chart helm "$CHART_REGISTRY" \\',
+    'stackdome-agent "$chart_version" "release-artifacts/stackdome-agent-$chart_version.tgz")"',
+    'echo "digest=$digest" >>"$GITHUB_OUTPUT"',
+  ],
+}
+chart_publication_contracts.each do |id, expected_lines|
   chart_step = steps.find { |candidate| candidate["id"] == id } || {}
-  run = chart_step.fetch("run", "")
-  unless !chart_step.key?("if") && run.include?("publish-release-coordinate.sh publish-chart") && run.include?(chart_name)
-    fail_validation("#{id} must idempotently publish its deterministic chart archive")
+  unless !chart_step.key?("if") &&
+         chart_step.fetch("run", "").lines.map(&:strip).reject(&:empty?) == expected_lines
+    fail_validation("#{id} must publish the exact chart version and deterministic archive")
   end
 end
 
 publication_records = {
-  "Record agent image publication" => ["agent-image-tag", "AGENT_IMAGE", "promote_agent"],
-  "Record reconciler image publication" => ["reconciler-image-tag", "RECONCILER_IMAGE", "promote_reconciler"],
-  "Record standalone chart publication" => ["standalone-chart-push", "stackdome-agent-standalone", "chart_standalone"],
-  "Record umbrella chart publication" => ["umbrella-chart-push", "stackdome-agent:", "chart_umbrella"],
+  "Record agent image publication" => [
+    'version="${{ steps.version.outputs.version }}"',
+    "./hack/release-state.rb record-publication release-artifacts/publication-state.json \\",
+    'agent-image-tag "$AGENT_IMAGE:$version" "${{ steps.promote_agent.outputs.digest }}"',
+  ],
+  "Record reconciler image publication" => [
+    'version="${{ steps.version.outputs.version }}"',
+    "./hack/release-state.rb record-publication release-artifacts/publication-state.json \\",
+    'reconciler-image-tag "$RECONCILER_IMAGE:$version" \\',
+    '"${{ steps.promote_reconciler.outputs.digest }}"',
+  ],
+  "Record standalone chart publication" => [
+    'chart_version="${{ steps.version.outputs.chart_version }}"',
+    "./hack/release-state.rb record-publication release-artifacts/publication-state.json \\",
+    "standalone-chart-push \\",
+    '"quay.io/stackdome/charts/stackdome-agent-standalone:$chart_version" \\',
+    '"${{ steps.chart_standalone.outputs.digest }}"',
+  ],
+  "Record umbrella chart publication" => [
+    'chart_version="${{ steps.version.outputs.chart_version }}"',
+    "./hack/release-state.rb record-publication release-artifacts/publication-state.json \\",
+    'umbrella-chart-push "quay.io/stackdome/charts/stackdome-agent:$chart_version" \\',
+    '"${{ steps.chart_umbrella.outputs.digest }}"',
+  ],
 }
-publication_records.each do |step_name, (checkpoint, subject, digest_step)|
+publication_records.each do |step_name, expected_lines|
   run = (steps.find { |step| step["name"] == step_name } || {}).fetch("run", "")
-  required = [
-    "release-state.rb record-publication release-artifacts/publication-state.json",
-    checkpoint,
-    subject,
-    "steps.#{digest_step}.outputs.digest",
-  ]
-  fail_validation("#{step_name} must record its exact OCI subject") unless required.all? { |value| run.include?(value) }
+  unless run.lines.map(&:strip).reject(&:empty?) == expected_lines
+    fail_validation("#{step_name} must retain its exact tagged OCI coordinate")
+  end
 end
 
 dependency_builds = Dir.glob([
@@ -370,9 +435,22 @@ unless dependency_builds == 1 && File.read(File.join(repo, "hack/verify-release-
 end
 
 metadata_run = steps.fetch(metadata_index).fetch("run", "")
-%w[source_commit api_versions crd_bundle_sha256 vulnerability_gate rollback_chart rollback_command
+%w[source_commit api_versions crd_bundle_sha256 vulnerability_gate scanner_identity rollback_chart rollback_command
    rollback_crd_bundle_sha256 rollback_crd_replace reconciler_digest_required].each do |field|
   fail_validation("release metadata is missing #{field}") unless metadata_run.include?(field)
+end
+expected_publication_coordinates = [
+  '--arg agent_image "$AGENT_IMAGE:${{ steps.version.outputs.version }}@${{ steps.promote_agent.outputs.digest }}"',
+  '--arg reconciler_image "$RECONCILER_IMAGE:${{ steps.version.outputs.version }}@${{ steps.promote_reconciler.outputs.digest }}"',
+  '--arg standalone_chart "quay.io/stackdome/charts/stackdome-agent-standalone:${{ steps.version.outputs.chart_version }}@${{ steps.chart_standalone.outputs.digest }}"',
+  '--arg umbrella_chart "quay.io/stackdome/charts/stackdome-agent:${{ steps.version.outputs.chart_version }}@${{ steps.chart_umbrella.outputs.digest }}"',
+]
+unless expected_publication_coordinates.all? { |coordinate| metadata_run.include?(coordinate) }
+  fail_validation("release metadata must retain all four tagged publication coordinates")
+end
+unless metadata_run.include?('scanner_identity: "Syft-JSON schema 16.0.39"') &&
+       release_text.include?("archive=syft_1.32.0_linux_amd64.tar.gz")
+  fail_validation("release metadata must identify the exact pinned scanner evidence schema")
 end
 
 [
@@ -386,11 +464,11 @@ attestation_contracts = {
   "attest_agent" => ["${{ env.AGENT_IMAGE }}", "${{ steps.promote_agent.outputs.digest }}"],
   "attest_reconciler" => ["${{ env.RECONCILER_IMAGE }}", "${{ steps.promote_reconciler.outputs.digest }}"],
   "attest_chart_standalone" => [
-    "quay.io/stackdome/charts/stackdome-agent-standalone:${{ steps.version.outputs.chart_version }}",
+    "quay.io/stackdome/charts/stackdome-agent-standalone",
     "${{ steps.chart_standalone.outputs.digest }}",
   ],
   "attest_chart_umbrella" => [
-    "quay.io/stackdome/charts/stackdome-agent:${{ steps.version.outputs.chart_version }}",
+    "quay.io/stackdome/charts/stackdome-agent",
     "${{ steps.chart_umbrella.outputs.digest }}",
   ],
 }
@@ -409,12 +487,12 @@ attestations = attestation_contracts.map do |id, (subject_name, subject_digest)|
 end
 
 record_contracts = {
-  "Record agent attestation" => ["attest_agent", "agent-attestation", "AGENT_IMAGE", "promote_agent", "agent.json"],
-  "Record reconciler attestation" => ["attest_reconciler", "reconciler-attestation", "RECONCILER_IMAGE", "promote_reconciler", "reconciler.json"],
-  "Record standalone chart attestation" => ["attest_chart_standalone", "standalone-chart-attestation", "stackdome-agent-standalone", "chart_standalone", "standalone-chart.json"],
-  "Record umbrella chart attestation" => ["attest_chart_umbrella", "umbrella-chart-attestation", "stackdome-agent:", "chart_umbrella", "umbrella-chart.json"],
+  "Record agent attestation" => ["attest_agent", "agent-attestation", 'agent-attestation "$AGENT_IMAGE"', "promote_agent", "agent.json", '$AGENT_IMAGE'],
+  "Record reconciler attestation" => ["attest_reconciler", "reconciler-attestation", 'reconciler-attestation "$RECONCILER_IMAGE"', "promote_reconciler", "reconciler.json", '$RECONCILER_IMAGE'],
+  "Record standalone chart attestation" => ["attest_chart_standalone", "standalone-chart-attestation", 'subject="quay.io/stackdome/charts/stackdome-agent-standalone"', "chart_standalone", "standalone-chart.json", '$subject'],
+  "Record umbrella chart attestation" => ["attest_chart_umbrella", "umbrella-chart-attestation", 'subject="quay.io/stackdome/charts/stackdome-agent"', "chart_umbrella", "umbrella-chart.json", '$subject'],
 }
-record_contracts.each do |name, (attestation_id, checkpoint, subject, digest_step, bundle)|
+record_contracts.each do |name, (attestation_id, checkpoint, subject, digest_step, bundle, repository)|
   record = steps.find { |step| step["name"] == name } || {}
   run = record.fetch("run", "")
   required = [
@@ -430,7 +508,9 @@ record_contracts.each do |name, (attestation_id, checkpoint, subject, digest_ste
     "--bundle release-artifacts/attestations/#{bundle}",
     "--bundle-from-oci",
   ]
-  unless required.all? { |value| run.include?(value) } && run.scan(/gh attestation verify/).length == 2
+  expected_ref = %Q{"oci://#{repository}@${{ steps.#{digest_step}.outputs.digest }}"}
+  unless required.all? { |value| run.include?(value) } &&
+         run.scan(/"oci:\/\/[^"]+"/) == [expected_ref, expected_ref]
     fail_validation("#{name} must retain and verify exact attestation evidence")
   end
 end
@@ -460,6 +540,29 @@ release_docs = File.read(File.join(repo, "RELEASING.md"))
 unless release_docs.include?("verify-installed-crds.rb") && release_docs.include?("controller scaled to zero") &&
        release_docs.include?("prepare-crd-rollback.rb") && release_docs.include?("release-complete")
   fail_validation("release documentation is missing partial-publication or explicit CRD recovery")
+end
+unless release_docs.include?("./hack/test-release-recovery.sh") &&
+       !release_docs.include?("./hack/test-release-recovery.rb")
+  fail_validation("release documentation must invoke the current recovery test")
+end
+backup_contract = [
+  'YAML.load_stream(File.read(ARGV.fetch(0))).compact.each do |crd|',
+  'plural = crd.dig("spec", "names", "plural")',
+  'rollback-crds.yaml >protected-crd-resources.tsv',
+  'kubectl get "$resource" --all-namespaces -o yaml',
+  'done <protected-crd-resources.tsv',
+  'sha256sum --check pre-rollback-backups.sha256',
+  'restorable PostgreSQL backup for every `PostgresCluster`',
+  'provider snapshots or equivalent backups',
+  'Kubernetes custom-resource exports do not contain',
+]
+unless backup_contract.all? { |text| release_docs.include?(text) } &&
+       release_docs.index("sha256sum --check pre-rollback-backups.sha256") <
+         release_docs.index("kubectl replace -f rollback-replacements.yaml")
+  fail_validation("CRD rollback must verify every protected resource and data-plane backup before mutation")
+end
+if release_docs.include?("kubectl get clusterregistries,stacks,stackresources,imagebuilds")
+  fail_validation("CRD rollback must not use a partial hard-coded resource list")
 end
 
 puts "release provenance contract verified"

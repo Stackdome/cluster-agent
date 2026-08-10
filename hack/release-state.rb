@@ -36,6 +36,18 @@ def require_digest!(digest, description)
   abort "#{description} is not a SHA-256 digest" unless digest.match?(DIGEST_PATTERN)
 end
 
+def tagged_publication_name(subject)
+  match = subject.match(%r{\A(?<repository>[^@\s]+/[^:@/\s]+):(?<tag>[^:@/\s]+)\z})
+  abort "publication subject must be an exact repository:version coordinate" unless match
+
+  [match[:repository], match[:tag]]
+end
+
+def require_attestation_subject!(subject)
+  valid = subject.match?(%r{\A[^@\s]+/[^@\s]+\z}) && !subject.split("/").last.include?(":")
+  abort "attestation subject must be a repository name without a tag or digest" unless valid
+end
+
 def load_state(path)
   state = JSON.parse(File.read(path))
   abort "invalid release state version" unless state == {"version" => 1, "checkpoints" => []} ||
@@ -119,8 +131,9 @@ def expected_checkpoints(metadata)
   }
   coordinates.each_with_object({}) do |(kind, coordinate), expected|
     abort "release metadata is missing #{kind} OCI coordinate" unless coordinate.to_s.count("@") == 1
-    subject, digest = coordinate.split("@", 2)
+    publication_subject, digest = coordinate.split("@", 2)
     require_digest!(digest, "#{kind} OCI coordinate")
+    attestation_subject, = tagged_publication_name(publication_subject)
     publication_name = {
       "agent" => "agent-image-tag",
       "reconciler" => "reconciler-image-tag",
@@ -133,8 +146,8 @@ def expected_checkpoints(metadata)
       "standalone" => "standalone-chart-attestation",
       "umbrella" => "umbrella-chart-attestation",
     }.fetch(kind)
-    expected[publication_name] = [subject, digest]
-    expected[attestation_name] = [subject, digest]
+    expected[publication_name] = [publication_subject, digest]
+    expected[attestation_name] = [attestation_subject, digest]
   end
 end
 
@@ -153,6 +166,7 @@ when "record-publication"
   abort_usage unless state_path && name && subject && digest && ARGV.length == 4
   abort "unknown publication checkpoint #{name}" unless PUBLICATION_CHECKPOINTS.include?(name)
   abort "publication subject name is empty" if subject.empty?
+  tagged_publication_name(subject)
   require_digest!(digest, "publication digest")
   state = load_state(state_path)
   record_checkpoint!(state, {"name" => name, "subject" => subject, "digest" => digest})
@@ -162,6 +176,7 @@ when "record-attestation"
   abort_usage unless ARGV.length == 7
   abort "unknown attestation checkpoint #{name}" unless ATTESTATION_CHECKPOINTS.include?(name)
   abort "attestation subject name is empty" if subject.empty?
+  require_attestation_subject!(subject)
   abort "attestation ID is empty" if attestation_id.empty?
   require_digest!(digest, "attestation digest")
   bundle = select_attestation_bundle(source_bundle, subject, digest)
