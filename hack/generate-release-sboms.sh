@@ -36,7 +36,11 @@ for arch in amd64 arm64; do
     ])' "$spdx" >"$spdx.tmp"
   mv "$spdx.tmp" "$spdx"
 
-  jq --arg image "$image" --arg platform "$platform" '
+  jq --arg image "$image" --arg platform "$platform" --arg arch "$arch" '
+    ($image | split("@")) as $subject |
+    .metadata.component.purl = (
+      "pkg:oci/" + ($subject[0] | @uri) + "@" + ($subject[1] | @uri) + "?arch=" + $arch
+    ) |
     .metadata.component.properties = ((.metadata.component.properties // []) + [
       {"name": "stackdome:image-reference", "value": $image},
       {"name": "stackdome:platform", "value": $platform}

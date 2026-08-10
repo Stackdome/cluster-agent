@@ -29,6 +29,23 @@ dir, agent_ref, reconciler_ref = ARGV
     }))
     File.write(File.join(dir, "#{name}-linux-#{arch}.spdx.json"), JSON.pretty_generate({
       "spdxVersion" => "SPDX-2.3",
+      "name" => ref.split("@", 2).first,
+      "relationships" => [{
+        "spdxElementId" => "SPDXRef-DOCUMENT",
+        "relatedSpdxElement" => "SPDXRef-Root-Container",
+        "relationshipType" => "DESCRIBES",
+      }],
+      "packages" => [{
+        "SPDXID" => "SPDXRef-Root-Container",
+        "name" => ref.split("@", 2).first,
+        "versionInfo" => ref.split("@", 2).last,
+        "primaryPackagePurpose" => "CONTAINER",
+        "externalRefs" => [{
+          "referenceCategory" => "PACKAGE-MANAGER",
+          "referenceType" => "purl",
+          "referenceLocator" => "pkg:oci/#{ref.split('@', 2).first.gsub('/', '%2F')}@#{ref.split('@', 2).last}?arch=#{arch}",
+        }],
+      }],
       "annotations" => [
         {"comment" => "stackdome:image-reference=#{ref}"},
         {"comment" => "stackdome:platform=#{platform}"},
@@ -36,7 +53,12 @@ dir, agent_ref, reconciler_ref = ARGV
     }))
     File.write(File.join(dir, "#{name}-linux-#{arch}.cyclonedx.json"), JSON.pretty_generate({
       "bomFormat" => "CycloneDX",
-      "metadata" => {"component" => {"properties" => [
+      "metadata" => {"component" => {
+        "type" => "container",
+        "name" => ref.split("@", 2).first,
+        "version" => ref.split("@", 2).last,
+        "purl" => "pkg:oci/#{ref.split('@', 2).first.gsub('/', '%2F')}@#{ref.split('@', 2).last}?arch=#{arch}",
+        "properties" => [
         {"name" => "stackdome:image-reference", "value" => ref},
         {"name" => "stackdome:platform", "value" => platform},
       ]}},
@@ -87,9 +109,21 @@ expect_mutation_failure spdx-reference \
   'agent-linux-amd64.spdx.json|document["annotations"][0]["comment"] = "stackdome:image-reference=alpine:latest"'
 expect_mutation_failure spdx-platform \
   'agent-linux-amd64.spdx.json|document["annotations"][1]["comment"] = "stackdome:platform=linux/arm64"'
+expect_mutation_failure spdx-native-subject \
+  'agent-linux-amd64.spdx.json|document["packages"][0]["name"] = "docker.io/library/alpine"'
+expect_mutation_failure spdx-native-digest \
+  'agent-linux-amd64.spdx.json|document["packages"][0]["versionInfo"] = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"'
+expect_mutation_failure spdx-native-architecture \
+  'agent-linux-amd64.spdx.json|document["packages"][0]["externalRefs"][0]["referenceLocator"] = document["packages"][0]["externalRefs"][0]["referenceLocator"].sub("arch=amd64", "arch=arm64")'
 expect_mutation_failure cyclonedx-reference \
   'agent-linux-amd64.cyclonedx.json|document["metadata"]["component"]["properties"][0]["value"] = "alpine:latest"'
 expect_mutation_failure cyclonedx-platform \
   'agent-linux-amd64.cyclonedx.json|document["metadata"]["component"]["properties"][1]["value"] = "linux/arm64"'
+expect_mutation_failure cyclonedx-native-subject \
+  'agent-linux-amd64.cyclonedx.json|document["metadata"]["component"]["name"] = "docker.io/library/alpine"'
+expect_mutation_failure cyclonedx-native-digest \
+  'agent-linux-amd64.cyclonedx.json|document["metadata"]["component"]["version"] = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"'
+expect_mutation_failure cyclonedx-native-architecture \
+  'agent-linux-amd64.cyclonedx.json|document["metadata"]["component"]["purl"] = document["metadata"]["component"]["purl"].sub("arch=amd64", "arch=arm64")'
 
 echo "release evidence negative tests passed"

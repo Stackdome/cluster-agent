@@ -43,6 +43,17 @@ dockerignore = File.read(File.join(repo, ".dockerignore"))
 end
 go_version = File.read(File.join(repo, "go.mod"))[/^go ([0-9]+\.[0-9]+\.[0-9]+)$/, 1]
 fail_validation("go.mod must declare an exact Go patch version") unless go_version
+makefile = File.read(File.join(repo, "Makefile"))
+unless makefile.include?("GOLANGCI_LINT_VERSION ?= v2.4.0") &&
+       makefile.include?("github.com/golangci/golangci-lint/v2/cmd/golangci-lint") &&
+       makefile.include?("GOTOOLCHAIN=$(GO_TOOLCHAIN_VERSION)")
+  fail_validation("golangci-lint must use the first maintained release with Go 1.25 support")
+end
+lint_config = load_yaml(File.join(repo, ".golangci.yml"))
+unless lint_config["version"] == "2" &&
+       lint_config.dig("issues", "new-from-rev") == "6c7a654224757b3d458ea51dc3887f43eb6b1a2d"
+  fail_validation("golangci-lint configuration must use the audited v2 baseline")
+end
 unless release_dockerfile.lines.first.include?("golang:#{go_version}-")
   fail_validation("release Dockerfile Go version differs from go.mod")
 end
@@ -80,9 +91,14 @@ unless ci_jobs.values.all? { |job| job.fetch("timeout-minutes", 0).to_i.positive
   fail_validation("every CI job needs a timeout")
 end
 ci_steps = ci_jobs.values.flat_map { |job| job.fetch("steps") }
+ci_checkout = ci_steps.find { |step| step.fetch("uses", "").start_with?("actions/checkout@") } || {}
+unless ci_checkout.dig("with", "fetch-depth") == 0 && ci_checkout.dig("with", "persist-credentials") == false
+  fail_validation("CI checkout must fetch the lint baseline without credentials")
+end
 ci_runs = ci_steps.map { |step| step["run"] }.compact.join("\n")
 [
   "make test",
+  "make lint",
   "git diff --exit-code",
   "./hack/verify-release-assets.sh",
   "./hack/test-release-provenance.sh",
@@ -191,6 +207,7 @@ end
 verify_run = steps.fetch(verify_index).fetch("run", "")
 [
   "make test",
+  "make lint",
   "git diff --exit-code",
   "./hack/test-release-provenance.sh",
   "helm lint charts/stackdome-agent-standalone",
@@ -255,7 +272,7 @@ preflight_index = step_index(steps, id: "publication_preflight")
 standalone_chart_index = step_index(steps, id: "chart_standalone")
 umbrella_chart_index = step_index(steps, id: "chart_umbrella")
 metadata_index = step_index(steps, name: "Bundle CRDs and record immutable release set")
-completion_index = step_index(steps, name: "Record umbrella chart attestation and release completion")
+completion_index = step_index(steps, name: "Verify release state and record completion")
 unless [validate_index, gate_index, package_index, preflight_index, promote_agent_index,
         promote_reconciler_index, standalone_chart_index, umbrella_chart_index,
         metadata_index, completion_index].all? &&
@@ -311,7 +328,8 @@ preflight_run = steps.fetch(preflight_index).fetch("run", "")
 unless preflight_run.scan(/publish-release-coordinate\.sh check-image/).length == 2 &&
        preflight_run.scan(/publish-release-coordinate\.sh check-chart/).length == 2 &&
        preflight_run.include?("steps.build_agent.outputs.digest") &&
-       preflight_run.include?("steps.build_reconciler.outputs.digest")
+       preflight_run.include?("steps.build_reconciler.outputs.digest") &&
+       preflight_run.include?("release-state.rb init release-artifacts/publication-state.json")
   fail_validation("all four immutable coordinates must be preflighted before publication")
 end
 
@@ -321,6 +339,23 @@ end
   unless !chart_step.key?("if") && run.include?("publish-release-coordinate.sh publish-chart") && run.include?(chart_name)
     fail_validation("#{id} must idempotently publish its deterministic chart archive")
   end
+end
+
+publication_records = {
+  "Record agent image publication" => ["agent-image-tag", "AGENT_IMAGE", "promote_agent"],
+  "Record reconciler image publication" => ["reconciler-image-tag", "RECONCILER_IMAGE", "promote_reconciler"],
+  "Record standalone chart publication" => ["standalone-chart-push", "stackdome-agent-standalone", "chart_standalone"],
+  "Record umbrella chart publication" => ["umbrella-chart-push", "stackdome-agent:", "chart_umbrella"],
+}
+publication_records.each do |step_name, (checkpoint, subject, digest_step)|
+  run = (steps.find { |step| step["name"] == step_name } || {}).fetch("run", "")
+  required = [
+    "release-state.rb record-publication release-artifacts/publication-state.json",
+    checkpoint,
+    subject,
+    "steps.#{digest_step}.outputs.digest",
+  ]
+  fail_validation("#{step_name} must record its exact OCI subject") unless required.all? { |value| run.include?(value) }
 end
 
 dependency_builds = Dir.glob([
@@ -336,7 +371,7 @@ end
 
 metadata_run = steps.fetch(metadata_index).fetch("run", "")
 %w[source_commit api_versions crd_bundle_sha256 vulnerability_gate rollback_chart rollback_command
-   rollback_crd_bundle_sha256 rollback_crd_apply reconciler_digest_required].each do |field|
+   rollback_crd_bundle_sha256 rollback_crd_replace reconciler_digest_required].each do |field|
   fail_validation("release metadata is missing #{field}") unless metadata_run.include?(field)
 end
 
@@ -347,13 +382,66 @@ end
   fail_validation("release tool download lacks checksum #{checksum}") unless release_text.include?(checksum)
 end
 
-attestations = steps.select { |step| step.fetch("uses", "").start_with?("actions/attest-build-provenance@") }
-fail_validation("both images and both charts need GitHub provenance") unless attestations.length == 4
+attestation_contracts = {
+  "attest_agent" => ["${{ env.AGENT_IMAGE }}", "${{ steps.promote_agent.outputs.digest }}"],
+  "attest_reconciler" => ["${{ env.RECONCILER_IMAGE }}", "${{ steps.promote_reconciler.outputs.digest }}"],
+  "attest_chart_standalone" => [
+    "quay.io/stackdome/charts/stackdome-agent-standalone:${{ steps.version.outputs.chart_version }}",
+    "${{ steps.chart_standalone.outputs.digest }}",
+  ],
+  "attest_chart_umbrella" => [
+    "quay.io/stackdome/charts/stackdome-agent:${{ steps.version.outputs.chart_version }}",
+    "${{ steps.chart_umbrella.outputs.digest }}",
+  ],
+}
+attestations = attestation_contracts.map do |id, (subject_name, subject_digest)|
+  attestation = steps.find { |step| step["id"] == id } || {}
+  expected_inputs = {
+    "subject-name" => subject_name,
+    "subject-digest" => subject_digest,
+    "push-to-registry" => true,
+  }
+  unless attestation.fetch("uses", "").start_with?("actions/attest-build-provenance@") &&
+         attestation["with"] == expected_inputs
+    fail_validation("#{id} must attest its exact published OCI subject")
+  end
+  attestation
+end
+
+record_contracts = {
+  "Record agent attestation" => ["attest_agent", "agent-attestation", "AGENT_IMAGE", "promote_agent", "agent.json"],
+  "Record reconciler attestation" => ["attest_reconciler", "reconciler-attestation", "RECONCILER_IMAGE", "promote_reconciler", "reconciler.json"],
+  "Record standalone chart attestation" => ["attest_chart_standalone", "standalone-chart-attestation", "stackdome-agent-standalone", "chart_standalone", "standalone-chart.json"],
+  "Record umbrella chart attestation" => ["attest_chart_umbrella", "umbrella-chart-attestation", "stackdome-agent:", "chart_umbrella", "umbrella-chart.json"],
+}
+record_contracts.each do |name, (attestation_id, checkpoint, subject, digest_step, bundle)|
+  record = steps.find { |step| step["name"] == name } || {}
+  run = record.fetch("run", "")
+  required = [
+    "release-state.rb record-attestation",
+    checkpoint,
+    subject,
+    "steps.#{digest_step}.outputs.digest",
+    "steps.#{attestation_id}.outputs.attestation-id",
+    "steps.#{attestation_id}.outputs.bundle-path",
+    "release-artifacts/attestations/#{bundle}",
+    "gh attestation verify",
+    '--repo "$GITHUB_REPOSITORY"',
+    "--bundle release-artifacts/attestations/#{bundle}",
+    "--bundle-from-oci",
+  ]
+  unless required.all? { |value| run.include?(value) } && run.scan(/gh attestation verify/).length == 2
+    fail_validation("#{name} must retain and verify exact attestation evidence")
+  end
+end
 
 completion_run = steps.fetch(completion_index).fetch("run", "")
-unless completion_run.include?("umbrella-chart-attestation") && completion_run.include?("release-artifacts/release-complete") &&
+unless completion_run.include?("release-state.rb complete release-artifacts/publication-state.json") &&
+       completion_run.include?("release-artifacts/release-metadata.json") &&
+       completion_run.include?("release-artifacts/release-complete") &&
+       completion_run.include?("release-artifacts/SHA256SUMS") &&
        attestations.all? { |attestation| steps.index(attestation) < completion_index }
-  fail_validation("release completion marker must follow every attestation")
+  fail_validation("release completion must verify all recorded publication and attestation evidence")
 end
 
 publisher = File.read(File.join(repo, "hack/publish-release-coordinate.sh"))
@@ -370,7 +458,7 @@ unless rollback_run.include?("extract-chart-crds.sh") && rollback_run.include?("
 end
 release_docs = File.read(File.join(repo, "RELEASING.md"))
 unless release_docs.include?("verify-installed-crds.rb") && release_docs.include?("controller scaled to zero") &&
-       release_docs.include?("release-complete")
+       release_docs.include?("prepare-crd-rollback.rb") && release_docs.include?("release-complete")
   fail_validation("release documentation is missing partial-publication or explicit CRD recovery")
 end
 

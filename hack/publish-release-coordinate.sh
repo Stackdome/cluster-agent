@@ -4,17 +4,49 @@ set -euo pipefail
 mode="${1:?usage: publish-release-coordinate.sh <check-image|publish-image|check-chart|publish-chart> ...}"
 shift
 
-not_found() {
-  grep -Eqi 'manifest unknown|manifest_unknown|name unknown|not found|404' "$1"
+is_explicit_manifest_absence() {
+  local output="$1" line saw_code=false
+  if grep -Eqi 'UNAUTHORIZED|DENIED|TOOMANYREQUESTS|rate[ -]?limit|x509|certificate|TLS|dial tcp|network|credential|malformed' <<<"$output"; then
+    return 1
+  fi
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    if [[ ! "$line" =~ (^|[^A-Z_])(MANIFEST_UNKNOWN|NAME_UNKNOWN)([^A-Z_]|$) ]]; then
+      return 1
+    fi
+    saw_code=true
+  done <<<"$output"
+  [[ "$saw_code" == true ]]
+}
+
+require_digest() {
+  local digest="$1" description="$2"
+  if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    echo "$description did not return exactly one SHA-256 digest" >&2
+    return 1
+  fi
+}
+
+parse_helm_digest() {
+  local output="$1" digest_lines digest
+  digest_lines="$(sed -n '/^Digest:/p' <<<"$output")"
+  if [[ ! "$digest_lines" =~ ^Digest:\ (sha256:[0-9a-f]{64})$ ]]; then
+    echo "Helm did not return exactly one valid Digest line" >&2
+    return 1
+  fi
+  digest="${BASH_REMATCH[1]}"
+  require_digest "$digest" "Helm"
+  printf '%s\n' "$digest"
 }
 
 check_image() {
   local crane="$1" repository="$2" version="$3" expected_digest="$4"
   local error_file existing
-  [[ "$expected_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+  require_digest "$expected_digest" "expected image"
   error_file="$(mktemp)"
   if existing="$("$crane" digest "$repository:$version" 2>"$error_file")"; then
     rm -f "$error_file"
+    require_digest "$existing" "$repository:$version"
     if [[ "$existing" != "$expected_digest" ]]; then
       echo "$repository:$version already resolves to $existing, expected $expected_digest; use a new version" >&2
       return 1
@@ -22,22 +54,31 @@ check_image() {
     printf '%s\n' "$existing"
     return 0
   fi
-  if ! not_found "$error_file"; then
-    cat "$error_file" >&2
-    rm -f "$error_file"
+
+  error="$(cat "$error_file")"
+  rm -f "$error_file"
+  if ! is_explicit_manifest_absence "$error"; then
+    printf '%s\n' "$error" >&2
     return 1
   fi
-  rm -f "$error_file"
   return 2
 }
 
 check_chart() {
   local helm="$1" registry="$2" name="$3" version="$4" archive="$5"
-  local tmp output pulled expected_sha actual_sha digest
+  local expected_digest="${6:-}" tmp output pulled expected_sha actual_sha digest
+  if [[ -n "$expected_digest" ]]; then
+    require_digest "$expected_digest" "expected chart"
+  fi
+
   tmp="$(mktemp -d)"
   if output="$("$helm" pull "$registry/$name" --version "$version" --destination "$tmp" 2>&1)"; then
     pulled="$tmp/$name-$version.tgz"
-    test -s "$pulled"
+    if [[ ! -s "$pulled" ]]; then
+      rm -rf "$tmp"
+      echo "Helm reported success without the expected chart archive" >&2
+      return 1
+    fi
     expected_sha="$(sha256sum "$archive" | awk '{print $1}')"
     actual_sha="$(sha256sum "$pulled" | awk '{print $1}')"
     if [[ "$actual_sha" != "$expected_sha" ]]; then
@@ -45,14 +86,21 @@ check_chart() {
       echo "$registry/$name:$version already contains different chart bytes; use a new version" >&2
       return 1
     fi
-    digest="$(sed -n 's/^Digest: \(sha256:[0-9a-f]\{64\}\)$/\1/p' <<<"$output")"
+    if ! digest="$(parse_helm_digest "$output")"; then
+      rm -rf "$tmp"
+      return 1
+    fi
     rm -rf "$tmp"
-    [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+    if [[ -n "$expected_digest" && "$digest" != "$expected_digest" ]]; then
+      echo "$registry/$name:$version resolved to $digest after push, expected $expected_digest" >&2
+      return 1
+    fi
     printf '%s\n' "$digest"
     return 0
   fi
+
   rm -rf "$tmp"
-  if ! grep -Eqi 'manifest unknown|manifest_unknown|name unknown|not found|404' <<<"$output"; then
+  if ! is_explicit_manifest_absence "$output"; then
     printf '%s\n' "$output" >&2
     return 1
   fi
@@ -61,37 +109,48 @@ check_chart() {
 
 case "$mode" in
   check-image)
-    check_image "$@" || status=$?
-    [[ "${status:-0}" == 0 || "${status:-0}" == 2 ]]
+    if check_image "$@"; then
+      exit 0
+    else
+      status=$?
+    fi
+    [[ "$status" == 2 ]] && exit 0
+    exit "$status"
     ;;
   publish-image)
     crane="$1"; repository="$2"; version="$3"; expected_digest="$4"
     if digest="$(check_image "$@")"; then
       printf '%s\n' "$digest"
       exit 0
-    elif [[ $? != 2 ]]; then
-      exit 1
+    else
+      status=$?
     fi
+    [[ "$status" == 2 ]] || exit "$status"
     "$crane" tag "$repository@$expected_digest" "$version"
     check_image "$crane" "$repository" "$version" "$expected_digest"
     ;;
   check-chart)
-    check_chart "$@" || status=$?
-    [[ "${status:-0}" == 0 || "${status:-0}" == 2 ]]
+    if check_chart "$@"; then
+      exit 0
+    else
+      status=$?
+    fi
+    [[ "$status" == 2 ]] && exit 0
+    exit "$status"
     ;;
   publish-chart)
     helm="$1"; registry="$2"; name="$3"; version="$4"; archive="$5"
     if digest="$(check_chart "$@")"; then
       printf '%s\n' "$digest"
       exit 0
-    elif [[ $? != 2 ]]; then
-      exit 1
+    else
+      status=$?
     fi
+    [[ "$status" == 2 ]] || exit "$status"
     output="$("$helm" push "$archive" "$registry" 2>&1)"
     printf '%s\n' "$output" >&2
-    digest="$(sed -n 's/^Digest: \(sha256:[0-9a-f]\{64\}\)$/\1/p' <<<"$output")"
-    [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-    printf '%s\n' "$digest"
+    digest="$(parse_helm_digest "$output")"
+    check_chart "$helm" "$registry" "$name" "$version" "$archive" "$digest"
     ;;
   *)
     echo "unknown publication mode: $mode" >&2

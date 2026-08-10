@@ -81,9 +81,12 @@ tagged or malformed reconciler image reference.
 ## Interrupted publication
 
 The release is complete only when `release-complete` exists in the uploaded
-evidence and `publication-state.txt` contains all two image tags, two chart
-pushes, and four attestations. A failed run leaves a partial version that must
-not be deployed.
+evidence. `publication-state.json` must contain the exact subject and digest for
+both image tags, both chart manifests, and all four attestations. Every
+attestation record also retains its action ID, validated bundle, and bundle
+checksum. `release-state.rb complete` verifies that evidence against
+`release-metadata.json` before it writes the completion marker and checksums. A
+failed run leaves a partial version that must not be deployed.
 
 Re-run the same reviewed tag only after inspecting the partial state. The
 workflow preflights all four final OCI coordinates before writing any of them.
@@ -92,24 +95,36 @@ is retryable. A different image digest or different deterministic chart archive
 fails closed; do not overwrite or delete it. Quarantine the partial coordinates
 from deployment and prepare a new patch/prerelease version. Attestation retries
 may add another attestation for the same immutable subject; they never change
-the subject digest.
+the subject digest. The workflow verifies every registry referrer with
+`gh attestation verify` and retains the exact bundle returned by the action.
 
 ## CRD rollback drill
 
 The workflow compares the candidate CRDs with the rollback chart before any
 release publication and records that prior chart's CRDs as
-`rollback-crds.yaml`. Helm does not roll back files in a chart's `crds/`
-directory. Run this drill against the exact alpha cluster before approving the
-release:
+`rollback-crds.yaml`. Public-alpha releases prohibit every CRD spec change,
+after canonicalizing only the documented API-server defaults recorded in
+`hack/crd_contract.rb`. Helm does not roll back files in a chart's `crds/`
+directory. The repository test is not a substitute for this live drill. Run it
+against the exact alpha cluster before approving the release:
 
 ```bash
 # Back up tenant custom resources and capture the installed controller revision.
 kubectl get clusterregistries,stacks,stackresources,imagebuilds -A -o yaml >pre-rollback-custom-resources.yaml
 kubectl scale deployment/<agent-deployment> --replicas=0 -n <namespace>
 
-# Restore and verify the CRD specs captured from the recorded rollback chart.
-kubectl apply --server-side --field-manager=stackdome-crd-rollback -f rollback-crds.yaml
 crd_names="$(ruby -ryaml -e 'puts YAML.load_stream(File.read(ARGV[0])).compact.map { |crd| crd.dig("metadata", "name") }.join(" ")' rollback-crds.yaml)"
+kubectl get customresourcedefinitions $crd_names -o yaml >installed-before-rollback.yaml
+
+# Fail before mutation if version topology or status.storedVersions cannot be
+# restored safely. Each object retains its live resourceVersion and replaces
+# the complete prior spec in one Kubernetes update.
+./hack/prepare-crd-rollback.rb \
+  rollback-crds.yaml installed-before-rollback.yaml >rollback-replacements.yaml
+kubectl replace -f rollback-replacements.yaml
+
+# Do not restart any controller until every prior spec and storage topology
+# has been verified exactly.
 kubectl get customresourcedefinitions $crd_names -o yaml >installed-rollback-crds.yaml
 ./hack/verify-installed-crds.rb rollback-crds.yaml installed-rollback-crds.yaml
 
@@ -118,6 +133,12 @@ helm rollback <release-name> <previous-revision> --namespace <namespace> --wait
 kubectl rollout status deployment/<agent-deployment> -n <namespace> --timeout=5m
 kubectl wait --for=condition=Available deployment/<agent-deployment> -n <namespace> --timeout=5m
 ```
+
+If `prepare-crd-rollback.rb` reports a version-topology or
+`status.storedVersions` mismatch, keep the controller scaled to zero. Perform
+and verify a Kubernetes storage-version migration using the cluster's supported
+migration procedure, capture a fresh backup, and restart this drill. Never edit
+`status.storedVersions` by hand.
 
 Finally create, read, update, and delete one disposable resource for every CRD
 reconciled by the previous controller and confirm existing tenant resources

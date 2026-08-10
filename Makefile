@@ -113,11 +113,13 @@ $(LOCALBIN):
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen-$(CONTROLLER_TOOLS_VERSION)
 ENVTEST ?= $(LOCALBIN)/setup-envtest-$(ENVTEST_VERSION)
 GOLANGCI_LINT = $(LOCALBIN)/golangci-lint-$(GOLANGCI_LINT_VERSION)
+GOLANGCI_LINT_PACKAGE = github.com/golangci/golangci-lint/v2/cmd/golangci-lint
+GO_TOOLCHAIN_VERSION = go$(shell awk '$$1 == "go" { print $$2 }' go.mod)
 
 ## Tool Versions
 CONTROLLER_TOOLS_VERSION ?= v0.17.3
 ENVTEST_VERSION ?= release-0.17
-GOLANGCI_LINT_VERSION ?= v1.54.2
+GOLANGCI_LINT_VERSION ?= v2.4.0
 
 .PHONY: controller-gen
 controller-gen: $(CONTROLLER_GEN) ## Download controller-gen locally if necessary.
@@ -130,9 +132,14 @@ $(ENVTEST): $(LOCALBIN)
 	$(call go-install-tool,$(ENVTEST),sigs.k8s.io/controller-runtime/tools/setup-envtest,$(ENVTEST_VERSION))
 
 .PHONY: golangci-lint
-golangci-lint: $(GOLANGCI_LINT) ## Download golangci-lint locally if necessary.
-$(GOLANGCI_LINT): $(LOCALBIN)
-	$(call go-install-tool,$(GOLANGCI_LINT),github.com/golangci/golangci-lint/cmd/golangci-lint,${GOLANGCI_LINT_VERSION})
+golangci-lint: $(LOCALBIN) ## Install golangci-lint with the exact Go toolchain declared by go.mod.
+	@if [ ! -x "$(GOLANGCI_LINT)" ] || \
+		[ "$$(go version -m "$(GOLANGCI_LINT)" 2>/dev/null | sed -n '1s/.*: //p')" != "$(GO_TOOLCHAIN_VERSION)" ]; then \
+		package="$(GOLANGCI_LINT_PACKAGE)@$(GOLANGCI_LINT_VERSION)"; \
+		echo "Downloading $${package} with $(GO_TOOLCHAIN_VERSION)"; \
+		GOTOOLCHAIN=$(GO_TOOLCHAIN_VERSION) GOBIN=$(LOCALBIN) go install "$${package}"; \
+		mv "$(LOCALBIN)/golangci-lint" "$(GOLANGCI_LINT)"; \
+	fi
 
 # go-install-tool will 'go install' any package with custom target and name of binary, if it doesn't exist
 # $1 - target path with name of binary (ideally with version)

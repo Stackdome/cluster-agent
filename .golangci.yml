@@ -1,40 +1,44 @@
+version: "2"
+
 run:
-  deadline: 5m
+  timeout: 5m
   allow-parallel-runners: true
 
-issues:
-  # don't skip warning about doc comments
-  # don't exclude the default set of lint
-  exclude-use-default: false
-  # restore some of the defaults
-  # (fill in the rest as needed)
-  exclude-rules:
-    - path: "api/*"
-      linters:
-        - lll
-    - path: "internal/*"
-      linters:
-        - dupl
-        - lll
 linters:
-  disable-all: true
+  default: none
   enable:
     - dupl
     - errcheck
-    - exportloopref
     - goconst
     - gocyclo
-    - gofmt
-    - goimports
-    - gosimple
+    - staticcheck
     - govet
     - ineffassign
     - lll
     - misspell
     - nakedret
     - prealloc
-    - staticcheck
-    - typecheck
     - unconvert
     - unparam
     - unused
+  exclusions:
+    # Keep v1's generated-file behavior during the v2 migration.
+    generated: lax
+    rules:
+      - path: "api/*"
+        linters:
+          - lll
+      - path: "internal/*"
+        linters:
+          - dupl
+          - lll
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
+issues:
+  # The v1 runner was incompatible with Go 1.25, so its existing findings were
+  # never an enforceable baseline. Reject issues introduced after this repair.
+  new-from-rev: 6c7a654224757b3d458ea51dc3887f43eb6b1a2d

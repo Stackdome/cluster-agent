@@ -6,9 +6,7 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/previous" "$tmp/current"
 
-write_crd() {
-  local path="$1" field_type="$2" required="$3"
-  cat >"$path" <<YAML
+cat >"$tmp/previous/example.yaml" <<'YAML'
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
@@ -29,55 +27,118 @@ spec:
           properties:
             spec:
               type: object
-              required: $required
               properties:
                 value:
-                  type: $field_type
+                  type: string
 YAML
+
+cp "$tmp/previous/example.yaml" "$tmp/current/example.yaml"
+checker="$repo_root/hack/verify-crd-compatibility.rb"
+installed_checker="$repo_root/hack/verify-installed-crds.rb"
+prepare="$repo_root/hack/prepare-crd-rollback.rb"
+
+verify_candidate() {
+  "$checker" --previous "$tmp/previous" --current "$tmp/current"
 }
 
-write_crd "$tmp/previous/example.yaml" string '[]'
-write_crd "$tmp/current/example.yaml" string '[]'
-"$repo_root/hack/verify-crd-compatibility.rb" --previous "$tmp/previous" --current "$tmp/current"
+expect_candidate_failure() {
+  local description="$1" ruby_mutation="$2"
+  cp "$tmp/previous/example.yaml" "$tmp/current/example.yaml"
+  ruby -ryaml - "$tmp/current/example.yaml" "$ruby_mutation" <<'RUBY'
+path, mutation = ARGV
+document = YAML.safe_load(File.read(path))
+eval(mutation)
+File.write(path, YAML.dump(document))
+RUBY
+  if verify_candidate >/dev/null 2>&1; then
+    echo "$description unexpectedly passed candidate CRD policy" >&2
+    exit 1
+  fi
+}
 
-cp "$tmp/current/example.yaml" "$tmp/current/extra.yaml"
+verify_candidate
+
+# These are the only documented API-server defaults ignored by the alpha policy.
+ruby -ryaml - "$tmp/current/example.yaml" <<'RUBY'
+path = ARGV.fetch(0)
+document = YAML.safe_load(File.read(path))
+document["spec"]["preserveUnknownFields"] = false
+document["spec"]["conversion"] = {"strategy" => "None"}
+document.dig("spec", "versions", 0)["deprecated"] = false
+File.write(path, YAML.dump(document))
+RUBY
+verify_candidate
+
+expect_candidate_failure "nullable mutation" \
+  'document.dig("spec", "versions", 0, "schema", "openAPIV3Schema", "properties", "spec", "properties", "value")["nullable"] = true'
+expect_candidate_failure "additionalProperties mutation" \
+  'document.dig("spec", "versions", 0, "schema", "openAPIV3Schema", "properties", "spec")["additionalProperties"] = false'
+expect_candidate_failure "Kubernetes map semantics mutation" \
+  'document.dig("spec", "versions", 0, "schema", "openAPIV3Schema", "properties", "spec")["x-kubernetes-map-type"] = "atomic"'
+expect_candidate_failure "conversion mutation" \
+  'document["spec"]["conversion"] = {"strategy" => "Webhook", "webhook" => {"conversionReviewVersions" => ["v1"], "clientConfig" => {"url" => "https://example.invalid"}}}'
+expect_candidate_failure "storage topology mutation" \
+  'document.dig("spec", "versions", 0)["storage"] = false; document["spec"]["versions"] << document.dig("spec", "versions", 0).merge("name" => "v1", "storage" => true)'
+expect_candidate_failure "schema type mutation" \
+  'document.dig("spec", "versions", 0, "schema", "openAPIV3Schema", "properties", "spec", "properties", "value")["type"] = "integer"'
+
+cp "$tmp/previous/example.yaml" "$tmp/current/extra.yaml"
 sed -i.bak 's/examples.stackdome.io/extra.stackdome.io/' "$tmp/current/extra.yaml"
-if "$repo_root/hack/verify-crd-compatibility.rb" --previous "$tmp/previous" --current "$tmp/current" >/dev/null 2>&1; then
-  echo "new rollback-unsafe CRD unexpectedly passed" >&2
+if verify_candidate >/dev/null 2>&1; then
+  echo "new CRD unexpectedly passed candidate CRD policy" >&2
   exit 1
 fi
 rm "$tmp/current/extra.yaml" "$tmp/current/extra.yaml.bak"
 
-write_crd "$tmp/current/example.yaml" integer '[]'
-if "$repo_root/hack/verify-crd-compatibility.rb" --previous "$tmp/previous" --current "$tmp/current" >/dev/null 2>&1; then
-  echo "CRD type mutation unexpectedly passed" >&2
-  exit 1
-fi
-
-write_crd "$tmp/current/example.yaml" string '[value]'
-if "$repo_root/hack/verify-crd-compatibility.rb" --previous "$tmp/previous" --current "$tmp/current" >/dev/null 2>&1; then
-  echo "new required CRD field unexpectedly passed" >&2
-  exit 1
-fi
-
 cp "$tmp/previous/example.yaml" "$tmp/rollback-crds.yaml"
-ruby -ryaml - "$tmp/previous/example.yaml" "$tmp/installed.yaml" <<'RUBY'
+write_installed() {
+  ruby -ryaml - "$tmp/previous/example.yaml" "$tmp/installed.yaml" <<'RUBY'
 source, destination = ARGV
 crd = YAML.safe_load(File.read(source))
+crd["metadata"]["resourceVersion"] = "12345"
 crd["spec"]["preserveUnknownFields"] = false
+crd["spec"]["conversion"] = {"strategy" => "None"}
+crd.dig("spec", "versions", 0)["deprecated"] = false
+crd["status"] = {"storedVersions" => ["v1alpha1"]}
 File.write(destination, YAML.dump({"apiVersion" => "v1", "kind" => "List", "items" => [crd]}))
 RUBY
-"$repo_root/hack/verify-installed-crds.rb" "$tmp/rollback-crds.yaml" "$tmp/installed.yaml"
+}
 
-ruby -ryaml - "$tmp/installed.yaml" <<'RUBY'
-path = ARGV.fetch(0)
+expect_installed_failure() {
+  local description="$1" ruby_mutation="$2"
+  write_installed
+  ruby -ryaml - "$tmp/installed.yaml" "$ruby_mutation" <<'RUBY'
+path, mutation = ARGV
 document = YAML.safe_load(File.read(path))
-document.dig("items", 0, "spec", "versions", 0, "schema", "openAPIV3Schema", "properties", "spec", "properties", "value")["type"] = "integer"
+eval(mutation)
 File.write(path, YAML.dump(document))
 RUBY
-if "$repo_root/hack/verify-installed-crds.rb" "$tmp/rollback-crds.yaml" "$tmp/installed.yaml" >/dev/null 2>&1; then
-  echo "installed CRD mismatch unexpectedly passed" >&2
-  exit 1
-fi
+  if "$installed_checker" "$tmp/rollback-crds.yaml" "$tmp/installed.yaml" >/dev/null 2>&1; then
+    echo "$description unexpectedly passed installed CRD verification" >&2
+    exit 1
+  fi
+}
 
-echo "CRD compatibility negative tests passed"
+write_installed
+"$installed_checker" "$tmp/rollback-crds.yaml" "$tmp/installed.yaml"
+expect_installed_failure "extra installed conversion" \
+  'document.dig("items", 0, "spec")["conversion"] = {"strategy" => "Webhook", "webhook" => {}}'
+expect_installed_failure "extra installed schema field" \
+  'document.dig("items", 0, "spec", "versions", 0, "schema", "openAPIV3Schema")["nullable"] = true'
+expect_installed_failure "stored version mismatch" \
+  'document.dig("items", 0, "status")["storedVersions"] = ["v1"]'
+expect_installed_failure "served topology mismatch" \
+  'document.dig("items", 0, "spec", "versions", 0)["served"] = false'
+
+write_installed
+"$prepare" "$tmp/rollback-crds.yaml" "$tmp/installed.yaml" >"$tmp/replacements.yaml"
+ruby -ryaml - "$tmp/rollback-crds.yaml" "$tmp/replacements.yaml" <<'RUBY'
+expected_path, replacement_path = ARGV
+expected = YAML.load_stream(File.read(expected_path)).compact.fetch(0)
+replacement = YAML.load_stream(File.read(replacement_path)).compact.fetch(0)
+abort "rollback replacement did not preserve resourceVersion" unless replacement.dig("metadata", "resourceVersion") == "12345"
+abort "rollback replacement did not use the complete prior spec" unless replacement["spec"] == expected["spec"]
+abort "rollback replacement must not include status" if replacement.key?("status")
+RUBY
+
+echo "strict alpha CRD contract tests passed"

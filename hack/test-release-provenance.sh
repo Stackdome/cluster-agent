@@ -8,7 +8,8 @@ new_fixture() {
   fixture="$(mktemp -d)"
   mkdir -p "$fixture/.github/workflows" "$fixture/config/docker" \
     "$fixture/charts/stackdome-agent-standalone" "$fixture/charts/stackdome-agent" "$fixture/hack"
-  cp "$repo_root/go.mod" "$repo_root/.dockerignore" "$fixture/"
+  cp "$repo_root/go.mod" "$repo_root/.dockerignore" "$repo_root/.golangci.yml" \
+    "$repo_root/Makefile" "$fixture/"
   cp "$repo_root/.github/workflows/"*.yaml "$fixture/.github/workflows/"
   cp "$repo_root/config/docker/"*.Dockerfile "$fixture/config/docker/"
   cp "$repo_root/charts/stackdome-agent-standalone/Chart.yaml" "$fixture/charts/stackdome-agent-standalone/"
@@ -40,7 +41,7 @@ expect_failure() {
 "$repo_root/hack/test-release-evidence.sh"
 "$repo_root/hack/test-generate-release-sboms.sh"
 "$repo_root/hack/test-release-publication.sh"
-"$repo_root/hack/test-release-recovery.rb"
+"$repo_root/hack/test-release-recovery.sh"
 "$repo_root/hack/test-crd-compatibility.sh"
 "$repo_root/hack/test-oci-index.sh"
 
@@ -51,6 +52,14 @@ expect_failure "$fixture" "mutable base image"
 fixture="$(new_fixture)"
 sed -i.bak 's/actions\/checkout@[0-9a-f]*/actions\/checkout@v4/' "$fixture/.github/workflows/ci.yaml"
 expect_failure "$fixture" "action is not pinned by commit"
+
+fixture="$(new_fixture)"
+sed -i.bak 's/GOLANGCI_LINT_VERSION ?= v2.4.0/GOLANGCI_LINT_VERSION ?= v2.3.1/' "$fixture/Makefile"
+expect_failure "$fixture" "golangci-lint must use the first maintained release with Go 1.25 support"
+
+fixture="$(new_fixture)"
+sed -i.bak '/fetch-depth: 0/d' "$fixture/.github/workflows/ci.yaml"
+expect_failure "$fixture" "CI checkout must fetch the lint baseline without credentials"
 
 fixture="$(new_fixture)"
 sed -i.bak 's/moby\/buildkit@sha256:[0-9a-f]*/moby\/buildkit:buildx-stable-1/' "$fixture/.github/workflows/release.yaml"
@@ -146,6 +155,44 @@ abort "agent output marker not found" unless text.sub!(marker, marker + "       
 File.write(path, text)
 RUBY
 expect_failure "$fixture" "build_agent must publish only an untagged multi-architecture digest"
+
+mutate_attestation() {
+  local id="$1"
+  local old="$2"
+  local new="$3"
+  local expected="$4"
+  local fixture
+  fixture="$(new_fixture)"
+  ID="$id" OLD="$old" NEW="$new" ruby - "$fixture/.github/workflows/release.yaml" <<'RUBY'
+path = ARGV.fetch(0)
+text = File.read(path)
+pattern = /(^      - name: [^\n]+\n        id: #{Regexp.escape(ENV.fetch("ID"))}\n.*?)(?=^      - name:)/m
+block = text[pattern]
+abort "attestation block not found" unless block
+abort "attestation mutation target not found" unless block.sub!(ENV.fetch("OLD"), ENV.fetch("NEW"))
+text.sub!(pattern, block)
+File.write(path, text)
+RUBY
+  expect_failure "$fixture" "$expected"
+}
+
+mutate_attestation attest_agent \
+  'subject-name: ${{ env.AGENT_IMAGE }}' \
+  'subject-name: ${{ env.RECONCILER_IMAGE }}' \
+  'attest_agent must attest its exact published OCI subject'
+mutate_attestation attest_chart_standalone \
+  'subject-digest: ${{ steps.chart_standalone.outputs.digest }}' \
+  'subject-digest: ${{ steps.chart_umbrella.outputs.digest }}' \
+  'attest_chart_standalone must attest its exact published OCI subject'
+mutate_attestation attest_chart_umbrella \
+  'subject-name: quay.io/stackdome/charts/stackdome-agent:${{ steps.version.outputs.chart_version }}' \
+  'subject-path: release-artifacts/stackdome-agent-${{ steps.version.outputs.chart_version }}.tgz' \
+  'attest_chart_umbrella must attest its exact published OCI subject'
+
+fixture="$(new_fixture)"
+sed -i.bak 's/steps.attest_agent.outputs.bundle-path/steps.attest_reconciler.outputs.bundle-path/' \
+  "$fixture/.github/workflows/release.yaml"
+expect_failure "$fixture" "Record agent attestation must retain and verify exact attestation evidence"
 
 fixture="$(new_fixture)"
 sed -i.bak 's/appVersion: "v0.6.12-alpha-rc1"/appVersion: "v0.6.11-alpha-rc6"/' "$fixture/charts/stackdome-agent-standalone/Chart.yaml"

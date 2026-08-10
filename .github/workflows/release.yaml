@@ -91,6 +91,7 @@ jobs:
           required_go="$(awk '$1 == "go" { print $2 }' go.mod)"
           test "$(go env GOVERSION)" = "go$required_go"
           make test
+          make lint
           git diff --exit-code
           ./hack/test-release-provenance.sh
           helm lint charts/stackdome-agent-standalone
@@ -323,7 +324,7 @@ jobs:
             "release-artifacts/stackdome-agent-standalone-$chart_version.tgz"
           ./hack/publish-release-coordinate.sh check-chart helm "$CHART_REGISTRY" \
             stackdome-agent "$chart_version" "release-artifacts/stackdome-agent-$chart_version.tgz"
-          printf '%s\n' preflight-complete >release-artifacts/publication-state.txt
+          ./hack/release-state.rb init release-artifacts/publication-state.json
 
       - name: Promote verified agent digest
         id: promote_agent
@@ -335,7 +336,9 @@ jobs:
           echo "digest=$promoted" >>"$GITHUB_OUTPUT"
 
       - name: Record agent image publication
-        run: printf '%s\n' agent-image-tag >>release-artifacts/publication-state.txt
+        run: |
+          ./hack/release-state.rb record-publication release-artifacts/publication-state.json \
+            agent-image-tag "$AGENT_IMAGE" "${{ steps.promote_agent.outputs.digest }}"
 
       - name: Promote verified reconciler digest
         id: promote_reconciler
@@ -347,7 +350,9 @@ jobs:
           echo "digest=$promoted" >>"$GITHUB_OUTPUT"
 
       - name: Record reconciler image publication
-        run: printf '%s\n' reconciler-image-tag >>release-artifacts/publication-state.txt
+        run: |
+          ./hack/release-state.rb record-publication release-artifacts/publication-state.json \
+            reconciler-image-tag "$RECONCILER_IMAGE" "${{ steps.promote_reconciler.outputs.digest }}"
 
       - name: Publish standalone chart idempotently
         id: chart_standalone
@@ -360,7 +365,12 @@ jobs:
           echo "digest=$digest" >>"$GITHUB_OUTPUT"
 
       - name: Record standalone chart publication
-        run: printf '%s\n' standalone-chart-push >>release-artifacts/publication-state.txt
+        run: |
+          chart_version="${{ steps.version.outputs.chart_version }}"
+          ./hack/release-state.rb record-publication release-artifacts/publication-state.json \
+            standalone-chart-push \
+            "quay.io/stackdome/charts/stackdome-agent-standalone:$chart_version" \
+            "${{ steps.chart_standalone.outputs.digest }}"
 
       - name: Publish umbrella chart idempotently
         id: chart_umbrella
@@ -372,9 +382,14 @@ jobs:
           echo "digest=$digest" >>"$GITHUB_OUTPUT"
 
       - name: Record umbrella chart publication
-        run: printf '%s\n' umbrella-chart-push >>release-artifacts/publication-state.txt
+        run: |
+          chart_version="${{ steps.version.outputs.chart_version }}"
+          ./hack/release-state.rb record-publication release-artifacts/publication-state.json \
+            umbrella-chart-push "quay.io/stackdome/charts/stackdome-agent:$chart_version" \
+            "${{ steps.chart_umbrella.outputs.digest }}"
 
       - name: Attest promoted agent digest
+        id: attest_agent
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
         with:
           subject-name: ${{ env.AGENT_IMAGE }}
@@ -382,9 +397,21 @@ jobs:
           push-to-registry: true
 
       - name: Record agent attestation
-        run: printf '%s\n' agent-attestation >>release-artifacts/publication-state.txt
+        run: |
+          mkdir -p release-artifacts/attestations
+          ./hack/release-state.rb record-attestation release-artifacts/publication-state.json \
+            agent-attestation "$AGENT_IMAGE" "${{ steps.promote_agent.outputs.digest }}" \
+            "${{ steps.attest_agent.outputs.attestation-id }}" \
+            "${{ steps.attest_agent.outputs.bundle-path }}" release-artifacts/attestations/agent.json
+          gh attestation verify \
+            "oci://$AGENT_IMAGE@${{ steps.promote_agent.outputs.digest }}" \
+            --repo "$GITHUB_REPOSITORY" --bundle release-artifacts/attestations/agent.json
+          gh attestation verify \
+            "oci://$AGENT_IMAGE@${{ steps.promote_agent.outputs.digest }}" \
+            --repo "$GITHUB_REPOSITORY" --bundle-from-oci
 
       - name: Attest promoted reconciler digest
+        id: attest_reconciler
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
         with:
           subject-name: ${{ env.RECONCILER_IMAGE }}
@@ -392,7 +419,19 @@ jobs:
           push-to-registry: true
 
       - name: Record reconciler attestation
-        run: printf '%s\n' reconciler-attestation >>release-artifacts/publication-state.txt
+        run: |
+          ./hack/release-state.rb record-attestation release-artifacts/publication-state.json \
+            reconciler-attestation "$RECONCILER_IMAGE" \
+            "${{ steps.promote_reconciler.outputs.digest }}" \
+            "${{ steps.attest_reconciler.outputs.attestation-id }}" \
+            "${{ steps.attest_reconciler.outputs.bundle-path }}" \
+            release-artifacts/attestations/reconciler.json
+          gh attestation verify \
+            "oci://$RECONCILER_IMAGE@${{ steps.promote_reconciler.outputs.digest }}" \
+            --repo "$GITHUB_REPOSITORY" --bundle release-artifacts/attestations/reconciler.json
+          gh attestation verify \
+            "oci://$RECONCILER_IMAGE@${{ steps.promote_reconciler.outputs.digest }}" \
+            --repo "$GITHUB_REPOSITORY" --bundle-from-oci
 
       - name: Bundle CRDs and record immutable release set
         shell: bash
@@ -418,7 +457,7 @@ jobs:
             --argjson api_versions "$api_versions" \
             --arg rollback_chart "quay.io/stackdome/charts/stackdome-agent:$ROLLBACK_CHART_VERSION@${{ steps.rollback.outputs.digest }}" \
             --arg rollback_crd_bundle_sha256 "${{ steps.rollback.outputs.crd_bundle_sha256 }}" \
-            --arg rollback_crd_apply 'kubectl apply --server-side --field-manager=stackdome-crd-rollback -f rollback-crds.yaml' \
+            --arg rollback_crd_replace './hack/prepare-crd-rollback.rb rollback-crds.yaml installed-before-rollback.yaml >rollback-replacements.yaml && kubectl replace -f rollback-replacements.yaml' \
             --arg rollback_command 'helm rollback <release-name> <previous-revision> --namespace <namespace> --wait' \
             '{
               source_commit: $source_commit,
@@ -436,31 +475,64 @@ jobs:
               sbom_formats: ["SPDX-JSON", "CycloneDX-JSON"],
               rollback_chart: $rollback_chart,
               rollback_crd_bundle_sha256: $rollback_crd_bundle_sha256,
-              crd_compatibility: "backward-compatible gate passed; explicit prior-bundle recovery recorded",
-              rollback_crd_apply: $rollback_crd_apply,
+              crd_compatibility: "candidate specs exactly match the protected rollback release after documented API-server defaults",
+              rollback_crd_replace: $rollback_crd_replace,
               rollback_command: $rollback_command
             }' >release-artifacts/release-metadata.json
 
-      - name: Attest standalone chart package
+      - name: Attest standalone chart OCI digest
+        id: attest_chart_standalone
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
         with:
-          subject-path: release-artifacts/stackdome-agent-standalone-${{ steps.version.outputs.chart_version }}.tgz
+          subject-name: quay.io/stackdome/charts/stackdome-agent-standalone:${{ steps.version.outputs.chart_version }}
+          subject-digest: ${{ steps.chart_standalone.outputs.digest }}
+          push-to-registry: true
 
       - name: Record standalone chart attestation
-        run: printf '%s\n' standalone-chart-attestation >>release-artifacts/publication-state.txt
+        run: |
+          subject="quay.io/stackdome/charts/stackdome-agent-standalone:${{ steps.version.outputs.chart_version }}"
+          ./hack/release-state.rb record-attestation release-artifacts/publication-state.json \
+            standalone-chart-attestation "$subject" "${{ steps.chart_standalone.outputs.digest }}" \
+            "${{ steps.attest_chart_standalone.outputs.attestation-id }}" \
+            "${{ steps.attest_chart_standalone.outputs.bundle-path }}" \
+            release-artifacts/attestations/standalone-chart.json
+          gh attestation verify \
+            "oci://$subject@${{ steps.chart_standalone.outputs.digest }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --bundle release-artifacts/attestations/standalone-chart.json
+          gh attestation verify \
+            "oci://$subject@${{ steps.chart_standalone.outputs.digest }}" \
+            --repo "$GITHUB_REPOSITORY" --bundle-from-oci
 
-      - name: Attest umbrella chart package
+      - name: Attest umbrella chart OCI digest
+        id: attest_chart_umbrella
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
         with:
-          subject-path: release-artifacts/stackdome-agent-${{ steps.version.outputs.chart_version }}.tgz
+          subject-name: quay.io/stackdome/charts/stackdome-agent:${{ steps.version.outputs.chart_version }}
+          subject-digest: ${{ steps.chart_umbrella.outputs.digest }}
+          push-to-registry: true
 
-      - name: Record umbrella chart attestation and release completion
+      - name: Record umbrella chart attestation
         run: |
-          printf '%s\n' umbrella-chart-attestation >>release-artifacts/publication-state.txt
-          printf '%s\n' complete >release-artifacts/release-complete
-          find release-artifacts -maxdepth 1 -type f ! -name SHA256SUMS -print0 \
-            | sort --zero-terminated \
-            | xargs --null sha256sum >release-artifacts/SHA256SUMS
+          subject="quay.io/stackdome/charts/stackdome-agent:${{ steps.version.outputs.chart_version }}"
+          ./hack/release-state.rb record-attestation release-artifacts/publication-state.json \
+            umbrella-chart-attestation "$subject" "${{ steps.chart_umbrella.outputs.digest }}" \
+            "${{ steps.attest_chart_umbrella.outputs.attestation-id }}" \
+            "${{ steps.attest_chart_umbrella.outputs.bundle-path }}" \
+            release-artifacts/attestations/umbrella-chart.json
+          gh attestation verify \
+            "oci://$subject@${{ steps.chart_umbrella.outputs.digest }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --bundle release-artifacts/attestations/umbrella-chart.json
+          gh attestation verify \
+            "oci://$subject@${{ steps.chart_umbrella.outputs.digest }}" \
+            --repo "$GITHUB_REPOSITORY" --bundle-from-oci
+
+      - name: Verify release state and record completion
+        run: |
+          ./hack/release-state.rb complete release-artifacts/publication-state.json \
+            release-artifacts/release-metadata.json release-artifacts \
+            release-artifacts/release-complete release-artifacts/SHA256SUMS
 
       - name: Upload immutable release evidence
         if: always()
