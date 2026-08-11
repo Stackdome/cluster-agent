@@ -197,55 +197,6 @@ func TestBuildService(t *testing.T) {
 	}
 }
 
-func TestDeletionResourcesUseExactStableZotNames(t *testing.T) {
-	builder := newTestBuilder(t)
-	reg := newTestRegistry("test-reg", 5000)
-	deletionBuilder, ok := builder.(registry.RegistryDeletionResourceBuilder)
-	if !ok {
-		t.Fatal("Zot builder does not implement RegistryDeletionResourceBuilder")
-	}
-
-	resources := deletionBuilder.DeletionResources(reg)
-
-	if resources.StatefulSet.Namespace != "stackdome-registry" || resources.StatefulSet.Name != "test-reg" {
-		t.Fatalf("unexpected StatefulSet key: %#v", resources.StatefulSet)
-	}
-	if len(resources.Pods) != 1 || resources.Pods[0].Namespace != "stackdome-registry" || resources.Pods[0].Name != "test-reg-0" {
-		t.Fatalf("unexpected Pod keys: %#v", resources.Pods)
-	}
-	if len(resources.PersistentVolumeClaims) != 1 || resources.PersistentVolumeClaims[0].Namespace != "stackdome-registry" || resources.PersistentVolumeClaims[0].Name != "storage-test-reg-0" {
-		t.Fatalf("unexpected PVC keys: %#v", resources.PersistentVolumeClaims)
-	}
-}
-
-func TestBuildStatefulSetLabelsRegistryStorageForExactIdentification(t *testing.T) {
-	configMap := &corev1.ConfigMap{
-		ObjectMeta: v1.ObjectMeta{Name: "test-reg-config", Namespace: "stackdome-registry"},
-		Data:       map[string]string{ZotConfigKey: "{}"},
-	}
-	builder := newTestBuilderWithObjects(t, configMap)
-	reg := newTestRegistry("test-reg", 5000)
-	reg.Spec.Auth = nil
-
-	statefulSet, err := builder.BuildStatefulSet(context.Background(), reg)
-	if err != nil {
-		t.Fatalf("BuildStatefulSet returned an error: %v", err)
-	}
-
-	if got := statefulSet.Labels[registry.RegistryNameLabel]; got != "test-reg" {
-		t.Errorf("StatefulSet registry identity label = %q, want %q", got, "test-reg")
-	}
-	if got := statefulSet.Spec.Template.Labels[registry.RegistryNameLabel]; got != "test-reg" {
-		t.Errorf("Pod registry identity label = %q, want %q", got, "test-reg")
-	}
-	if len(statefulSet.Spec.VolumeClaimTemplates) != 1 {
-		t.Fatalf("VolumeClaimTemplates length = %d, want 1", len(statefulSet.Spec.VolumeClaimTemplates))
-	}
-	if got := statefulSet.Spec.VolumeClaimTemplates[0].Labels[registry.RegistryNameLabel]; got != "test-reg" {
-		t.Errorf("PVC registry identity label = %q, want %q", got, "test-reg")
-	}
-}
-
 func TestBuildRegistryConfigReconcilerDaemonset_ContainerdRuntime(t *testing.T) {
 	builder := newTestBuilder(t)
 	reg := newTestRegistry("test-reg", 5000)

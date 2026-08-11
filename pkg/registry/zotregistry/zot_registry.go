@@ -20,11 +20,9 @@ import (
 )
 
 const (
-	HtpasswordKey      = "htpasswd"
-	ZotConfigKey       = "config.json"
-	registryNameLabel  = registry.RegistryNameLabel
-	storageVolumeName  = "storage"
-	registryPodOrdinal = 0
+	HtpasswordKey     = "htpasswd"
+	ZotConfigKey      = "config.json"
+	storageVolumeName = "storage"
 
 	// defaultCacheTagsToKeep is used when LayerCachingOpts.TagsToKeep is unset.
 	// Kaniko pushes ~6 tags per build; keeping 10 retains roughly the latest
@@ -206,9 +204,6 @@ func (z *zotRegistry) BuildStatefulSet(ctx context.Context, registry *registryv1
 		ObjectMeta: v1.ObjectMeta{
 			Name:      registry.Name,
 			Namespace: z.opts.Namespace,
-			Labels: map[string]string{
-				registryNameLabel: registry.Name,
-			},
 		},
 		Spec: appsv1.StatefulSetSpec{
 			Replicas:    ptr.To(int32(1)),
@@ -221,8 +216,7 @@ func (z *zotRegistry) BuildStatefulSet(ctx context.Context, registry *registryv1
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: v1.ObjectMeta{
 					Labels: map[string]string{
-						"app":             registry.Name,
-						registryNameLabel: registry.Name,
+						"app": registry.Name,
 					},
 					// Allow the statefulset to be updated if the config changes.
 					Annotations: map[string]string{
@@ -289,9 +283,6 @@ func (z *zotRegistry) BuildStatefulSet(ctx context.Context, registry *registryv1
 				{
 					ObjectMeta: v1.ObjectMeta{
 						Name: storageVolumeName,
-						Labels: map[string]string{
-							registryNameLabel: registry.Name,
-						},
 					},
 					Spec: pvcSpec,
 				},
@@ -342,24 +333,6 @@ func (z *zotRegistry) BuildStatefulSet(ctx context.Context, registry *registryv1
 	}
 	sts.Spec.Template.Spec.Containers[0].Resources = resources
 	return sts, nil
-}
-
-func (z *zotRegistry) DeletionResources(clusterRegistry *registryv1alpha1.ClusterRegistry) registry.RegistryDeletionResources {
-	statefulSetName := clusterRegistry.RegistryStatefulSetName()
-	return registry.RegistryDeletionResources{
-		StatefulSet: client.ObjectKey{
-			Name:      statefulSetName,
-			Namespace: z.opts.Namespace,
-		},
-		Pods: []client.ObjectKey{{
-			Name:      fmt.Sprintf("%s-%d", statefulSetName, registryPodOrdinal),
-			Namespace: z.opts.Namespace,
-		}},
-		PersistentVolumeClaims: []client.ObjectKey{{
-			Name:      fmt.Sprintf("%s-%s-%d", storageVolumeName, statefulSetName, registryPodOrdinal),
-			Namespace: z.opts.Namespace,
-		}},
-	}
 }
 
 func (z *zotRegistry) BuildService(ctx context.Context, registry *registryv1alpha1.ClusterRegistry) (*corev1.Service, string, error) {

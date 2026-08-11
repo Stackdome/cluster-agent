@@ -113,13 +113,12 @@ func TestRegistryDeletionRetainsFinalizerUntilExactResourcesAreAbsent(t *testing
 	ctx := context.Background()
 	registry := deletingRegistry("test-reg")
 	statefulSet := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: "test-reg", Namespace: registryNamespace}}
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "test-reg-0", Namespace: registryNamespace}}
 	pvc := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "storage-test-reg-0", Namespace: registryNamespace}}
 	unrelatedPVC := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "storage-other-reg-0", Namespace: registryNamespace}}
-	reconciler, k8sClient := deletionTestReconciler(t, registry, statefulSet, pod, pvc, unrelatedPVC)
+	reconciler, k8sClient := deletionTestReconciler(t, registry, statefulSet, pvc, unrelatedPVC)
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: registry.Name}}
 
-	for step, deleted := range []client.Object{statefulSet, pod, pvc} {
+	for step, deleted := range []client.Object{statefulSet, pvc} {
 		result, err := reconciler.Reconcile(ctx, req)
 		if err != nil {
 			t.Fatalf("reconcile step %d returned an error: %v", step+1, err)
@@ -212,35 +211,6 @@ func TestRegistryDeletionRetriesTransientPVCErrors(t *testing.T) {
 				t.Fatalf("ClusterRegistry still exists after cleanup completed: %v", err)
 			}
 		})
-	}
-}
-
-func TestPreserveExistingVolumeClaimTemplateMetadataForStatefulSetUpdate(t *testing.T) {
-	desired := &appsv1.StatefulSet{Spec: appsv1.StatefulSetSpec{
-		VolumeClaimTemplates: []corev1.PersistentVolumeClaim{{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:   "storage",
-				Labels: map[string]string{reg.RegistryNameLabel: "test-reg"},
-			},
-		}},
-	}}
-	existing := &appsv1.StatefulSet{Spec: appsv1.StatefulSetSpec{
-		VolumeClaimTemplates: []corev1.PersistentVolumeClaim{{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:        "storage",
-				Annotations: map[string]string{"volume.beta.kubernetes.io/storage-provisioner": "example"},
-			},
-		}},
-	}}
-
-	preserveVolumeClaimTemplateMetadata(desired, existing)
-
-	claim := desired.Spec.VolumeClaimTemplates[0]
-	if len(claim.Labels) != 0 {
-		t.Fatalf("desired claim labels = %#v, want existing empty labels", claim.Labels)
-	}
-	if got := claim.Annotations["volume.beta.kubernetes.io/storage-provisioner"]; got != "example" {
-		t.Fatalf("desired claim annotation = %q, want existing metadata", got)
 	}
 }
 

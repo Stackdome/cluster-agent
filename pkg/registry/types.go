@@ -12,18 +12,7 @@ import (
 const (
 	RegistryConfigReconcilerDaemonSetName = "registry-config-reconciler"
 	RegistryConfigHashAnnotation          = "RegistryConfigHash"
-	RegistryNameLabel                     = "registry.stackdome.io/name"
 )
-
-type RegistryDeletionResources struct {
-	StatefulSet            client.ObjectKey
-	Pods                   []client.ObjectKey
-	PersistentVolumeClaims []client.ObjectKey
-}
-
-type RegistryDeletionResourceBuilder interface {
-	DeletionResources(registry *registryv1alpha1.ClusterRegistry) RegistryDeletionResources
-}
 
 type RuntimeType string
 

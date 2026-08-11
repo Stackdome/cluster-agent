@@ -319,14 +319,10 @@ func (r *RegistryReconciler) reconcileDelete(ctx context.Context, registry *regi
 		return ctrl.Result{}, err
 	}
 
-	deletionBuilder, ok := r.registryBuilder.(reg.RegistryDeletionResourceBuilder)
-	if !ok {
-		return ctrl.Result{}, fmt.Errorf("registry builder does not provide exact deletion resources")
-	}
-	resources := deletionBuilder.DeletionResources(registry)
+	statefulSetName := registry.RegistryStatefulSetName()
 	pending, err := r.deleteRegistryResource(ctx, &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{
-		Name:      resources.StatefulSet.Name,
-		Namespace: resources.StatefulSet.Namespace,
+		Name:      statefulSetName,
+		Namespace: registryNamespace,
 	}})
 	if err != nil {
 		return ctrl.Result{}, err
@@ -335,34 +331,24 @@ func (r *RegistryReconciler) reconcileDelete(ctx context.Context, registry *regi
 		return ctrl.Result{RequeueAfter: registryDeletionRequeueAfter}, nil
 	}
 
-	for _, key := range resources.Pods {
-		pending, err = r.deleteRegistryResource(ctx, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
-			Name:      key.Name,
-			Namespace: key.Namespace,
-		}})
-		if err != nil {
-			return ctrl.Result{}, err
-		}
-		if pending {
-			return ctrl.Result{RequeueAfter: registryDeletionRequeueAfter}, nil
-		}
+	pending, err = r.deleteRegistryResource(ctx, &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{
+		Name:      registryPersistentVolumeClaimName(statefulSetName),
+		Namespace: registryNamespace,
+	}})
+	if err != nil {
+		return ctrl.Result{}, err
 	}
-
-	for _, key := range resources.PersistentVolumeClaims {
-		pending, err = r.deleteRegistryResource(ctx, &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{
-			Name:      key.Name,
-			Namespace: key.Namespace,
-		}})
-		if err != nil {
-			return ctrl.Result{}, err
-		}
-		if pending {
-			return ctrl.Result{RequeueAfter: registryDeletionRequeueAfter}, nil
-		}
+	if pending {
+		return ctrl.Result{RequeueAfter: registryDeletionRequeueAfter}, nil
 	}
 
 	registry.Status.InternalURL = ""
 	return ctrl.Result{}, nil
+}
+
+func registryPersistentVolumeClaimName(statefulSetName string) string {
+	// Registries use one StatefulSet replica and a volume claim template named "storage".
+	return fmt.Sprintf("storage-%s-0", statefulSetName)
 }
 
 func (r *RegistryReconciler) deleteRegistryResource(ctx context.Context, resource client.Object) (bool, error) {
@@ -503,7 +489,6 @@ func (r *RegistryReconciler) reconcileRegistryStatefulSet(ctx context.Context, r
 		}
 		return resultNil, err
 	}
-	preserveVolumeClaimTemplateMetadata(desiredSts, existingSts)
 	if err := r.Client.Patch(ctx, desiredSts, client.Apply, &client.PatchOptions{
 		Force:        ptr.To(true),
 		FieldManager: registryController,
@@ -528,21 +513,6 @@ func (r *RegistryReconciler) reconcileRegistryStatefulSet(ctx context.Context, r
 	registry.Status.ObservedGeneration = registry.Generation
 
 	return resultStop, nil
-}
-
-func preserveVolumeClaimTemplateMetadata(desired, existing *appsv1.StatefulSet) {
-	existingByName := make(map[string]metav1.ObjectMeta, len(existing.Spec.VolumeClaimTemplates))
-	for _, claim := range existing.Spec.VolumeClaimTemplates {
-		existingByName[claim.Name] = claim.ObjectMeta
-	}
-	for i := range desired.Spec.VolumeClaimTemplates {
-		metadata, ok := existingByName[desired.Spec.VolumeClaimTemplates[i].Name]
-		if !ok {
-			continue
-		}
-		desired.Spec.VolumeClaimTemplates[i].Labels = metadata.Labels
-		desired.Spec.VolumeClaimTemplates[i].Annotations = metadata.Annotations
-	}
 }
 
 func (r *RegistryReconciler) reconcileRegistryHeadlessService(ctx context.Context, registry *registryv1alpha1.ClusterRegistry) (subReconcilerResult, error) {
