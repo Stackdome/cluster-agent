@@ -41,7 +41,7 @@ rules:
   resources:
     - clusterregistries
     - clusterregistries/status
-  # TODO Add finalizers
+    - clusterregistries/finalizers
   verbs:
     - get
     - list
@@ -137,6 +137,7 @@ rules:
     - deployments
     - daemonsets
     - replicasets
+    - statefulsets
   verbs:
     - get
     - watch
@@ -144,6 +145,7 @@ rules:
     - list
     - patch
     - create
+    - delete
 - apiGroups:
     - storage.k8s.io
   resources:

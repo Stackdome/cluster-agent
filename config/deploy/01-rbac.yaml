@@ -83,7 +83,7 @@ rules:
   resources:
   - clusterregistries
   - clusterregistries/status
-  # TODO Add finalizers
+  - clusterregistries/finalizers
   verbs:
   - get
   - list

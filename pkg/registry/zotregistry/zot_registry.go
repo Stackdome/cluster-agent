@@ -20,8 +20,9 @@ import (
 )
 
 const (
-	HtpasswordKey = "htpasswd"
-	ZotConfigKey  = "config.json"
+	HtpasswordKey     = "htpasswd"
+	ZotConfigKey      = "config.json"
+	storageVolumeName = "storage"
 
 	// defaultCacheTagsToKeep is used when LayerCachingOpts.TagsToKeep is unset.
 	// Kaniko pushes ~6 tags per build; keeping 10 retains roughly the latest
@@ -257,7 +258,7 @@ func (z *zotRegistry) BuildStatefulSet(ctx context.Context, registry *registryv1
 									SubPath:   ZotConfigKey,
 								},
 								{
-									Name:      "storage",
+									Name:      storageVolumeName,
 									MountPath: z.opts.StorageDirectory,
 								},
 							},
@@ -281,7 +282,7 @@ func (z *zotRegistry) BuildStatefulSet(ctx context.Context, registry *registryv1
 			VolumeClaimTemplates: []corev1.PersistentVolumeClaim{
 				{
 					ObjectMeta: v1.ObjectMeta{
-						Name: "storage",
+						Name: storageVolumeName,
 					},
 					Spec: pvcSpec,
 				},

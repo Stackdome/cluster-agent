@@ -37,6 +37,7 @@ const (
 	cacheFinalizer                  = "registry.stackdome.io/cache"
 	registryController              = "ClusterRegistryController"
 	nodeRegistryAccessConfigMapName = "stackdome-insecure-registries"
+	registryDeletionRequeueAfter    = time.Second
 )
 
 type subReconcilerResult struct {
@@ -115,8 +116,12 @@ func (r *RegistryReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 	if registry.DeletionTimestamp != nil {
 		if controllerutil.ContainsFinalizer(registry, cacheFinalizer) {
-			if err := r.reconcileDelete(ctx, registry); err != nil {
+			result, err := r.reconcileDelete(ctx, registry)
+			if err != nil {
 				return ctrl.Result{}, err
+			}
+			if result.Requeue || result.RequeueAfter > 0 {
+				return result, nil
 			}
 			controllerutil.RemoveFinalizer(registry, cacheFinalizer)
 			return ctrl.Result{}, r.Client.Update(ctx, registry)
@@ -299,7 +304,7 @@ func (r *RegistryReconciler) reconcileSharedRegistryConfigDaemonSet(ctx context.
 	return resultRequeue, nil
 }
 
-func (r *RegistryReconciler) reconcileDelete(ctx context.Context, registry *registryv1alpha1.ClusterRegistry) error {
+func (r *RegistryReconciler) reconcileDelete(ctx context.Context, registry *registryv1alpha1.ClusterRegistry) (ctrl.Result, error) {
 	meta.SetStatusCondition(&registry.Status.Conditions, metav1.Condition{
 		Type:               string(registryv1alpha1.RegistryReady),
 		Status:             metav1.ConditionFalse,
@@ -311,11 +316,61 @@ func (r *RegistryReconciler) reconcileDelete(ctx context.Context, registry *regi
 	registry.Status.ObservedGeneration = registry.Generation
 
 	if err := r.cleanupSharedRegistryConfig(ctx, registry); err != nil {
-		return err
+		return ctrl.Result{}, err
+	}
+
+	statefulSetName := registry.RegistryStatefulSetName()
+	pending, err := r.deleteRegistryResource(ctx, &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{
+		Name:      statefulSetName,
+		Namespace: registryNamespace,
+	}})
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if pending {
+		return ctrl.Result{RequeueAfter: registryDeletionRequeueAfter}, nil
+	}
+
+	pending, err = r.deleteRegistryResource(ctx, &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{
+		Name:      registryPersistentVolumeClaimName(statefulSetName),
+		Namespace: registryNamespace,
+	}})
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if pending {
+		return ctrl.Result{RequeueAfter: registryDeletionRequeueAfter}, nil
 	}
 
 	registry.Status.InternalURL = ""
-	return nil
+	return ctrl.Result{}, nil
+}
+
+func registryPersistentVolumeClaimName(statefulSetName string) string {
+	// Kubernetes names StatefulSet PVCs <claim-template>-<statefulset>-<ordinal>.
+	// Keep this aligned with Zot's single "storage" claim template and one replica.
+	return fmt.Sprintf("storage-%s-0", statefulSetName)
+}
+
+func (r *RegistryReconciler) deleteRegistryResource(ctx context.Context, resource client.Object) (bool, error) {
+	key := client.ObjectKeyFromObject(resource)
+	if err := r.Client.Get(ctx, key, resource); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to get registry resource %T %s: %w", resource, key, err)
+	}
+
+	if resource.GetDeletionTimestamp().IsZero() {
+		if err := r.Client.Delete(ctx, resource); err != nil {
+			if apierrors.IsNotFound(err) {
+				return false, nil
+			}
+			return false, fmt.Errorf("failed to delete registry resource %T %s: %w", resource, key, err)
+		}
+	}
+
+	return true, nil
 }
 
 func (r *RegistryReconciler) cleanupSharedRegistryConfig(ctx context.Context, registry *registryv1alpha1.ClusterRegistry) error {

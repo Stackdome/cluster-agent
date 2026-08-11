@@ -6,9 +6,11 @@ import (
 	"testing"
 
 	"golang.org/x/crypto/bcrypt"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	corev1alpha1 "stackdome.io/cluster-agent/api/core/v1alpha1"
@@ -17,10 +19,15 @@ import (
 )
 
 func newTestBuilder(t *testing.T) registry.RegistryBuilder {
+	return newTestBuilderWithObjects(t)
+}
+
+func newTestBuilderWithObjects(t *testing.T, objects ...client.Object) registry.RegistryBuilder {
 	t.Helper()
 	scheme := k8sruntime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
-	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	_ = appsv1.AddToScheme(scheme)
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
 
 	builder := NewZotRegistry(ZotRegistryOpts{
 		RegistryImage:                 "ghcr.io/project-zot/zot:latest",
