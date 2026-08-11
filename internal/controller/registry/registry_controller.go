@@ -347,7 +347,8 @@ func (r *RegistryReconciler) reconcileDelete(ctx context.Context, registry *regi
 }
 
 func registryPersistentVolumeClaimName(statefulSetName string) string {
-	// Registries use one StatefulSet replica and a volume claim template named "storage".
+	// Kubernetes names StatefulSet PVCs <claim-template>-<statefulset>-<ordinal>.
+	// Keep this aligned with Zot's single "storage" claim template and one replica.
 	return fmt.Sprintf("storage-%s-0", statefulSetName)
 }
 
