@@ -23,6 +23,10 @@ func newTestBuilder(t *testing.T) registry.RegistryBuilder {
 }
 
 func newTestBuilderWithObjects(t *testing.T, objects ...client.Object) registry.RegistryBuilder {
+	return newTestBuilderWithReconcilerImage(t, "test/reconciler:latest", objects...)
+}
+
+func newTestBuilderWithReconcilerImage(t *testing.T, image string, objects ...client.Object) registry.RegistryBuilder {
 	t.Helper()
 	scheme := k8sruntime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
@@ -31,7 +35,7 @@ func newTestBuilderWithObjects(t *testing.T, objects ...client.Object) registry.
 
 	builder := NewZotRegistry(ZotRegistryOpts{
 		RegistryImage:                 "ghcr.io/project-zot/zot:latest",
-		RegistryConfigReconcilerImage: "test/reconciler:latest",
+		RegistryConfigReconcilerImage: image,
 		EnableGC:                      true,
 		GCDelay:                       "1h",
 		GCInterval:                    "24h",
@@ -50,6 +54,18 @@ func newTestBuilderWithObjects(t *testing.T, objects ...client.Object) registry.
 		t.Fatalf("failed to initialize builder: %v", err)
 	}
 	return builder
+}
+
+func TestBuildRegistryConfigReconcilerDaemonset_UsesConfiguredDigest(t *testing.T) {
+	const image = "quay.io/stackdome/registry-config-reconciler@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	builder := newTestBuilderWithReconcilerImage(t, image)
+	reg := newTestRegistry("test-reg", 5000)
+
+	ds := builder.BuildRegistryConfigReconcilerDaemonset(context.Background(), reg, "test-cm", "registries.json", "testhash", registry.RuntimeContainerd)
+
+	if got := ds.Spec.Template.Spec.Containers[0].Image; got != image {
+		t.Fatalf("reconciler image = %q, want exact digest reference %q", got, image)
+	}
 }
 
 func newTestRegistry(name string, port int32) *registryv1alpha1.ClusterRegistry {

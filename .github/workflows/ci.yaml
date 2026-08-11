@@ -3,40 +3,111 @@ name: CI
 on:
   pull_request:
     branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cluster-agent-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  unit-tests:
-    runs-on: ubuntu-latest
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version-file: go.mod
+          check-latest: false
+          cache: true
 
-      - name: Run unit tests
-        run: make test-unit
+      - name: Set up Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        with:
+          version: v3.18.4
 
-  integration-tests:
-    runs-on: ubuntu-latest
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+        with:
+          driver-opts: image=moby/buildkit@sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec
+
+      - name: Run source and generated-file checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          required_go="$(awk '$1 == "go" { print $2 }' go.mod)"
+          test "$(go env GOVERSION)" = "go$required_go"
+          make test
+          make lint
+          git diff --exit-code
+
+      - name: Verify release assets and provenance contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./hack/verify-release-assets.sh
+          ./hack/test-release-provenance.sh
+          helm lint charts/stackdome-agent-standalone
+          helm lint charts/stackdome-agent
+
+      - name: Build local release images without pushing
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(ruby -ryaml -e 'puts YAML.safe_load(File.read(ARGV.fetch(0))).fetch("appVersion")' charts/stackdome-agent-standalone/Chart.yaml)"
+          for command in cluster-agent-manager containerd-config-reconciler; do
+            destination="$RUNNER_TEMP/$command"
+            mkdir -p "$destination"
+            docker buildx build \
+              --file config/docker/release.Dockerfile \
+              --platform linux/amd64,linux/arm64 \
+              --build-arg "COMMAND=$command" \
+              --build-arg "VERSION=$version" \
+              --build-arg "COMMIT=$GITHUB_SHA" \
+              --build-arg "BUILD_DATE=0" \
+              --provenance=false \
+              --sbom=false \
+              --output "type=oci,dest=$destination/image.tar" \
+              .
+            mkdir -p "$destination/layout"
+            tar -xf "$destination/image.tar" -C "$destination/layout"
+            ./hack/validate-oci-index.rb "$destination/layout"
+          done
+
+  integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version-file: go.mod
+          check-latest: false
+          cache: true
 
       - name: Run integration tests
         run: make test-integration
 
-      - name: Upload test log
+      - name: Upload integration log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: integration-test-log
           path: test/integration/last-run.log
+          if-no-files-found: error
           retention-days: 7

@@ -1,0 +1,6 @@
+.git
+.cache
+bin
+charts/stackdome-agent/charts/*.tgz
+release-artifacts
+test/integration/last-run.log
